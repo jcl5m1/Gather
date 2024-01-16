@@ -13,6 +13,7 @@ from math import sqrt
 import math
 from panda3d.core import LVecBase4f
 from panda3d.core import Geom, GeomVertexFormat, GeomVertexData, GeomVertexWriter, GeomTriangles, GeomNode
+from panda3d.core import ColorAttrib
 
 
 def normalize(vector, size=1):
@@ -84,10 +85,13 @@ def createPyramid(size=1, color=LVecBase4f(1, 1, 1, 1)):
     node = GeomNode("EquilateralPyramidNode")
     node.addGeom(geom)
 
+    node.setAttrib(ColorAttrib.makeFlat(color))
+
+
     return node
 
 
-def createCube(size):
+def createCube(size, color=LVecBase4f(1, 1, 1, 1)):
     format = GeomVertexFormat.getV3()
     vdata = GeomVertexData("cube", format, Geom.UHStatic)
     vertex_writer = GeomVertexWriter(vdata, "vertex")
@@ -128,6 +132,8 @@ def createCube(size):
 
     node = GeomNode("cube")
     node.addGeom(geom)
+
+    node.setAttrib(ColorAttrib.makeFlat(color))
 
     return node
 
