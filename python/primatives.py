@@ -7,11 +7,12 @@ from direct.interval.IntervalGlobal import Sequence
 from panda3d.core import Point3
 from panda3d.core import Geom, GeomVertexFormat, GeomVertexData, GeomVertexWriter, GeomTriangles, GeomNode
 from panda3d.core import NodePath
-import math
 from panda3d.core import LineSegs
 from panda3d.core import GeomTriangles, GeomVertexFormat, GeomVertexData, GeomVertexWriter, GeomNode
 from math import sqrt
 import math
+from panda3d.core import LVecBase4f
+from panda3d.core import Geom, GeomVertexFormat, GeomVertexData, GeomVertexWriter, GeomTriangles, GeomNode
 
 
 def normalize(vector, size=1):
@@ -21,6 +22,69 @@ def normalize(vector, size=1):
 def midpoint(v1, v2):
     return ((v1[0] + v2[0]) / 2, (v1[1] + v2[1]) / 2, (v1[2] + v2[2]) / 2)
 
+def createEllipse(radius_x, radius_y, num_segments, color=LVecBase4f(1, 1, 1, 1)):
+
+    # Calculate the angle between each segment
+    angle_delta = 2 * math.pi / num_segments
+
+    # Define the vertices and colors of the ellipse
+    lines = LineSegs()
+    lines.setThickness(2)
+    lines.moveTo(radius_x, 0, 0)
+    for i in range(num_segments):
+        angle = i * angle_delta
+        x = radius_x * math.cos(angle)
+        y = radius_y * math.sin(angle)
+        lines.setColor(color)  # Red X-axis
+        lines.drawTo(x, y, 0)
+    lines.setColor(color)  # Red X-axis
+    lines.drawTo(radius_x, 0, 0)
+    return lines.create()
+
+def createPyramid(size=1, color=LVecBase4f(1, 1, 1, 1)):
+    format = GeomVertexFormat.getV3()
+    vdata = GeomVertexData("pyramid", format, Geom.UHStatic)
+    vertex_writer = GeomVertexWriter(vdata, "vertex")
+
+    # Calculate the height based on the side length
+    height = size * math.sqrt(3) / 2
+
+    # Define the vertices
+    vertices = [
+        (size / 2, size / 2, 0),
+        (-size / 2, size / 2, 0),
+        (-size / 2, -size / 2, 0),
+        (size / 2, -size / 2, 0),
+        (0, 0, height),
+    ]
+    for vertex in vertices:
+        vertex_writer.addData3f(*vertex)
+
+    tris = GeomTriangles(Geom.UHStatic)
+
+    # Define the faces (triangles)
+    triangles = [
+        (0, 1, 4),
+        (1, 2, 4),
+        (2, 3, 4),
+        (3, 0, 4),
+        (0, 2, 1),
+        (0, 3, 2),
+    ]
+
+    for triangle in triangles:
+            tris.addVertices(*triangle)
+
+    tris.closePrimitive()
+
+    geom = Geom(vdata)
+    geom.addPrimitive(tris)
+
+    # Create a GeomNode and attach the vertex data
+    node = GeomNode("EquilateralPyramidNode")
+    node.addGeom(geom)
+
+    return node
 
 
 def createCube(size):
