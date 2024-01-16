@@ -11,6 +11,8 @@ import math
 from panda3d.core import LineSegs, LPoint2f, LVecBase4f
 import primatives
 
+import orbitengine
+
 from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode
 
@@ -20,43 +22,36 @@ class MyApp(ShowBase):
         ShowBase.__init__(self)
 
         #set background to black
+        self.camLens.setFar(1000000000)
         self.setBackgroundColor(0,0,0,1)
         self.disable_mouse()
 
-        self.cameraDist = 10
+        self.cameraDist = orbitengine.EARTH_RADIUS_KM*10
+        self.cameraDistMin = orbitengine.EARTH_RADIUS_KM*2
         self.cameraRot = [0,0,0]
         self.cameraWheelSensitivity = 0.92
         self.mouseButtonState = [False, False, False]
 
-        # Create a cube with size 1
-        sphere = primatives.createIcosphere(1, 2)
-        sphere_np = NodePath(sphere)
-        sphere_np.reparentTo(self.render)
-        sphere_np.setRenderModeWireframe()
+        earth = primatives.createIcosphere(orbitengine.EARTH_RADIUS_KM, 2)
+        earth_np = NodePath(earth)
+        earth_np.reparentTo(self.render)
+        earth_np.setRenderModeWireframe()
 
-        ellipse = primatives.createEllipse(2, 2, 50, color=LVecBase4f(1,0,0,1))
-        ellipse_np = NodePath(ellipse)
-        ellipse_np.reparentTo(self.render)
 
-        ship = primatives.createPyramid(.1,color=LVecBase4f(0,1,0,1))
-        ship_np = NodePath(ship)
-        ship_np.setPos(2,0,0)
-        ship_np.setHpr(0,90,0)
-        ship_np.reparentTo(self.render)
+        self.ship = orbitengine.Body("Ship", orbitengine.BodyType.VESSEL, self.render)
 
-        axis = primatives.createAxis(1)
+        axis = primatives.createAxis(orbitengine.EARTH_RADIUS_KM/2)
         axis_np = NodePath(axis)
         axis_np.reparentTo(self.render)
         
-        hitpoint = primatives.createCube(0.025,color=LVecBase4f(1,0,0,1))
+        hitpoint = primatives.createCube(orbitengine.EARTH_RADIUS_KM*0.025,color=LVecBase4f(1,0,0,1))
         self.hitpoint_np = NodePath(hitpoint)
         self.hitpoint_np.reparentTo(self.render)
         self.hitpointPos = None
         self.hitpoint_np.hide()
         
-
         #close window when escape is pressed
-        self.accept("escape", self.close_window)
+        self.accept("escape", self.exit)
 
         self.pickerRay = CollisionRay()
         self.pickerNode = CollisionNode('mouseRay')
@@ -67,13 +62,6 @@ class MyApp(ShowBase):
         # Add the spinCameraTask procedure to the task manager.
         self.taskMgr.add(self.frameUpdate, "FrameUpdate")
         self.taskMgr.add(self.cameraControl, "CameraControl")
-
-        #self.taskMgr.add(self.spinCameraTask, "SpinCameraTask")
-#        self.task_mgr.add(self.rotateObject,"rotate object task")
-#        self.taskMgr.add(self.handleMouseMovement, "MouseMovementTask")
-        
-        # aspect_ratio = self.win.getAspectRatio()
-        # print('Aspect ratio:', aspect_ratio)
 
         aspect_ratio = self.getAspectRatio()
 
@@ -88,13 +76,18 @@ class MyApp(ShowBase):
         self.accept('wheel_up', self.handleMouseWheelUp)
         self.accept('wheel_down', self.handleMouseWheelDown)
 
+
+    def exit(self):
+        self.closeWindow(self.win)
+        self.userExit()
+
     def getAspectRatio(self, win=None):
         return super().getAspectRatio(win)
 
     def handleMouseWheelUp(self):
         self.cameraDist *= self.cameraWheelSensitivity
-        if self.cameraDist < 2.0:
-            self.cameraDist = 2.0
+        if self.cameraDist < self.cameraDistMin:
+            self.cameraDist = self.cameraDistMin
 
 
     def handleMouseWheelDown(self):
@@ -126,7 +119,6 @@ class MyApp(ShowBase):
                 collisionPoint = entry.getSurfacePoint(self.render)
                 self.hitpointPos = collisionPoint
                 pickedObj = entry.getIntoNodePath()
-#                print('Clicked on', pickedObj)
             else:
                 self.hitpointPos = None
 
@@ -153,14 +145,18 @@ class MyApp(ShowBase):
     def frameUpdate(self, task):
         aspect_ratio = self.getAspectRatio()
 
-        self.hudText.setPos(-0.95*aspect_ratio, -0.95)
-        self.hudText.setText(f"{self.cameraDist:.2f}, {self.cameraRot[0]:.2f},{self.cameraRot[1]:.2f}")
+        self.hudText.setPos(-0.95*aspect_ratio, -0.75)
+        camera_info = f"{self.cameraDist:.2f}, {self.cameraRot[0]:.2f},{self.cameraRot[1]:.2f}" 
+        ship_info = self.ship.getHUDInfo()
+        self.hudText.setText(ship_info)
 
         if self.hitpointPos is None:
             self.hitpoint_np.hide()
         else:
             self.hitpoint_np.setPos(self.hitpointPos)
             self.hitpoint_np.show()
+
+        self.ship.update(task.time)
 
         return Task.cont
 
@@ -177,8 +173,6 @@ class MyApp(ShowBase):
                 self.cameraRot[0] += delta[1]
                 self.cameraRot[1] -= delta[0]
 
-#                print(f"mouse right drag {currPos} from: {self.mousePosStart}: delta {currPos-self.mousePosStart}")
-
         x = self.cameraDist * math.sin(self.cameraRot[0]) * math.cos(self.cameraRot[1])
         y = self.cameraDist * math.sin(self.cameraRot[0]) * math.sin(self.cameraRot[1])
         z = self.cameraDist * math.cos(self.cameraRot[0])
@@ -186,20 +180,11 @@ class MyApp(ShowBase):
         self.camera.setPos(x,y,z)
         self.camera.lookAt(0, 0, 0)
 
+        self.ship.setScale(self.cameraDist)
+
         self.mouseButtonStateLast = self.mouseButtonState.copy()
         return Task.cont
 
-
-#     # Define a procedure to move the camera.
-#     def spinCameraTask(self, task):
-#         dist = 8
-#         angleDegrees = task.time * 20.0
-#         angleRadians = angleDegrees * (pi / 180.0)
-# #        print(dist * sin(angleRadians), -dist * cos(angleRadians), -dist * cos(angleRadians/1.3))
-#         self.camera.setPos(dist * sin(angleRadians), -dist * cos(angleRadians), -dist * cos(angleRadians/1.3))
-#         self.camera.setHpr(angleDegrees, 0, 0)
-#         self.camera.lookAt(0, 0, 0)
-#         return Task.cont
 
 
 app = MyApp()

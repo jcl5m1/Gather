@@ -42,6 +42,33 @@ def createEllipse(radius_x, radius_y, num_segments, color=LVecBase4f(1, 1, 1, 1)
     lines.drawTo(radius_x, 0, 0)
     return lines.create()
 
+
+
+def createLineList(points, close=False, color=LVecBase4f(1, 1, 1, 1)):
+    # Define the vertices and colors of the ellipse
+    lines = LineSegs()
+    lines.setThickness(2)
+    lines.moveTo(points[0][0], points[0][1], points[0][2])
+    for pt in points:
+        lines.setColor(color)  # Red X-axis
+        lines.drawTo(pt[0], pt[1], pt[2])
+    if close:
+        lines.setColor(color)  # Red X-axis
+        lines.drawTo(points[0][0], points[0][1], points[0][2])
+    return lines.create()
+
+
+def createLine(pt1, pt2, thickness=2, color=LVecBase4f(1, 1, 1, 1)):
+    # Define the vertices and colors of the ellipse
+    lines = LineSegs()
+    lines.setThickness(thickness)
+    lines.setColor(color) 
+    lines.moveTo(pt1[0], pt1[1], pt1[2])
+    lines.setColor(color) 
+    lines.drawTo(pt2[0], pt2[1], pt2[2])
+    return lines.create()
+
+
 def createPyramid(size=1, color=LVecBase4f(1, 1, 1, 1)):
     format = GeomVertexFormat.getV3()
     vdata = GeomVertexData("pyramid", format, Geom.UHStatic)
