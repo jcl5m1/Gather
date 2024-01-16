@@ -12,6 +12,7 @@ from panda3d.core import LineSegs, LPoint2f, LVecBase4f
 import primatives
 
 import orbitengine
+import numpy as np
 
 from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode
@@ -37,8 +38,10 @@ class MyApp(ShowBase):
         earth_np.reparentTo(self.render)
         earth_np.setRenderModeWireframe()
 
+        r0 = [8000, 0, 0] 
+        v0 = [6, 6, 2] 
 
-        self.ship = orbitengine.Body("Ship", orbitengine.BodyType.VESSEL, self.render)
+        self.ship = orbitengine.Body("Ship", r0, v0, orbitengine.BodyType.VESSEL, self.render)
 
         axis = primatives.createAxis(orbitengine.EARTH_RADIUS_KM/2)
         axis_np = NodePath(axis)
@@ -156,6 +159,8 @@ class MyApp(ShowBase):
             self.hitpoint_np.setPos(self.hitpointPos)
             self.hitpoint_np.show()
 
+        self.ship.setScale(self.camera.getPos())
+
         self.ship.update(task.time)
 
         return Task.cont
@@ -180,7 +185,6 @@ class MyApp(ShowBase):
         self.camera.setPos(x,y,z)
         self.camera.lookAt(0, 0, 0)
 
-        self.ship.setScale(self.cameraDist)
 
         self.mouseButtonStateLast = self.mouseButtonState.copy()
         return Task.cont

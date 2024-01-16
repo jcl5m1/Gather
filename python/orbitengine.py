@@ -8,7 +8,7 @@ from scipy.spatial.transform import Rotation
 import primatives
 from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode
 from enum import Enum
-
+import math
 
 EARTH_RADIUS_KM = const.R_earth.to(u.km).value
 
@@ -54,14 +54,24 @@ class BodyOrbit:
         self.apoapsis = self.orbit.r_a.to(u.km).value
 
         # Draw the periapsis and apoapsis
-        if False:        
-            self.periapsis_pos,_ = self.getState(0)
-            self.periapsis_np = NodePath(primatives.createCube(0.1*EARTH_RADIUS_KM, LVecBase4f(1,0,0,1)))
+        if True:        
+
+            # Calculate the eccentric anomaly E
+            E = 2 * np.arctan2(np.sqrt(1-self.orbit.ecc.value) * np.sin(self.orbit.nu.value / 2), np.sqrt(1+self.orbit.ecc.value) * np.cos(self.orbit.nu.value / 2))
+
+            # Calculate the time to periapsis
+            t_periapsis = (E - self.orbit.ecc.value * np.sin(E)) / self.orbit.n.to(u.rad/u.s).value
+
+
+            print(t_periapsis, self.orbit.period.value)
+            # Now you can use t_periapsis as the initial time
+            self.periapsis_pos,_ = self.getState(t_periapsis/self.orbit.period.value)
+            self.periapsis_np = NodePath(primatives.createCube(0.005, LVecBase4f(1,0,0,1)))
             self.periapsis_np.reparentTo(renderer)
             self.periapsis_np.setPos(*self.periapsis_pos.value)
 
             self.apoapsis_pos,_ = self.getState(0.5)
-            self.apoapsis_np = NodePath(primatives.createCube(0.1*EARTH_RADIUS_KM, LVecBase4f(0,0,1,1)))
+            self.apoapsis_np = NodePath(primatives.createCube(0.005, LVecBase4f(0,0,1,1)))
             self.apoapsis_np.reparentTo(renderer)
             self.apoapsis_np.setPos(*self.apoapsis_pos.value)
 
@@ -107,7 +117,7 @@ class BodyOrbit:
 
 
 class Body:
-    def __init__(self, name, type, renderer, size=0.01, color=LVecBase4f(0,1,0,1)):
+    def __init__(self, name, r0, v0, type, renderer, size=0.01, color=LVecBase4f(0,1,0,1)):
         self.name = name
         self.mass = 1
         self.type = type
@@ -118,9 +128,7 @@ class Body:
         self.acceleration = np.zeros((1,3))
         self.rotation_acceleration = Rotation.identity()
         alpha = 0.25
-        r0 = [8000, 0, 0] * u.km
-        v0 = [0, 9.5, 0] * u.km / u.s
-        self.orbit = BodyOrbit(self, r0, v0, renderer,color=LVecBase4f(color[0]*alpha, color[1]*alpha, color[2]*alpha,1))
+        self.orbit = BodyOrbit(self, r0* u.km, v0* u.km / u.s, renderer,color=LVecBase4f(color[0]*alpha, color[1]*alpha, color[2]*alpha,1))
 
         pos, vel = self.orbit.getState(0)
         if type == BodyType.VESSEL:
@@ -134,8 +142,11 @@ class Body:
         self.vel_line_np = NodePath(vel_line)
         self.vel_line_np.reparentTo(renderer)
 
-    def setScale(self,scale):
-        self.np.setScale(scale)
+    def setScale(self,cameraPos):
+        self.np.setScale(np.linalg.norm(self.position-cameraPos))
+        self.orbit.apoapsis_np.setScale(np.linalg.norm(self.orbit.apoapsis_np.getPos()-cameraPos))
+        self.orbit.periapsis_np.setScale(np.linalg.norm(self.orbit.periapsis_np.getPos()-cameraPos))
+
 
     def update(self, time):
         pos, vel = self.orbit.getState((time*0.1)%1)
