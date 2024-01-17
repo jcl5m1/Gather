@@ -23,11 +23,11 @@ class MyApp(ShowBase):
         ShowBase.__init__(self)
 
         #set background to black
-        self.camLens.setFar(1000000000)
+        self.camLens.setFar(100000000000)
         self.setBackgroundColor(0,0,0,1)
         self.disable_mouse()
 
-        self.cameraDist = orbitengine.EARTH_RADIUS_KM*10
+        self.cameraDist = orbitengine.EARTH_RADIUS_KM*15
         self.cameraDistMin = orbitengine.EARTH_RADIUS_KM*2
         self.cameraRot = [0,0,0]
         self.cameraWheelSensitivity = 0.92
@@ -38,10 +38,14 @@ class MyApp(ShowBase):
         earth_np.reparentTo(self.render)
         earth_np.setRenderModeWireframe()
 
-        r0 = [8000, 0, 0] 
-        v0 = [6, 6, 2] 
+        self.orbitEngine = orbitengine.OrbitEngine(self.render)
+#        self.orbitEngine.computeLambert()
 
-        self.ship = orbitengine.Body("Ship", r0, v0, orbitengine.BodyType.VESSEL, self.render)
+        self.ship =  orbitengine.Body("Ship",  [8000, 0, 0], [0, 9, 0], orbitengine.BodyType.VESSEL, self.render)
+        self.orbitEngine.addBody(self.ship)
+
+        self.ship2 = orbitengine.Body("Ship2", [10000, 0, 0], [0,7,0], orbitengine.BodyType.VESSEL, self.render, color=LVecBase4f(1,0,0,1))
+        self.orbitEngine.addBody(self.ship2)
 
         axis = primatives.createAxis(orbitengine.EARTH_RADIUS_KM/2)
         axis_np = NodePath(axis)
@@ -148,10 +152,11 @@ class MyApp(ShowBase):
     def frameUpdate(self, task):
         aspect_ratio = self.getAspectRatio()
 
-        self.hudText.setPos(-0.95*aspect_ratio, -0.75)
+        self.hudText.setPos(-0.95*aspect_ratio, 0.95)
         camera_info = f"{self.cameraDist:.2f}, {self.cameraRot[0]:.2f},{self.cameraRot[1]:.2f}" 
-        ship_info = self.ship.getHUDInfo()
-        self.hudText.setText(ship_info)
+
+        text = self.orbitEngine.getHUDInfo()
+        self.hudText.setText(text)
 
         if self.hitpointPos is None:
             self.hitpoint_np.hide()
@@ -159,9 +164,8 @@ class MyApp(ShowBase):
             self.hitpoint_np.setPos(self.hitpointPos)
             self.hitpoint_np.show()
 
-        self.ship.setScale(self.camera.getPos())
-
-        self.ship.update(task.time)
+        self.orbitEngine.setScale(self.camera.getPos())
+        self.orbitEngine.update(task.time)
 
         return Task.cont
 

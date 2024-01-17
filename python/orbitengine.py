@@ -3,12 +3,21 @@ from poliastro.bodies import Earth
 from poliastro.twobody import Orbit
 import numpy as np
 from astropy import constants as const
+from poliastro.iod import lambert
 
 from scipy.spatial.transform import Rotation
 import primatives
 from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode
 from enum import Enum
 import math
+
+from poliastro.bodies import Earth, Mars, Sun  # Or your desired bodies
+from poliastro.maneuver import Maneuver
+from poliastro.twobody import Orbit
+
+import matplotlib.pyplot as plt
+import numpy as np  # For array manipulation
+
 
 EARTH_RADIUS_KM = const.R_earth.to(u.km).value
 
@@ -26,9 +35,76 @@ def formatDistance(distance):
     else:
         return f"{distance*1000:.2f} m"
 
+
+def convertToEllipse(orbit, segments=100):
+    # Get the orbital elements
+    a = orbit.a.to(u.km).value  # semi-major axis
+    e = orbit.ecc.value  # eccentricity
+    i = orbit.inc.to(u.rad).value  # inclination
+    raan = orbit.raan.to(u.rad).value  # longitude of the ascending node
+    argp = orbit.argp.to(u.rad).value  # argument of periapsis
+
+    # Compute the semi-minor axis
+    b = a * np.sqrt(1 - e**2)
+
+    # Compute the ellipse
+    theta = np.linspace(0, 2*np.pi, segments)
+    x = a * np.cos(theta)
+    y = b * np.sin(theta)
+
+    # Shift the ellipse to the position of the orbit's focus
+    x -= a * e
+
+    # Rotate the ellipse by the argument of periapsis
+    x, y = x*np.cos(argp) - y*np.sin(argp), x*np.sin(argp) + y*np.cos(argp)
+
+    # Rotate the ellipse by the inclination
+    x, z = x, y*np.sin(i)
+    y = y*np.cos(i)
+
+    # Rotate the ellipse by the longitude of the ascending node
+    x, y = x*np.cos(raan) - y*np.sin(raan), x*np.sin(raan) + y*np.cos(raan)
+
+    #create list of points from x,y,z
+    points = []
+    for i in range(len(x)):
+        points.append([x[i],y[i],z[i]])
+    
+    return points
+
+
 class BodyType(Enum):
     PLANET = 0
     VESSEL = 1
+
+
+class OrbitEngine:
+    def __init__(self, renderer):
+        self.bodies = []
+        self.renderer = renderer
+
+    def addBody(self, body):
+        self.bodies.append(body)
+
+    def computeLambert(self):
+        pass
+
+
+
+    def update(self, time):
+        for body in self.bodies:
+            body.update(time)
+
+    def setScale(self, cameraPos):
+        for body in self.bodies:
+            body.setScale(cameraPos)
+
+    def getHUDInfo(self):
+        info = ""
+        for body in self.bodies:
+            info += body.getHUDInfo() + "\n"
+        return info
+
 
 class BodyOrbit:
     def __init__(self, body, r0, v0, renderer, segments=100, width=2, color=LVecBase4f(1,1,1,1)):
@@ -39,14 +115,8 @@ class BodyOrbit:
 
         self.orbit = Orbit.from_vectors(Earth, r0, v0)
         
-        # self.a = EARTH_RADIUS_KM * 10 * u.km
-        # self.ecc = 0.8 * u.one
-
-        # # Define the orbit
-        # self.orbit = Orbit.from_classical(Earth, self.a, self.ecc, 40*u.deg, 40*u.deg, 40*u.deg, 0*u.deg)
-
         # Draw the orbit
-        path = primatives.createLineList(self.convertToEllipse(), True, self.color)
+        path = primatives.createLineList(convertToEllipse(self.orbit, self.segments), True, self.color)
         self.np = NodePath(path)
         self.np.reparentTo(renderer)
 
@@ -54,7 +124,7 @@ class BodyOrbit:
         self.apoapsis = self.orbit.r_a.to(u.km).value
 
         # Draw the periapsis and apoapsis
-        if True:        
+        if False:        
 
             # Calculate the eccentric anomaly E
             E = 2 * np.arctan2(np.sqrt(1-self.orbit.ecc.value) * np.sin(self.orbit.nu.value / 2), np.sqrt(1+self.orbit.ecc.value) * np.cos(self.orbit.nu.value / 2))
@@ -78,41 +148,6 @@ class BodyOrbit:
     def getState(self, t):
         return self.orbit.propagate(t*self.orbit.period).rv()
 
-    def convertToEllipse(self):
-        # Get the orbital elements
-        a = self.orbit.a.to(u.km).value  # semi-major axis
-        e = self.orbit.ecc.value  # eccentricity
-        i = self.orbit.inc.to(u.rad).value  # inclination
-        raan = self.orbit.raan.to(u.rad).value  # longitude of the ascending node
-        argp = self.orbit.argp.to(u.rad).value  # argument of periapsis
-
-        # Compute the semi-minor axis
-        b = a * np.sqrt(1 - e**2)
-
-        # Compute the ellipse
-        theta = np.linspace(0, 2*np.pi, self.segments)
-        x = a * np.cos(theta)
-        y = b * np.sin(theta)
-
-        # Shift the ellipse to the position of the orbit's focus
-        x -= a * e
-
-        # Rotate the ellipse by the argument of periapsis
-        x, y = x*np.cos(argp) - y*np.sin(argp), x*np.sin(argp) + y*np.cos(argp)
-
-        # Rotate the ellipse by the inclination
-        x, z = x, y*np.sin(i)
-        y = y*np.cos(i)
-
-        # Rotate the ellipse by the longitude of the ascending node
-        x, y = x*np.cos(raan) - y*np.sin(raan), x*np.sin(raan) + y*np.cos(raan)
-
-        #create list of points from x,y,z
-        points = []
-        for i in range(len(x)):
-            points.append([x[i],y[i],z[i]])
-        
-        return points
         
 
 
@@ -132,8 +167,10 @@ class Body:
 
         pos, vel = self.orbit.getState(0)
         if type == BodyType.VESSEL:
-            ship = primatives.createPyramid(size,color)
+            ship = primatives.createPyramid(size, color)
+
             self.np = NodePath(ship)
+            print(ship, id(ship), id(self.np))
             self.np.reparentTo(renderer)
             self.np.setPos(LVecBase3f(*pos.value))
             self.np.setHpr(0,90,0)
@@ -144,8 +181,8 @@ class Body:
 
     def setScale(self,cameraPos):
         self.np.setScale(np.linalg.norm(self.position-cameraPos))
-        self.orbit.apoapsis_np.setScale(np.linalg.norm(self.orbit.apoapsis_np.getPos()-cameraPos))
-        self.orbit.periapsis_np.setScale(np.linalg.norm(self.orbit.periapsis_np.getPos()-cameraPos))
+        # self.orbit.apoapsis_np.setScale(np.linalg.norm(self.orbit.apoapsis_np.getPos()-cameraPos))
+        # self.orbit.periapsis_np.setScale(np.linalg.norm(self.orbit.periapsis_np.getPos()-cameraPos))
 
 
     def update(self, time):
@@ -168,5 +205,3 @@ class Body:
             f" Vel: {formatDistance(np.linalg.norm(self.velocity))}/s\n"+ \
             f" Apo: {formatDistance(self.orbit.apoapsis)}\n" + \
             f" Per: {formatDistance(self.orbit.periapsis)}\n"
-
-        

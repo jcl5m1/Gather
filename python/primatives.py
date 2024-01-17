@@ -114,7 +114,6 @@ def createPyramid(size=1, color=LVecBase4f(1, 1, 1, 1)):
 
     node.setAttrib(ColorAttrib.makeFlat(color))
 
-
     return node
 
 
