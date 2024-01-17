@@ -148,6 +148,8 @@ class BodyOrbit:
     def getState(self, t):
         return self.orbit.propagate(t*self.orbit.period).rv()
 
+    def propagate(self, t):
+        return self.orbit.propagate(t).rv()
         
 
 
@@ -186,7 +188,7 @@ class Body:
 
 
     def update(self, time):
-        pos, vel = self.orbit.getState((time*0.1)%1)
+        pos, vel = self.orbit.propagate(1000*time*u.s)
         self.position = pos.value
         self.velocity = vel.value
         self.np.setPos(LVecBase3f(*pos.value))
