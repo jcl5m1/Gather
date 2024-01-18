@@ -164,7 +164,7 @@ class Body:
         self.rotation_velocity = Rotation.identity()
         self.acceleration = np.zeros((1,3))
         self.rotation_acceleration = Rotation.identity()
-        alpha = 0.25
+        alpha = 0.5
         self.orbit = BodyOrbit(self, r0* u.km, v0* u.km / u.s, renderer,color=LVecBase4f(color[0]*alpha, color[1]*alpha, color[2]*alpha,1))
 
         pos, vel = self.orbit.getState(0)
@@ -172,10 +172,9 @@ class Body:
             ship = primatives.createPyramid(size, color)
 
             self.np = NodePath(ship)
-            print(ship, id(ship), id(self.np))
             self.np.reparentTo(renderer)
             self.np.setPos(LVecBase3f(*pos.value))
-            self.np.setHpr(0,90,0)
+            self.np.setHpr(0,-90,0)
 
         vel_line = primatives.createLine(LVecBase3f(*pos.value), LVecBase3f(*(pos.value+1000*vel.value)), 2, color)
         self.vel_line_np = NodePath(vel_line)
@@ -188,7 +187,7 @@ class Body:
 
 
     def update(self, time):
-        pos, vel = self.orbit.propagate(1000*time*u.s)
+        pos, vel = self.orbit.propagate(time*u.s)
         self.position = pos.value
         self.velocity = vel.value
         self.np.setPos(LVecBase3f(*pos.value))

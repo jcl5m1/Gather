@@ -18,6 +18,34 @@ from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode
 
 
+MINUTE_IN_SECONDS = 60
+HOUR_IN_SECONDS = 60*MINUTE_IN_SECONDS
+DAY_IN_SECONDS = 24*HOUR_IN_SECONDS
+YEAR_IN_SECONDS = 365*DAY_IN_SECONDS
+KILOYEAR_IN_SECONDS = 1000*YEAR_IN_SECONDS
+MEGAYEAR_IN_SECONDS = 1000*KILOYEAR_IN_SECONDS
+GIGAYEAR_IN_SECONDS = 1000*MEGAYEAR_IN_SECONDS
+TERAYEAR_IN_SECONDS = 1000*GIGAYEAR_IN_SECONDS
+
+
+def formatTime(time):
+    if time > GIGAYEAR_IN_SECONDS:
+        return f"{time/GIGAYEAR_IN_SECONDS:.2f} Gyr"
+    if time > MEGAYEAR_IN_SECONDS:
+        return f"{time/MEGAYEAR_IN_SECONDS:.2f} Myr"
+    if time > KILOYEAR_IN_SECONDS:
+        return f"{time/KILOYEAR_IN_SECONDS:.2f} Kyr"
+    if time > YEAR_IN_SECONDS:
+        return f"{time/YEAR_IN_SECONDS:.2f} yr"
+    if time > DAY_IN_SECONDS:
+        return f"{time/DAY_IN_SECONDS:.2f} day"
+    if time > HOUR_IN_SECONDS:
+        return f"{time/HOUR_IN_SECONDS:.2f} hr"
+    if time > MINUTE_IN_SECONDS:
+        return f"{time/MINUTE_IN_SECONDS:.2f} min"
+    return f"{time:.2f} sec"
+
+
 class MyApp(ShowBase):
     def __init__(self):
         ShowBase.__init__(self)
@@ -149,13 +177,17 @@ class MyApp(ShowBase):
         if self.mouseWatcherNode.hasMouse():
             self.mouseButtonState[2] = False
 
+
     def frameUpdate(self, task):
         aspect_ratio = self.getAspectRatio()
 
         self.hudText.setPos(-0.95*aspect_ratio, 0.95)
         camera_info = f"{self.cameraDist:.2f}, {self.cameraRot[0]:.2f},{self.cameraRot[1]:.2f}" 
 
-        text = self.orbitEngine.getHUDInfo()
+        time_multiplier = 1000
+        ts = task.time*time_multiplier
+        text = f"Time: {formatTime(ts)}\n"
+        text += self.orbitEngine.getHUDInfo()
         self.hudText.setText(text)
 
         if self.hitpointPos is None:
@@ -165,7 +197,7 @@ class MyApp(ShowBase):
             self.hitpoint_np.show()
 
         self.orbitEngine.setScale(self.camera.getPos())
-        self.orbitEngine.update(task.time)
+        self.orbitEngine.update(task.time*time_multiplier)
 
         return Task.cont
 

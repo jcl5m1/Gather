@@ -79,11 +79,11 @@ def createPyramid(size=1, color=LVecBase4f(1, 1, 1, 1)):
 
     # Define the vertices
     vertices = [
-        (size / 2, size / 2, 0),
-        (-size / 2, size / 2, 0),
-        (-size / 2, -size / 2, 0),
-        (size / 2, -size / 2, 0),
-        (0, 0, height),
+        (size / 2, size / 2, -height/2),
+        (-size / 2, size / 2, -height/2),
+        (-size / 2, -size / 2, -height/2),
+        (size / 2, -size / 2, -height/2),
+        (0, 0, height/2),
     ]
     for vertex in vertices:
         vertex_writer.addData3f(*vertex)
