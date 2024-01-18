@@ -53,6 +53,9 @@ def convertToEllipse(orbit, segments=100):
     y = b * np.sin(theta)
 
     # Shift the ellipse to the position of the orbit's focus
+    # if i > np.pi/2:
+    #     x += a * e
+    # else:
     x -= a * e
 
     # Rotate the ellipse by the argument of periapsis
@@ -162,7 +165,7 @@ class Body:
         self.name = name
         self.mass = 1*u.kg
         self.type = type
-        self.thrust = [0,0,0]*u.m/u.s/u.s
+        self.thrust = [0,0,0]*u.kg*u.m/u.s/u.s
         self.deltaV = [0,0,0]*u.m/u.s
         self.position = np.zeros((1,3))
         self.rotation = Rotation.identity()
@@ -193,12 +196,13 @@ class Body:
 
 
     def update(self, time, dt):
-        pos, vel = self.orbit.propagate(time)
         if np.linalg.norm(self.thrust.value) >= 0.0001:
+            pos, vel = self.orbit.propagate(time-dt)
             self.deltaV = self.thrust*dt/self.mass
             vel = vel + self.deltaV
-            self.orbit.setOrbit(pos, vel, time)
-            pos, vel = self.orbit.propagate(time)
+            self.orbit.setOrbit(pos, vel, time-dt)
+        pos, vel = self.orbit.propagate(time)
+    
         self.position = pos.value
         self.velocity = vel.value
         self.np.setPos(LVecBase3f(*pos.value))

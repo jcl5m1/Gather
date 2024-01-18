@@ -195,7 +195,9 @@ class MyApp(ShowBase):
         dt = (task.time - self.lastFrameUpdateTime)*self.timeMultiplier*u.s
         self.simulationTime += dt
         text = f"Time: {formatTime(self.simulationTime)} (x{self.timeMultiplier:.0f})\n"
-        text += self.orbitEngine.getHUDInfo()
+        text += self.orbitEngine.getHUDInfo()+"\n"
+        text += f"Dist: {np.linalg.norm(self.ship.position - self.ship2.position):.2f}\n"
+        text += f"deltaV: {np.linalg.norm(self.ship.velocity - self.ship2.velocity):.2f}\n"
         self.hudText.setText(text)
 
         if self.hitpointPos is None:
