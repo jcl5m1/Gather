@@ -1,4 +1,5 @@
 from math import pi, sin, cos
+from astropy import units as u
 
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
@@ -17,32 +18,17 @@ import numpy as np
 from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode
 
-
-MINUTE_IN_SECONDS = 60
-HOUR_IN_SECONDS = 60*MINUTE_IN_SECONDS
-DAY_IN_SECONDS = 24*HOUR_IN_SECONDS
-YEAR_IN_SECONDS = 365*DAY_IN_SECONDS
-KILOYEAR_IN_SECONDS = 1000*YEAR_IN_SECONDS
-MEGAYEAR_IN_SECONDS = 1000*KILOYEAR_IN_SECONDS
-GIGAYEAR_IN_SECONDS = 1000*MEGAYEAR_IN_SECONDS
-TERAYEAR_IN_SECONDS = 1000*GIGAYEAR_IN_SECONDS
-
+FONT_FILE = "Inconsolata-Regular.ttf"
 
 def formatTime(time):
-    if time > GIGAYEAR_IN_SECONDS:
-        return f"{time/GIGAYEAR_IN_SECONDS:.2f} Gyr"
-    if time > MEGAYEAR_IN_SECONDS:
-        return f"{time/MEGAYEAR_IN_SECONDS:.2f} Myr"
-    if time > KILOYEAR_IN_SECONDS:
-        return f"{time/KILOYEAR_IN_SECONDS:.2f} Kyr"
-    if time > YEAR_IN_SECONDS:
-        return f"{time/YEAR_IN_SECONDS:.2f} yr"
-    if time > DAY_IN_SECONDS:
-        return f"{time/DAY_IN_SECONDS:.2f} day"
-    if time > HOUR_IN_SECONDS:
-        return f"{time/HOUR_IN_SECONDS:.2f} hr"
-    if time > MINUTE_IN_SECONDS:
-        return f"{time/MINUTE_IN_SECONDS:.2f} min"
+    if time > 1*u.year:
+        return f"{time.to(u.year):.2f}"
+    if time > 1*u.day:
+        return f"{time.to(u.day):.2f}"
+    if time > 1*u.hour:
+        return f"{time.to(u.hour):.2f}"
+    if time > 1*u.min:
+        return f"{time.to(u.min):.2f}"
     return f"{time:.2f} sec"
 
 
@@ -67,7 +53,6 @@ class MyApp(ShowBase):
         earth_np.setRenderModeWireframe()
 
         self.orbitEngine = orbitengine.OrbitEngine(self.render)
-#        self.orbitEngine.computeLambert()
 
         self.ship =  orbitengine.Body("Ship",  [8000, 0, 0], [0, 9, 0], orbitengine.BodyType.VESSEL, self.render)
         self.orbitEngine.addBody(self.ship)
@@ -92,7 +77,8 @@ class MyApp(ShowBase):
         self.pickerNode = CollisionNode('mouseRay')
         self.traverser = CollisionTraverser()
         self.qh = CollisionHandlerQueue()
-
+        self.timeMultiplier = 1000
+        self.simulationTime = 0
 
         # Add the spinCameraTask procedure to the task manager.
         self.taskMgr.add(self.frameUpdate, "FrameUpdate")
@@ -100,7 +86,8 @@ class MyApp(ShowBase):
 
         aspect_ratio = self.getAspectRatio()
 
-        self.hudText = OnscreenText(text='[HUD info]', pos=(-0.95*aspect_ratio, -0.95), scale=0.04, fg=(1, 1, 1, 1), align=TextNode.ALeft)
+        font = self.loader.loadFont(FONT_FILE)
+        self.hudText = OnscreenText(text='[HUD info]', pos=(-0.95*aspect_ratio, -0.95), scale=0.04, fg=(1, 1, 1, 1), align=TextNode.ALeft, font=font)
 
         self.accept('mouse1', self.handleMouseLeftDown)
         self.accept('mouse1-up', self.handleMouseLeftUp)
@@ -110,6 +97,27 @@ class MyApp(ShowBase):
         self.accept('mouse3-up', self.handleMouseRightUp)
         self.accept('wheel_up', self.handleMouseWheelUp)
         self.accept('wheel_down', self.handleMouseWheelDown)
+
+        self.lastFrameUpdateTime = 0
+        self.keyState = {}
+        keys = ['w', 'a', 's', 'd', 'q', 'e', 'r', 'f', 'z', 'x', 'c', 'v', 't', 'g', 'b', 'n', 'y', 'h', 'u', 'j', 'i', 'k', 'o', 'l','.',',']
+        for key in keys:
+            self.keyState[key] = False
+            self.accept(key, self.handleKeyDown, [key])
+            self.accept(key+"-up", self.handleKeyUp, [key])
+
+
+    def handleKeyDown(self, key):
+        self.keyState[key] = True
+        if key == '.':
+            self.timeMultiplier *= 10
+        if key == ',':
+            self.timeMultiplier /= 10
+            if self.timeMultiplier < 1:
+                self.timeMultiplier = 1
+
+    def handleKeyUp(self, key):
+        self.keyState[key] = False
 
 
     def exit(self):
@@ -184,9 +192,9 @@ class MyApp(ShowBase):
         self.hudText.setPos(-0.95*aspect_ratio, 0.95)
         camera_info = f"{self.cameraDist:.2f}, {self.cameraRot[0]:.2f},{self.cameraRot[1]:.2f}" 
 
-        time_multiplier = 1000
-        ts = task.time*time_multiplier
-        text = f"Time: {formatTime(ts)}\n"
+        dt = (task.time - self.lastFrameUpdateTime)*self.timeMultiplier*u.s
+        self.simulationTime += dt
+        text = f"Time: {formatTime(self.simulationTime)} (x{self.timeMultiplier:.0f})\n"
         text += self.orbitEngine.getHUDInfo()
         self.hudText.setText(text)
 
@@ -196,9 +204,26 @@ class MyApp(ShowBase):
             self.hitpoint_np.setPos(self.hitpointPos)
             self.hitpoint_np.show()
 
-        self.orbitEngine.setScale(self.camera.getPos())
-        self.orbitEngine.update(task.time*time_multiplier)
+        thrustMag = 0.1*u.kg*u.m/u.s/u.s
+        thrust = [0,0,0]*u.kg*u.m/u.s/u.s
+        if self.keyState.get('w', True):
+            thrust[1] += thrustMag
+        if self.keyState.get('s', True):
+            thrust[1] -= thrustMag
+        if self.keyState.get('a', True):
+            thrust[0] -= thrustMag
+        if self.keyState.get('d', True):
+            thrust[0] += thrustMag
+        if self.keyState.get('f', True):
+            thrust[2] -= thrustMag
+        if self.keyState.get('r', True):
+            thrust[2] += thrustMag
+        self.ship.setThrust(thrust)
 
+        self.orbitEngine.setScale(self.camera.getPos())
+        self.orbitEngine.update(self.simulationTime, dt)
+
+        self.lastFrameUpdateTime = task.time
         return Task.cont
 
     def cameraControl(self, task):

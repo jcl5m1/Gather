@@ -89,11 +89,9 @@ class OrbitEngine:
     def computeLambert(self):
         pass
 
-
-
-    def update(self, time):
+    def update(self, time, dt):
         for body in self.bodies:
-            body.update(time)
+            body.update(time, dt)
 
     def setScale(self, cameraPos):
         for body in self.bodies:
@@ -111,17 +109,11 @@ class BodyOrbit:
         self.body = body
         self.color = color
         self.segments = segments
+        self.renderer = renderer
+        self.np = None
 
+        self.setOrbit(r0,v0)
 
-        self.orbit = Orbit.from_vectors(Earth, r0, v0)
-        
-        # Draw the orbit
-        path = primatives.createLineList(convertToEllipse(self.orbit, self.segments), True, self.color)
-        self.np = NodePath(path)
-        self.np.reparentTo(renderer)
-
-        self.periapsis = self.orbit.r_p.to(u.km).value
-        self.apoapsis = self.orbit.r_a.to(u.km).value
 
         # Draw the periapsis and apoapsis
         if False:        
@@ -145,19 +137,33 @@ class BodyOrbit:
             self.apoapsis_np.reparentTo(renderer)
             self.apoapsis_np.setPos(*self.apoapsis_pos.value)
 
+
+    def setOrbit(self, r0,v0, time=0):
+        self.orbit = Orbit.from_vectors(Earth, r0, v0)
+        if self.np is not None:
+            self.np.removeNode()
+        path = primatives.createLineList(convertToEllipse(self.orbit, self.segments), True, self.color)
+        self.np = NodePath(path)
+        self.np.reparentTo(self.renderer)
+        self.periapsis = self.orbit.r_p.to(u.km).value
+        self.apoapsis = self.orbit.r_a.to(u.km).value
+        self.startTime = time
+
     def getState(self, t):
         return self.orbit.propagate(t*self.orbit.period).rv()
 
     def propagate(self, t):
-        return self.orbit.propagate(t).rv()
+        return self.orbit.propagate(t-self.startTime).rv()
         
 
 
 class Body:
     def __init__(self, name, r0, v0, type, renderer, size=0.01, color=LVecBase4f(0,1,0,1)):
         self.name = name
-        self.mass = 1
+        self.mass = 1*u.kg
         self.type = type
+        self.thrust = [0,0,0]*u.m/u.s/u.s
+        self.deltaV = [0,0,0]*u.m/u.s
         self.position = np.zeros((1,3))
         self.rotation = Rotation.identity()
         self.velocity = np.zeros((1,3))
@@ -186,8 +192,13 @@ class Body:
         # self.orbit.periapsis_np.setScale(np.linalg.norm(self.orbit.periapsis_np.getPos()-cameraPos))
 
 
-    def update(self, time):
-        pos, vel = self.orbit.propagate(time*u.s)
+    def update(self, time, dt):
+        pos, vel = self.orbit.propagate(time)
+        if np.linalg.norm(self.thrust.value) >= 0.0001:
+            self.deltaV = self.thrust*dt/self.mass
+            vel = vel + self.deltaV
+            self.orbit.setOrbit(pos, vel, time)
+            pos, vel = self.orbit.propagate(time)
         self.position = pos.value
         self.velocity = vel.value
         self.np.setPos(LVecBase3f(*pos.value))
@@ -206,3 +217,10 @@ class Body:
             f" Vel: {formatDistance(np.linalg.norm(self.velocity))}/s\n"+ \
             f" Apo: {formatDistance(self.orbit.apoapsis)}\n" + \
             f" Per: {formatDistance(self.orbit.periapsis)}\n"
+    
+    def setDeltaV(self, dv):
+        self.deltaV = dv
+
+    def setThrust(self, thrust):
+        self.thrust = thrust
+
