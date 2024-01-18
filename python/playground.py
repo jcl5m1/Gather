@@ -1,20 +1,29 @@
 import numpy as np
-from astropy import units as u
-from poliastro.bodies import Earth
-from poliastro.twobody import Orbit
-from poliastro.maneuver import Maneuver
+from scipy.optimize import minimize
 
-alt_i = 700 * u.km  # Initial altitude
-inc_i = 20 * u.deg  # Initial inclination
-alt_f = 36000 * u.km  # Final altitude
-inc_f = 45 * u.deg  # Final inclination
+def energy(x, args):
+    # Define your energy function here
+    # Replace this with your actual implementation
+    dt, vx, vy, vz = x
+    return (dt + vx + vy + vz + 50)**2
 
-orbit_i = Orbit.from_classical(Earth, alt=alt_i, inc=inc_i,raan=0 * u.deg, argp=0 * u.deg, nu=0 * u.deg)
-orbit_f = Orbit.from_classical(Earth, alt=alt_f, inc=inc_f,raan=0 * u.deg, argp=0 * u.deg, nu=0 * u.deg)
+# Initial guess for the parameters
+x0 = np.array([1.0, 2.0, 3.0, 4.0])
 
-maneuver = Maneuver.lambert(orbit_i, orbit_f, time_of_flight=4 * u.h)  # Example time of flight
+# Define the bounds for the parameters
+bounds = [(0, 10), (-100, 100), (-100, 100), (-100, 100)]
 
-orbit_f = orbit_i.apply_maneuver(maneuver)
 
-print(maneuver.get_total_cost())  # Total delta-v
-print(maneuver.get_total_time())  # Transfer time
+# Optimize the energy function
+result = minimize(energy, x0, args=None, bounds=bounds)
+print(result)
+# Get the optimized parameters
+optimized_dt = result.x[0]
+optimized_vx = result.x[1]
+optimized_vy = result.x[2]
+optimized_vz = result.x[3]
+
+print("Optimized dt:", optimized_dt)
+print("Optimized vx:", optimized_vx)
+print("Optimized vy:", optimized_vy)
+print("Optimized vz:", optimized_vz)

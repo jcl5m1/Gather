@@ -111,11 +111,10 @@ class BodyOrbit:
     def __init__(self, body, r0, v0, renderer, segments=100, width=2, color=LVecBase4f(1,1,1,1)):
         self.body = body
         self.color = color
-        self.segments = segments
         self.renderer = renderer
         self.np = None
 
-        self.setOrbit(r0,v0)
+        self.setOrbit(r0,v0, segments=segments)
 
 
         # Draw the periapsis and apoapsis
@@ -141,15 +140,16 @@ class BodyOrbit:
             self.apoapsis_np.setPos(*self.apoapsis_pos.value)
 
 
-    def setOrbit(self, r0,v0, time=0):
+    def setOrbit(self, r0,v0, time=0, segments=100):
         self.orbit = Orbit.from_vectors(Earth, r0, v0)
-        if self.np is not None:
-            self.np.removeNode()
-        path = primatives.createLineList(convertToEllipse(self.orbit, self.segments), True, self.color)
-        self.np = NodePath(path)
-        self.np.reparentTo(self.renderer)
-        self.periapsis = self.orbit.r_p.to(u.km).value
-        self.apoapsis = self.orbit.r_a.to(u.km).value
+        if segments > 0:
+            if self.np is not None:
+                self.np.removeNode()
+            path = primatives.createLineList(convertToEllipse(self.orbit, segments), True, self.color)
+            self.np = NodePath(path)
+            self.np.reparentTo(self.renderer)
+            self.periapsis = self.orbit.r_p.to(u.km).value
+            self.apoapsis = self.orbit.r_a.to(u.km).value
         self.startTime = time
 
     def getState(self, t):
@@ -165,6 +165,7 @@ class Body:
         self.name = name
         self.mass = 1*u.kg
         self.type = type
+        self.color = color
         self.thrust = [0,0,0]*u.kg*u.m/u.s/u.s
         self.deltaV = [0,0,0]*u.m/u.s
         self.position = np.zeros((1,3))

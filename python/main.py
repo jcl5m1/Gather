@@ -5,18 +5,25 @@ from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 from direct.actor.Actor import Actor
 from direct.interval.IntervalGlobal import Sequence
-from panda3d.core import Point3
+from matplotlib import pyplot as plt
+from panda3d.core import Point3, LVecBase3f, LVecBase4f
 from panda3d.core import Geom, GeomVertexFormat, GeomVertexData, GeomVertexWriter, GeomTriangles, GeomNode, CollisionRay, CollisionNode, CollisionHandlerQueue, CollisionTraverser
 from panda3d.core import NodePath
 import math
 from panda3d.core import LineSegs, LPoint2f, LVecBase4f
 import primatives
-
+import numpy as np
+from scipy.optimize import minimize
+from poliastro.twobody import Orbit
 import orbitengine
 import numpy as np
-
+from poliastro.bodies import Earth
+from poliastro.maneuver import Maneuver
+import poliastro
+import poliastro as pa
 from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode
+from poliastro.iod import vallado
 
 FONT_FILE = "Inconsolata-Regular.ttf"
 
@@ -30,6 +37,40 @@ def formatTime(time):
     if time > 1*u.min:
         return f"{time.to(u.min):.2f}"
     return f"{time:.2f} sec"
+
+
+def relativeEnergy(orbit1, orbit2, t):
+    r1,v1 = orbit1.propagate(t*u.s).rv()
+    r2,v2 = orbit2.propagate(t*u.s).rv()
+    dist = np.linalg.norm(r1-r2).value
+    dv = np.linalg.norm(v1-v2).value
+    return dist+dv*dv
+
+min_energy_time_guess = 0
+def checkAdjustedOrbitInterceptEnergy(x, orbit1, orbit2):
+    global min_energy_time_guess
+
+    dt, vx, vy, vz = x
+    r_alt, v_alt = orbit1.propagate(dt*u.s).rv()
+    v_alt[0] += vx*u.m/u.s
+    v_alt[1] += vy*u.m/u.s
+    v_alt[2] += vz*u.m/u.s
+    orbit_alt = Orbit.from_vectors(Earth, r_alt, v_alt)
+
+    t_window_size = 100
+    energy = []
+
+    t = np.linspace(min_energy_time_guess-t_window_size, min_energy_time_guess+t_window_size, num=100)
+    for time in t:
+        energy.append(relativeEnergy(orbit_alt, orbit2.propagate(dt*u.s), time-dt))
+
+    # find minimum energy time
+    min_energy = np.min(energy)
+    min_energy_index = np.argmin(energy)
+    min_energy_time_guess = t[min_energy_index]
+    print(min_energy, min_energy_time_guess,x)
+    return min_energy
+
 
 
 class MyApp(ShowBase):
@@ -54,7 +95,7 @@ class MyApp(ShowBase):
 
         self.orbitEngine = orbitengine.OrbitEngine(self.render)
 
-        self.ship =  orbitengine.Body("Ship",  [8000, 0, 0], [0, 9, 0], orbitengine.BodyType.VESSEL, self.render)
+        self.ship =  orbitengine.Body("Ship",  [-35000, -1000, 0], [0, -2, 0], orbitengine.BodyType.VESSEL, self.render)
         self.orbitEngine.addBody(self.ship)
 
         self.ship2 = orbitengine.Body("Ship2", [10000, 0, 0], [0,7,0], orbitengine.BodyType.VESSEL, self.render, color=LVecBase4f(1,0,0,1))
@@ -106,6 +147,71 @@ class MyApp(ShowBase):
             self.accept(key, self.handleKeyDown, [key])
             self.accept(key+"-up", self.handleKeyUp, [key])
 
+#        self.computeAnalysis()
+            
+        self.intercept_np = None
+        self.intercept2_np = None
+
+        self.findInterceptManeuver()
+
+
+
+
+    def findInterceptManeuver(self):
+        global min_energy_time_guess
+
+        # #initial guess
+        # x0 = [0, 0, 0, 0]
+
+        # # Define the bounds for the parameters
+        # bounds = [(0, 3600*24), (-100, 100), (-100, 100), (-100, 100)]
+
+        t = np.linspace(0, 3600*24, num=50)  # Time range from 0 to 24 hours
+        energy = []
+        orbit1 = self.ship.orbit.orbit
+        orbit2 = self.ship2.orbit.orbit
+
+
+
+
+        # v1,v2 = vallado.lambert(Earth.k, orbit1.r, orbit2.r, (orbit1.period + orbit2.period) / 2.0, short=False,numiter=500)
+
+        # # The closest approach is the perigee of the transfer orbit
+        # orbit_trans = Orbit.from_vectors(Earth, orbit1.r, v1, epoch=orbit1.epoch)
+        # closest_approach = orbit_trans.r_p
+
+        # print("Closest approach:", closest_approach)
+
+        for time in t:
+            energy.append(relativeEnergy(orbit1, orbit2, time))
+
+        # find minimum energy time
+        min_energy = np.min(energy)
+        min_energy_index = np.argmin(energy)
+        min_energy_time_guess = t[min_energy_index]
+
+        print(f"Min energy: {min_energy} at t: {min_energy_time_guess}")
+
+        # mark closest approach
+        if self.intercept_np is None:
+            self.intercept = primatives.createCube(orbitengine.EARTH_RADIUS_KM*0.05,color=self.ship.color)
+            self.intercept_np = NodePath(self.intercept)
+            self.intercept_np.reparentTo(self.render)
+        pos1 = self.ship.orbit.propagate(min_energy_time_guess*u.s)[0].value
+        self.intercept_np.setPos(LVecBase3f(*pos1))
+
+        if self.intercept2_np is None:
+            self.intercept2 = primatives.createCube(orbitengine.EARTH_RADIUS_KM*0.05,color=self.ship2.color)
+            self.intercept2_np = NodePath(self.intercept2)
+            self.intercept2_np.reparentTo(self.render)
+        pos2 = self.ship2.orbit.propagate(min_energy_time_guess*u.s)[0].value
+        self.intercept2_np.setPos(LVecBase3f(*pos2))
+
+
+        #tweak orbit to minimize energy
+        # result = minimize(checkAdjustedOrbitInterceptEnergy, x0, args=(orbit1, orbit2), bounds=bounds)
+        # print(result)
+            
 
     def handleKeyDown(self, key):
         self.keyState[key] = True
@@ -221,6 +327,9 @@ class MyApp(ShowBase):
         if self.keyState.get('r', True):
             thrust[2] += thrustMag
         self.ship.setThrust(thrust)
+
+        if np.linalg.norm(thrust.value) >= 0.0001:
+            self.findInterceptManeuver()
 
         self.orbitEngine.setScale(self.camera.getPos())
         self.orbitEngine.update(self.simulationTime, dt)
