@@ -30,7 +30,7 @@ def formatTime(time):
         return f"{time.to(u.hour):.2f}"
     if time > 1*u.min:
         return f"{time.to(u.min):.2f}"
-    return f"{time:.2f} sec"
+    return f"{time:.2f}"
 
 def formatDistance(distance):
     if distance > 9.461e+12*u.km:

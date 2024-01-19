@@ -334,16 +334,15 @@ class MyApp(ShowBase):
         aspect_ratio = self.getAspectRatio()
 
         self.hudText.setPos(-0.95*aspect_ratio, 0.95)
-        camera_info = f"{self.cameraDist:.2f}, {self.cameraRot[0]:.2f},{self.cameraRot[1]:.2f}" 
 
         dt = (task.time - self.lastFrameUpdateTime)*self.timeMultiplier*u.s
         self.simulationDeltaTime = dt
         self.simulationTime += dt
         text = f"Time: {orbitengine.formatTime(self.simulationTime)} (x{self.timeMultiplier:.0e})\n"
         text += self.orbitEngine.getHUDInfo()+"\n"
-        text += f"Target:\n  {orbitengine.formatDistance(np.linalg.norm(self.ship.position - self.ship2.position))}\n  {np.linalg.norm(self.ship.velocity - self.ship2.velocity):.2f}\n"
+        text += f"Target:\n  {orbitengine.formatDistance(np.linalg.norm(self.ship.position - self.ship2.position))}\n  {orbitengine.formatVelocity(np.linalg.norm(self.ship.velocity - self.ship2.velocity))}\n"
         if self.intercept is not None:
-            text += f"Closest Approach:\n  {orbitengine.formatDistance(self.intercept[0])}\n  {orbitengine.formatVelocity(self.intercept[1])}\n  {orbitengine.formatTime(self.min_energy_intercept_time_guess)}\n"
+            text += f"Closest Approach:\n  {orbitengine.formatDistance(self.intercept[0])}\n  {orbitengine.formatVelocity(self.intercept[1])}\n  {orbitengine.formatTime(self.min_energy_intercept_time_guess-self.simulationTime)}\n"
         self.hudText.setText(text)
 
         if self.hitpointPos is None:
@@ -352,7 +351,7 @@ class MyApp(ShowBase):
             self.hitpoint_np.setPos(self.hitpointPos)
             self.hitpoint_np.show()
 
-        thrustMag = 0.5*u.kg*u.m/u.s/u.s
+        thrustMag = 20.5*u.kg*u.m/u.s/u.s
         thrust = [0,0,0]*u.kg*u.m/u.s/u.s
         if self.keyState.get('w', True):
             thrust[1] += thrustMag
@@ -362,10 +361,21 @@ class MyApp(ShowBase):
             thrust[0] -= thrustMag
         if self.keyState.get('d', True):
             thrust[0] += thrustMag
-        if self.keyState.get('f', True):
+        if self.keyState.get('q', True):
             thrust[2] -= thrustMag
-        if self.keyState.get('r', True):
+        if self.keyState.get('e', True):
             thrust[2] += thrustMag
+
+        #target retrograde
+        target_prograde = self.ship2.position-self.ship.position
+        target_prograde = target_prograde/np.linalg.norm(target_prograde)
+
+        if self.keyState.get('r', True):
+            thrust = -target_prograde*thrustMag
+        #target prograde
+        if self.keyState.get('f', True):
+            thrust = target_prograde*thrustMag
+
         self.ship.setThrust(thrust)
 
         if np.linalg.norm(thrust.value) >= 0.0001:
