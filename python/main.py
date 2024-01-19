@@ -188,11 +188,13 @@ class MyApp(ShowBase):
 
         x0 = [self.min_energy_intercept_time_guess.value]
         # Define the bounds for the parameters
-#        bounds = (None, None)
+        bounds = (self.simulationTime, None)
 
         result = minimize(checkInterceptEnergy, x0, args=(self.ship.orbit, self.ship2.orbit), tol=1e-1)
         minimized_energy = result.fun
         self.min_energy_intercept_time_guess = result.x[0]*u.s
+        if self.min_energy_intercept_time_guess < self.simulationTime:
+            self.min_energy_intercept_time_guess = self.simulationTime
         
         self.updateIntercept()
 
@@ -334,6 +336,7 @@ class MyApp(ShowBase):
         aspect_ratio = self.getAspectRatio()
 
         self.hudText.setPos(-0.95*aspect_ratio, 0.95)
+        thrustMag = 20.5*u.kg*u.m/u.s/u.s
 
         dt = (task.time - self.lastFrameUpdateTime)*self.timeMultiplier*u.s
         self.simulationDeltaTime = dt
@@ -342,7 +345,9 @@ class MyApp(ShowBase):
         text += self.orbitEngine.getHUDInfo()+"\n"
         text += f"Target:\n  {orbitengine.formatDistance(np.linalg.norm(self.ship.position - self.ship2.position))}\n  {orbitengine.formatVelocity(np.linalg.norm(self.ship.velocity - self.ship2.velocity))}\n"
         if self.intercept is not None:
-            text += f"Closest Approach:\n  {orbitengine.formatDistance(self.intercept[0])}\n  {orbitengine.formatVelocity(self.intercept[1])}\n  {orbitengine.formatTime(self.min_energy_intercept_time_guess-self.simulationTime)}\n"
+            text += f"Closest Approach:\n  {orbitengine.formatDistance(self.intercept[0])}\n" +\
+                  f"  {orbitengine.formatVelocity(self.intercept[1])}:({(self.intercept[1]/(thrustMag/u.kg)).to(u.s):.2f})\n"+\
+                  f"  {orbitengine.formatTime(self.min_energy_intercept_time_guess-self.simulationTime)}\n"
         self.hudText.setText(text)
 
         if self.hitpointPos is None:
@@ -351,7 +356,6 @@ class MyApp(ShowBase):
             self.hitpoint_np.setPos(self.hitpointPos)
             self.hitpoint_np.show()
 
-        thrustMag = 20.5*u.kg*u.m/u.s/u.s
         thrust = [0,0,0]*u.kg*u.m/u.s/u.s
         if self.keyState.get('w', True):
             thrust[1] += thrustMag
@@ -370,8 +374,12 @@ class MyApp(ShowBase):
         target_prograde = self.ship2.position-self.ship.position
         target_prograde = target_prograde/np.linalg.norm(target_prograde)
 
+        target_velocity = self.ship.velocity-self.ship2.velocity
+        target_velocity = target_velocity/np.linalg.norm(target_velocity)
+
+        # anti-relative velocity
         if self.keyState.get('r', True):
-            thrust = -target_prograde*thrustMag
+            thrust = -target_velocity*thrustMag
         #target prograde
         if self.keyState.get('f', True):
             thrust = target_prograde*thrustMag
