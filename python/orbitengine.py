@@ -21,20 +21,38 @@ import numpy as np  # For array manipulation
 
 EARTH_RADIUS_KM = const.R_earth.to(u.km).value
 
-def formatDistance(distance):
-    if distance > 9.461e+12:
-        return f"{distance/9.461e+12:.2f} Lyr"
-    elif distance > 1.079e+9:
-        return f"{distance/1.079e+97:.2f} Lhr"
-    elif distance > 299792:
-        return f"{distance/299792:.2f} Lsec"
-    elif distance > 1000:
-        return f"{distance/1000:.2f} Mm"
-    elif distance > 1:
-        return f"{distance:.2f} Km"
-    else:
-        return f"{distance*1000:.2f} m"
+def formatTime(time):
+    if time > 1*u.year:
+        return f"{time.to(u.year):.2f}"
+    if time > 1*u.day:
+        return f"{time.to(u.day):.2f}"
+    if time > 1*u.hour:
+        return f"{time.to(u.hour):.2f}"
+    if time > 1*u.min:
+        return f"{time.to(u.min):.2f}"
+    return f"{time:.2f} sec"
 
+def formatDistance(distance):
+    if distance > 9.461e+12*u.km:
+        return f"{distance/9.461e+12:.2f}Lyr"
+    elif distance > 1.079e+9*u.km:
+        return f"{distance/1.079e+97:.2f}Lhr"
+    elif distance > 299792*u.km:
+        return f"{distance.to(u.lightsec):.2f}"
+    elif distance > 1000*u.km:
+        return f"{distance.to(u.Mm):.2f}"
+    elif distance > 1*u.km:
+        return f"{distance:.2f}"
+    else:
+        return f"{distance.to(u.m):.2f}"
+
+def formatVelocity(velocity):
+    if velocity > 1000*u.km/u.s:
+        return f"{velocity.to(u.Mm/u.s):.2f}"
+    elif velocity > 1*u.km/u.s:
+        return f"{velocity:.2f}"
+    else:
+        return f"{velocity.to(u.m/u.s):.2f}"
 
 def convertToEllipse(orbit, segments=100):
     # Get the orbital elements
@@ -108,39 +126,16 @@ class OrbitEngine:
 
 
 class BodyOrbit:
-    def __init__(self, body, r0, v0, renderer, segments=100, width=2, color=LVecBase4f(1,1,1,1)):
+    def __init__(self, body, r0, v0, renderer, time=0*u.s,segments=100, width=2,  color=LVecBase4f(1,1,1,1)):
         self.body = body
         self.color = color
         self.renderer = renderer
         self.np = None
 
-        self.setOrbit(r0,v0, segments=segments)
+        self.setOrbit(r0,v0, time=time, segments=segments)
 
 
-        # Draw the periapsis and apoapsis
-        if False:        
-
-            # Calculate the eccentric anomaly E
-            E = 2 * np.arctan2(np.sqrt(1-self.orbit.ecc.value) * np.sin(self.orbit.nu.value / 2), np.sqrt(1+self.orbit.ecc.value) * np.cos(self.orbit.nu.value / 2))
-
-            # Calculate the time to periapsis
-            t_periapsis = (E - self.orbit.ecc.value * np.sin(E)) / self.orbit.n.to(u.rad/u.s).value
-
-
-            print(t_periapsis, self.orbit.period.value)
-            # Now you can use t_periapsis as the initial time
-            self.periapsis_pos,_ = self.getState(t_periapsis/self.orbit.period.value)
-            self.periapsis_np = NodePath(primatives.createCube(0.005, LVecBase4f(1,0,0,1)))
-            self.periapsis_np.reparentTo(renderer)
-            self.periapsis_np.setPos(*self.periapsis_pos.value)
-
-            self.apoapsis_pos,_ = self.getState(0.5)
-            self.apoapsis_np = NodePath(primatives.createCube(0.005, LVecBase4f(0,0,1,1)))
-            self.apoapsis_np.reparentTo(renderer)
-            self.apoapsis_np.setPos(*self.apoapsis_pos.value)
-
-
-    def setOrbit(self, r0,v0, time=0, segments=100):
+    def setOrbit(self, r0,v0, time=0*u.s, segments=100):
         self.orbit = Orbit.from_vectors(Earth, r0, v0)
         if segments > 0:
             if self.np is not None:
@@ -148,14 +143,11 @@ class BodyOrbit:
             path = primatives.createLineList(convertToEllipse(self.orbit, segments), True, self.color)
             self.np = NodePath(path)
             self.np.reparentTo(self.renderer)
-            self.periapsis = self.orbit.r_p.to(u.km).value
-            self.apoapsis = self.orbit.r_a.to(u.km).value
+            self.periapsis = self.orbit.r_p.to(u.km)
+            self.apoapsis = self.orbit.r_a.to(u.km)
         self.startTime = time
 
-    def getState(self, t):
-        return self.orbit.propagate(t*self.orbit.period).rv()
-
-    def propagate(self, t):
+    def propagate(self, t=0*u.s):
         return self.orbit.propagate(t-self.startTime).rv()
         
 
@@ -168,16 +160,16 @@ class Body:
         self.color = color
         self.thrust = [0,0,0]*u.kg*u.m/u.s/u.s
         self.deltaV = [0,0,0]*u.m/u.s
-        self.position = np.zeros((1,3))
+        self.position = np.zeros((1,3))*u.km
         self.rotation = Rotation.identity()
-        self.velocity = np.zeros((1,3))
+        self.velocity = np.zeros((1,3))*u.m/u.s
         self.rotation_velocity = Rotation.identity()
         self.acceleration = np.zeros((1,3))
         self.rotation_acceleration = Rotation.identity()
         alpha = 0.5
         self.orbit = BodyOrbit(self, r0* u.km, v0* u.km / u.s, renderer,color=LVecBase4f(color[0]*alpha, color[1]*alpha, color[2]*alpha,1))
 
-        pos, vel = self.orbit.getState(0)
+        pos, vel = self.orbit.propagate()
         if type == BodyType.VESSEL:
             ship = primatives.createPyramid(size, color)
 
@@ -191,7 +183,7 @@ class Body:
         self.vel_line_np.reparentTo(renderer)
 
     def setScale(self,cameraPos):
-        self.np.setScale(np.linalg.norm(self.position-cameraPos))
+        self.np.setScale(np.linalg.norm(self.position-cameraPos).to(u.km).value)
         # self.orbit.apoapsis_np.setScale(np.linalg.norm(self.orbit.apoapsis_np.getPos()-cameraPos))
         # self.orbit.periapsis_np.setScale(np.linalg.norm(self.orbit.periapsis_np.getPos()-cameraPos))
 
@@ -204,22 +196,22 @@ class Body:
             self.orbit.setOrbit(pos, vel, time-dt)
         pos, vel = self.orbit.propagate(time)
     
-        self.position = pos.value
-        self.velocity = vel.value
+        self.position = pos
+        self.velocity = vel
         self.np.setPos(LVecBase3f(*pos.value))
 
         #update the velocity vector
         vertex_data = self.vel_line_np.node().modify_geom(0).modify_vertex_data()
         vertex_writer = GeomVertexWriter(vertex_data, 'vertex')
         vertex_writer.set_row(0)
-        vertex_writer.set_data3f(LVecBase3f(*self.position))        
+        vertex_writer.set_data3f(LVecBase3f(*self.position.value))        
         vertex_writer.set_row(1)
-        vertex_writer.set_data3f(LVecBase3f(*(self.position+1000*self.velocity)))
+        vertex_writer.set_data3f(LVecBase3f(*(self.position.value+1000*self.velocity.value)))
 
     def getHUDInfo(self):
         return f"{self.name}\n"+\
             f" Alt: {formatDistance(np.linalg.norm(self.position))}\n"+ \
-            f" Vel: {formatDistance(np.linalg.norm(self.velocity))}/s\n"+ \
+            f" Vel: {formatVelocity(np.linalg.norm(self.velocity))}\n"+ \
             f" Apo: {formatDistance(self.orbit.apoapsis)}\n" + \
             f" Per: {formatDistance(self.orbit.periapsis)}\n"
     

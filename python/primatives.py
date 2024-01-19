@@ -14,6 +14,11 @@ import math
 from panda3d.core import LVecBase4f
 from panda3d.core import Geom, GeomVertexFormat, GeomVertexData, GeomVertexWriter, GeomTriangles, GeomNode
 from panda3d.core import ColorAttrib
+from panda3d.core import CardMaker, NodePath
+import numpy as np
+from direct.gui.OnscreenText import OnscreenText
+from panda3d.core import TextNode
+
 
 
 def normalize(vector, size=1):
@@ -41,6 +46,94 @@ def createEllipse(radius_x, radius_y, num_segments, color=LVecBase4f(1, 1, 1, 1)
     lines.setColor(color)  # Red X-axis
     lines.drawTo(radius_x, 0, 0)
     return lines.create()
+
+
+class Graph:
+    def __init__(self, renderer, width, height, color=LVecBase4f(1, 1, 1, 1), font=None):
+        # Create a CardMaker
+        self.cm = CardMaker('graph')
+
+        # Set the size of the card to create a square
+        # The arguments are the left, right, bottom, and top edges of the card
+        self.cm.setFrame(0, width, 0, height)
+
+        self.width = width
+        self.height = height
+        #set color
+        self.cm.setColor(color)
+
+        # Create a LineSegs to hold the lines
+        self.lines = LineSegs()
+        self.lines.setThickness(2)
+        self.lines.setColor(LVecBase4f(0.0, 1.0, 0.0, 1))
+
+        self.lines.moveTo(0,0,0)
+        self.lines.drawTo(width,0,height)
+
+        self.lines.moveTo(0,0,height)
+        self.lines.drawTo(width,0,0)
+
+        self.np = NodePath(self.cm.generate())
+
+        # Create a NodePath from the lines and attach it to the card
+        self.lines_np = NodePath(self.lines.create())
+        self.lines_np.reparentTo(self.np)
+        self.lines_np.setBin("fixed", 0)
+
+        self.vertLabels = OnscreenText(text='[info]', pos=(0.85, -0.95), scale=0.04, fg=(1, 1, 1, 1), align=TextNode.ALeft, font=font)
+
+
+        self.np.reparentTo(renderer)
+
+
+    def clear(self):
+        for node in self.np.getChildren():
+            node.removeNode()
+
+
+    def plot(self, data, color=LVecBase4f(1, 1, 1, 1)):
+
+        self.lines = LineSegs()  #clear old data?
+        self.lines.setThickness(2)
+        self.lines.setColor(color)
+        self.data = data
+        min_value = np.min(data)
+        max_value = np.max(data)
+        
+        def scale(value, min, max):
+            return (value - min) / (max - min)
+
+        # Plot the data as lines
+        self.lines.moveTo(0, 0, self.height*scale(data[0], min_value, max_value))
+        for i in range(len(data)):
+            self.lines.setColor(LVecBase4f(1, 1, 1, 1))  # Set color for each line segment
+            self.lines.drawTo(self.width*i/len(data),0, self.height*scale(data[i], min_value, max_value))
+
+        if self.lines_np is not None:
+            self.lines_np.removeNode()
+
+        self.vertLabels.setText(f"{min_value:.2f}")
+
+        # Create a NodePath from the lines and attach it to the card
+        self.lines_np = NodePath(self.lines.create())
+        self.lines_np.reparentTo(self.np)
+        self.lines_np.setBin("fixed", 0)
+
+                
+    def vline(self, i, color=LVecBase4f(1, 1, 1, 1)):
+        self.lines = LineSegs()
+        self.lines.setThickness(2)
+        self.lines.setColor(color)
+        self.lines.moveTo(self.width*i/len(self.data), 0, 0)
+        self.lines.drawTo(self.width*i/len(self.data),0, self.height)
+        # if self.lines_np is not None:
+        #     self.lines_np.removeNode()
+        # Create a NodePath from the lines and attach it to the card
+        self.lines_np = NodePath(self.lines.create())
+        self.lines_np.reparentTo(self.np)
+        self.lines_np.setBin("fixed", 0)
+
+
 
 
 

@@ -11,6 +11,7 @@ from panda3d.core import Geom, GeomVertexFormat, GeomVertexData, GeomVertexWrite
 from panda3d.core import NodePath
 import math
 from panda3d.core import LineSegs, LPoint2f, LVecBase4f
+from panda3d.core import WindowProperties
 import primatives
 import numpy as np
 from scipy.optimize import minimize
@@ -25,52 +26,39 @@ from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode
 from poliastro.iod import vallado
 
+
 FONT_FILE = "Inconsolata-Regular.ttf"
 
-def formatTime(time):
-    if time > 1*u.year:
-        return f"{time.to(u.year):.2f}"
-    if time > 1*u.day:
-        return f"{time.to(u.day):.2f}"
-    if time > 1*u.hour:
-        return f"{time.to(u.hour):.2f}"
-    if time > 1*u.min:
-        return f"{time.to(u.min):.2f}"
-    return f"{time:.2f} sec"
+WINDOW_WIDTH = 1600
+WINDOW_HEIGHT = 900
+
+
 
 
 def relativeEnergy(orbit1, orbit2, t):
-    r1,v1 = orbit1.propagate(t*u.s).rv()
-    r2,v2 = orbit2.propagate(t*u.s).rv()
+    r1,v1 = orbit1.propagate(t*u.s)
+    r2,v2 = orbit2.propagate(t*u.s)
     dist = np.linalg.norm(r1-r2).value
     dv = np.linalg.norm(v1-v2).value
     return dist+dv*dv
 
-min_energy_time_guess = 0
-def checkAdjustedOrbitInterceptEnergy(x, orbit1, orbit2):
-    global min_energy_time_guess
-
-    dt, vx, vy, vz = x
-    r_alt, v_alt = orbit1.propagate(dt*u.s).rv()
+def checkAdjustedOrbitInterceptEnergy(x, orbit1, orbit2, t_simulation):
+    vx, vy, vz, t_intercept = x
+    r_alt, v_alt = orbit1.propagate(0*u.s)
     v_alt[0] += vx*u.m/u.s
     v_alt[1] += vy*u.m/u.s
     v_alt[2] += vz*u.m/u.s
-    orbit_alt = Orbit.from_vectors(Earth, r_alt, v_alt)
+    orbit_alt = orbitengine.BodyOrbit(orbit1.body, r_alt, v_alt,time=t_simulation, renderer=None, segments=0)
+    dv = np.linalg.norm([vx,vy,vz])
+    energy = relativeEnergy(orbit_alt, orbit2, t_intercept) + dv*dv #total energy is distance + deltaV^2 + maneuver deltaV^2
+#    print(x, energy)
+    return energy
 
-    t_window_size = 100
-    energy = []
 
-    t = np.linspace(min_energy_time_guess-t_window_size, min_energy_time_guess+t_window_size, num=100)
-    for time in t:
-        energy.append(relativeEnergy(orbit_alt, orbit2.propagate(dt*u.s), time-dt))
-
-    # find minimum energy time
-    min_energy = np.min(energy)
-    min_energy_index = np.argmin(energy)
-    min_energy_time_guess = t[min_energy_index]
-    print(min_energy, min_energy_time_guess,x)
-    return min_energy
-
+def checkInterceptEnergy(x, orbit1, orbit2):
+    t_intercept = x[0]
+    energy = relativeEnergy(orbit1, orbit2, t_intercept)
+    return energy
 
 
 class MyApp(ShowBase):
@@ -81,6 +69,12 @@ class MyApp(ShowBase):
         self.camLens.setFar(100000000000)
         self.setBackgroundColor(0,0,0,1)
         self.disable_mouse()
+
+        # set window size
+        props = WindowProperties()
+        props.setSize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        self.win.requestProperties(props)
+        aspect_ratio = WINDOW_WIDTH/WINDOW_HEIGHT
 
         self.cameraDist = orbitengine.EARTH_RADIUS_KM*15
         self.cameraDistMin = orbitengine.EARTH_RADIUS_KM*2
@@ -105,6 +99,10 @@ class MyApp(ShowBase):
         axis_np = NodePath(axis)
         axis_np.reparentTo(self.render)
         
+        graph_size = (0.4,0.10*aspect_ratio)
+
+
+
         hitpoint = primatives.createCube(orbitengine.EARTH_RADIUS_KM*0.025,color=LVecBase4f(1,0,0,1))
         self.hitpoint_np = NodePath(hitpoint)
         self.hitpoint_np.reparentTo(self.render)
@@ -118,17 +116,23 @@ class MyApp(ShowBase):
         self.pickerNode = CollisionNode('mouseRay')
         self.traverser = CollisionTraverser()
         self.qh = CollisionHandlerQueue()
-        self.timeMultiplier = 1000
+        self.timeMultiplier = 10
         self.simulationTime = 0
 
         # Add the spinCameraTask procedure to the task manager.
         self.taskMgr.add(self.frameUpdate, "FrameUpdate")
         self.taskMgr.add(self.cameraControl, "CameraControl")
 
-        aspect_ratio = self.getAspectRatio()
+
+        # HUD / 2D content
 
         font = self.loader.loadFont(FONT_FILE)
         self.hudText = OnscreenText(text='[HUD info]', pos=(-0.95*aspect_ratio, -0.95), scale=0.04, fg=(1, 1, 1, 1), align=TextNode.ALeft, font=font)
+
+
+        self.graph = primatives.Graph(self.render2d, *graph_size, color=LVecBase4f(0.1,0.1,0.1,1), font=font)
+        self.graph.np.setPos(0.95-graph_size[0],0.0,-0.95)
+
 
         self.accept('mouse1', self.handleMouseLeftDown)
         self.accept('mouse1-up', self.handleMouseLeftUp)
@@ -141,77 +145,107 @@ class MyApp(ShowBase):
 
         self.lastFrameUpdateTime = 0
         self.keyState = {}
-        keys = ['w', 'a', 's', 'd', 'q', 'e', 'r', 'f', 'z', 'x', 'c', 'v', 't', 'g', 'b', 'n', 'y', 'h', 'u', 'j', 'i', 'k', 'o', 'l','.',',']
+        keys=[chr(i) for i in range(32, 127)] # not the best set and should revisit
+
         for key in keys:
             self.keyState[key] = False
             self.accept(key, self.handleKeyDown, [key])
             self.accept(key+"-up", self.handleKeyUp, [key])
-
-#        self.computeAnalysis()
             
         self.intercept_np = None
         self.intercept2_np = None
-
-        self.findInterceptManeuver()
-
+        self.intercept = None
 
 
-
-    def findInterceptManeuver(self):
-        global min_energy_time_guess
-
+    def findApproximateClosestApproach(self):
         # #initial guess
         # x0 = [0, 0, 0, 0]
 
         # # Define the bounds for the parameters
         # bounds = [(0, 3600*24), (-100, 100), (-100, 100), (-100, 100)]
 
-        t = np.linspace(0, 3600*24, num=50)  # Time range from 0 to 24 hours
+        MAX_ORBITS = 4
+        t = np.linspace(self.simulationTime, self.simulationTime+self.ship.orbit.orbit.period*MAX_ORBITS, num=100)  # Time range from 0 to 24 hours
         energy = []
-        orbit1 = self.ship.orbit.orbit
-        orbit2 = self.ship2.orbit.orbit
-
-
-
-
-        # v1,v2 = vallado.lambert(Earth.k, orbit1.r, orbit2.r, (orbit1.period + orbit2.period) / 2.0, short=False,numiter=500)
-
-        # # The closest approach is the perigee of the transfer orbit
-        # orbit_trans = Orbit.from_vectors(Earth, orbit1.r, v1, epoch=orbit1.epoch)
-        # closest_approach = orbit_trans.r_p
-
-        # print("Closest approach:", closest_approach)
+        orbit1 = self.ship.orbit
+        orbit2 = self.ship2.orbit
 
         for time in t:
-            energy.append(relativeEnergy(orbit1, orbit2, time))
+            energy.append(relativeEnergy(orbit1, orbit2, time.value))
 
         # find minimum energy time
         min_energy = np.min(energy)
         min_energy_index = np.argmin(energy)
-        min_energy_time_guess = t[min_energy_index]
+        self.min_energy_intercept_time_guess = t[min_energy_index]
+        self.graph.clear()
+        self.graph.plot(energy)
+        self.graph.vline(min_energy_index, color=LVecBase4f(1,0,0,1))
 
-        print(f"Min energy: {min_energy} at t: {min_energy_time_guess}")
+        self.updateIntercept()
 
+
+    def incrementallyFindClosestApproach(self):
+
+        x0 = [self.min_energy_intercept_time_guess.value]
+        # Define the bounds for the parameters
+#        bounds = (None, None)
+
+        result = minimize(checkInterceptEnergy, x0, args=(self.ship.orbit, self.ship2.orbit), tol=1e-1)
+        minimized_energy = result.fun
+        self.min_energy_intercept_time_guess = result.x[0]*u.s
+        
+        self.updateIntercept()
+
+
+
+    def updateIntercept(self):
         # mark closest approach
         if self.intercept_np is None:
-            self.intercept = primatives.createCube(orbitengine.EARTH_RADIUS_KM*0.05,color=self.ship.color)
+            self.intercept = primatives.createCube(orbitengine.EARTH_RADIUS_KM*0.025,color=self.ship.color)
             self.intercept_np = NodePath(self.intercept)
             self.intercept_np.reparentTo(self.render)
-        pos1 = self.ship.orbit.propagate(min_energy_time_guess*u.s)[0].value
-        self.intercept_np.setPos(LVecBase3f(*pos1))
+        r1, v1 = self.ship.orbit.propagate(self.min_energy_intercept_time_guess)
+        self.intercept_np.setPos(LVecBase3f(*r1.value))
 
         if self.intercept2_np is None:
-            self.intercept2 = primatives.createCube(orbitengine.EARTH_RADIUS_KM*0.05,color=self.ship2.color)
+            self.intercept2 = primatives.createCube(orbitengine.EARTH_RADIUS_KM*0.025,color=self.ship2.color)
             self.intercept2_np = NodePath(self.intercept2)
             self.intercept2_np.reparentTo(self.render)
-        pos2 = self.ship2.orbit.propagate(min_energy_time_guess*u.s)[0].value
-        self.intercept2_np.setPos(LVecBase3f(*pos2))
+        r2, v2 = self.ship2.orbit.propagate(self.min_energy_intercept_time_guess)
+        self.intercept2_np.setPos(LVecBase3f(*r2.value))
 
+        #store the intercept data for HUD
+        self.intercept = [np.linalg.norm(r1-r2), np.linalg.norm(v1-v2)]
 
-        #tweak orbit to minimize energy
-        # result = minimize(checkAdjustedOrbitInterceptEnergy, x0, args=(orbit1, orbit2), bounds=bounds)
-        # print(result)
-            
+    
+    def computeInterceptManeuver(self):
+
+        self.findApproximateClosestApproach()
+
+        x0 = [0, 0, 0, self.min_energy_intercept_time_guess.value]
+
+        # Define the bounds for the parameters
+        bounds = [(-1000, 1000), (-1000, 1000), (-1000, 1000), (None, None)]
+
+        result = minimize(checkAdjustedOrbitInterceptEnergy, x0, args=(self.ship.orbit, self.ship2.orbit, self.simulationTime), bounds=bounds,tol=1e-5)
+
+        minimized_energy = result.fun
+        vx,vy,vz,t_intercept = result.x
+        self.min_energy_intercept_time_guess = t_intercept*u.s
+        
+        #adjust orbit1
+        r_alt, v_alt = self.ship.orbit.propagate()
+        v_alt[0] += vx*u.m/u.s
+        v_alt[1] += vy*u.m/u.s
+        v_alt[2] += vz*u.m/u.s
+
+        self.ship.orbit.setOrbit(r_alt, v_alt, time=self.simulationTime-self.simulationDeltaTime, segments=100)
+
+        
+        #print(result, minimized_energy)
+
+        self.updateIntercept()
+
 
     def handleKeyDown(self, key):
         self.keyState[key] = True
@@ -219,8 +253,12 @@ class MyApp(ShowBase):
             self.timeMultiplier *= 10
         if key == ',':
             self.timeMultiplier /= 10
-            if self.timeMultiplier < 1:
-                self.timeMultiplier = 1
+            if self.timeMultiplier < 0.01:
+                self.timeMultiplier = 0.01
+        if key == 'm':
+            self.computeInterceptManeuver()
+        if key == 'n':
+            self.findApproximateClosestApproach()    
 
     def handleKeyUp(self, key):
         self.keyState[key] = False
@@ -299,11 +337,13 @@ class MyApp(ShowBase):
         camera_info = f"{self.cameraDist:.2f}, {self.cameraRot[0]:.2f},{self.cameraRot[1]:.2f}" 
 
         dt = (task.time - self.lastFrameUpdateTime)*self.timeMultiplier*u.s
+        self.simulationDeltaTime = dt
         self.simulationTime += dt
-        text = f"Time: {formatTime(self.simulationTime)} (x{self.timeMultiplier:.0f})\n"
+        text = f"Time: {orbitengine.formatTime(self.simulationTime)} (x{self.timeMultiplier:.0e})\n"
         text += self.orbitEngine.getHUDInfo()+"\n"
-        text += f"Dist: {np.linalg.norm(self.ship.position - self.ship2.position):.2f}\n"
-        text += f"deltaV: {np.linalg.norm(self.ship.velocity - self.ship2.velocity):.2f}\n"
+        text += f"Target:\n  {orbitengine.formatDistance(np.linalg.norm(self.ship.position - self.ship2.position))}\n  {np.linalg.norm(self.ship.velocity - self.ship2.velocity):.2f}\n"
+        if self.intercept is not None:
+            text += f"Closest Approach:\n  {orbitengine.formatDistance(self.intercept[0])}\n  {orbitengine.formatVelocity(self.intercept[1])}\n  {orbitengine.formatTime(self.min_energy_intercept_time_guess)}\n"
         self.hudText.setText(text)
 
         if self.hitpointPos is None:
@@ -312,7 +352,7 @@ class MyApp(ShowBase):
             self.hitpoint_np.setPos(self.hitpointPos)
             self.hitpoint_np.show()
 
-        thrustMag = 0.1*u.kg*u.m/u.s/u.s
+        thrustMag = 0.5*u.kg*u.m/u.s/u.s
         thrust = [0,0,0]*u.kg*u.m/u.s/u.s
         if self.keyState.get('w', True):
             thrust[1] += thrustMag
@@ -329,9 +369,11 @@ class MyApp(ShowBase):
         self.ship.setThrust(thrust)
 
         if np.linalg.norm(thrust.value) >= 0.0001:
-            self.findInterceptManeuver()
+            if self.intercept is None:
+                self.findApproximateClosestApproach()
+            self.incrementallyFindClosestApproach()
 
-        self.orbitEngine.setScale(self.camera.getPos())
+        self.orbitEngine.setScale(self.camera.getPos()*u.km)
         self.orbitEngine.update(self.simulationTime, dt)
 
         self.lastFrameUpdateTime = task.time
