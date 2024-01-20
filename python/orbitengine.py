@@ -14,12 +14,15 @@ import math
 from poliastro.bodies import Earth, Mars, Sun  # Or your desired bodies
 from poliastro.maneuver import Maneuver
 from poliastro.twobody import Orbit
+import poliastro as pa
 
 import matplotlib.pyplot as plt
 import numpy as np  # For array manipulation
 
 
 EARTH_RADIUS_KM = const.R_earth.to(u.km).value
+
+epsilon = np.finfo(float).eps
 
 def formatTime(time):
     if time > 1*u.year:
@@ -126,17 +129,17 @@ class OrbitEngine:
 
 
 class BodyOrbit:
-    def __init__(self, body, r0, v0, renderer, time=0*u.s,segments=100, width=2,  color=LVecBase4f(1,1,1,1)):
+    def __init__(self, body, r0, v0, renderer, attractor=Earth, time=0*u.s,segments=100, width=2,  color=LVecBase4f(1,1,1,1)):
         self.body = body
         self.color = color
         self.renderer = renderer
         self.np = None
+        self.trajectory_np = None
 
-        self.setOrbit(r0,v0, time=time, segments=segments)
+        self.setOrbit(attractor, r0,v0, time=time, segments=segments)
 
-
-    def setOrbit(self, r0,v0, time=0*u.s, segments=100):
-        self.orbit = Orbit.from_vectors(Earth, r0, v0)
+    def setOrbit(self, attractor, r0,v0, time=0*u.s, segments=100):
+        self.orbit = Orbit.from_vectors(attractor, r0, v0)
         if segments > 0:
             if self.np is not None:
                 self.np.removeNode()
@@ -147,13 +150,53 @@ class BodyOrbit:
             self.apoapsis = self.orbit.r_a.to(u.km)
         self.startTime = time
 
+
+    def computeManouverTrajectory(self, maneuvers):
+
+        pos = []
+        def callback(t, y):            
+            rn = y[:3]  # Position vector
+            vn = y[3:]  # Velocity vector
+            pos.append(rn.copy())
+
+        #starting position and velocity
+        r, v = self.orbit.rv()
+        r = r.to(u.km).value
+        v = v.to(u.km/u.s).value
+
+
+
+        #for each maneuver, compute the acceleration period and then the post acceleration period
+        # and concatenate the results
+        for m in maneuvers:
+            # Define the additional acceleration function
+            def ad(t0, state, k):
+                return m[0].to(u.km/u.s**2).value
+
+            print(r,v)
+            r,v = pa.twobody.propagation.cowell(
+                self.orbit.attractor.k.to(u.km**3 / u.s**2).value, 
+                r, 
+                v,
+                m[1].to(u.s).value,
+                ad=ad, 
+                callback=callback)
+
+        path = primatives.createLineList(pos, False, self.color/2)
+        if self.trajectory_np is not None:
+            self.trajectory_np.removeNode()
+        self.trajectory_np = NodePath(path)
+        self.trajectory_np.reparentTo(self.renderer)
+
+        
     def propagate(self, t=0*u.s):
         return self.orbit.propagate(t-self.startTime).rv()
+    
+    # def propagateWithAccel(self, t=0*u.s, accel=[0,0,0]*u.km/u.s/u.s):
+    #     return self.orbit.propagate(t-self.startTime, method=pa.twobody.cowell).rv()
         
-
-
 class Body:
-    def __init__(self, name, r0, v0, type, renderer, size=0.01, color=LVecBase4f(0,1,0,1)):
+    def __init__(self, name, r0, v0, type, renderer,attractor=Earth, size=0.01, color=LVecBase4f(0,1,0,1)):
         self.name = name
         self.mass = 1*u.kg
         self.type = type
@@ -167,7 +210,9 @@ class Body:
         self.acceleration = np.zeros((1,3))
         self.rotation_acceleration = Rotation.identity()
         alpha = 0.5
-        self.orbit = BodyOrbit(self, r0* u.km, v0* u.km / u.s, renderer,color=LVecBase4f(color[0]*alpha, color[1]*alpha, color[2]*alpha,1))
+        self.orbit = BodyOrbit(self, r0* u.km, v0* u.km / u.s, 
+                               renderer, attractor=attractor, 
+                               color=LVecBase4f(color[0]*alpha, color[1]*alpha, color[2]*alpha,1))
 
         pos, vel = self.orbit.propagate()
         if type == BodyType.VESSEL:
@@ -189,11 +234,11 @@ class Body:
 
 
     def update(self, time, dt):
-        if np.linalg.norm(self.thrust.value) >= 0.0001:
+        if np.linalg.norm(self.thrust.value) >= epsilon:
             pos, vel = self.orbit.propagate(time-dt)
             self.deltaV = self.thrust*dt/self.mass
             vel = vel + self.deltaV
-            self.orbit.setOrbit(pos, vel, time-dt)
+            self.orbit.setOrbit(Earth,pos, vel, time-dt)
         pos, vel = self.orbit.propagate(time)
     
         self.position = pos

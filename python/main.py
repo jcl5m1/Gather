@@ -33,7 +33,13 @@ WINDOW_WIDTH = 1600
 WINDOW_HEIGHT = 900
 
 
+epsilon = np.finfo(float).eps
 
+def spherical_to_cartesian(r, theta, phi):
+    x = r * np.sin(phi) * np.cos(theta)
+    y = r * np.sin(phi) * np.sin(theta)
+    z = r * np.cos(phi)
+    return x, y, z
 
 def relativeEnergy(orbit1, orbit2, t):
     r1,v1 = orbit1.propagate(t*u.s)
@@ -59,6 +65,22 @@ def checkInterceptEnergy(x, orbit1, orbit2):
     t_intercept = x[0]
     energy = relativeEnergy(orbit1, orbit2, t_intercept)
     return energy
+
+def postBurnEnergy(x, orbit1, orbit2, thrust_mag, t_simulation):
+    theta, phi, t_delay = x
+    t_step = 1*u.s
+
+    # compute final position and velocity under constant thrust and orbit
+
+    # # get vessel orbit at t_delay
+    # r1,v1 = orbit1.propagate(t_simulation+t_delay*u.s)
+    # # apply thrust
+    # vx, vy, vz = spherical_to_cartesian(thrust_mag, theta, phi)
+    # v1[0] += vx*u.m/u.s
+    # v1[1] += vy*u.m/u.s
+    # v1[2] += vz*u.m/u.s
+    # # new orbit
+    # orbit_alt = orbitengine.BodyOrbit(orbit1.body, r1, v1,time=t_simulation+t_delay, renderer=None, segments=0)
 
 
 class MyApp(ShowBase):
@@ -91,6 +113,15 @@ class MyApp(ShowBase):
 
         self.ship =  orbitengine.Body("Ship",  [-35000, -1000, 0], [0, -2, 0], orbitengine.BodyType.VESSEL, self.render)
         self.orbitEngine.addBody(self.ship)
+
+
+        maneuvers = [
+            [np.array([0,-0.02,0])*u.km/u.s**2, 10*u.s],
+            [np.array([0,0.,0])*u.km/u.s**2,    5*u.hour],
+            [np.array([0,-0.02,0])*u.km/u.s**2, 80*u.s],
+            [np.array([0,0.,0])*u.km/u.s**2,    2*u.hour],
+        ]
+        self.ship.orbit.computeManouverTrajectory(maneuvers)
 
         self.ship2 = orbitengine.Body("Ship2", [10000, 0, 0], [0,7,0], orbitengine.BodyType.VESSEL, self.render, color=LVecBase4f(1,0,0,1))
         self.orbitEngine.addBody(self.ship2)
@@ -241,7 +272,7 @@ class MyApp(ShowBase):
         v_alt[1] += vy*u.m/u.s
         v_alt[2] += vz*u.m/u.s
 
-        self.ship.orbit.setOrbit(r_alt, v_alt, time=self.simulationTime-self.simulationDeltaTime, segments=100)
+        self.ship.orbit.setOrbit(Earth, r_alt, v_alt, time=self.simulationTime-self.simulationDeltaTime, segments=100)
 
         
         #print(result, minimized_energy)
@@ -282,6 +313,26 @@ class MyApp(ShowBase):
     def handleMouseWheelDown(self):
         self.cameraDist /= self.cameraWheelSensitivity
         
+
+
+
+    def computeFinalBurn(self):
+        # given compute thurst vector and delay that will bring ship to dist=0, dv=0 at t=now+delay+burntime that minimizes total energy
+
+        # initial guess
+        x0 = [0, 0, 0] # thurst theta, phi, delay
+
+        # Define the bounds for the parameters
+        bounds = [(-np.pi, np.pi), (-np.pi/2, np.pi/2), (0, None)]
+
+
+
+
+
+
+
+
+
 
     def handleMouseLeftDown(self):
         # Get the mouse position
@@ -333,22 +384,14 @@ class MyApp(ShowBase):
 
 
     def frameUpdate(self, task):
-        aspect_ratio = self.getAspectRatio()
-
-        self.hudText.setPos(-0.95*aspect_ratio, 0.95)
-        thrustMag = 20.5*u.kg*u.m/u.s/u.s
 
         dt = (task.time - self.lastFrameUpdateTime)*self.timeMultiplier*u.s
         self.simulationDeltaTime = dt
         self.simulationTime += dt
-        text = f"Time: {orbitengine.formatTime(self.simulationTime)} (x{self.timeMultiplier:.0e})\n"
-        text += self.orbitEngine.getHUDInfo()+"\n"
-        text += f"Target:\n  {orbitengine.formatDistance(np.linalg.norm(self.ship.position - self.ship2.position))}\n  {orbitengine.formatVelocity(np.linalg.norm(self.ship.velocity - self.ship2.velocity))}\n"
-        if self.intercept is not None:
-            text += f"Closest Approach:\n  {orbitengine.formatDistance(self.intercept[0])}\n" +\
-                  f"  {orbitengine.formatVelocity(self.intercept[1])}:({(self.intercept[1]/(thrustMag/u.kg)).to(u.s):.2f})\n"+\
-                  f"  {orbitengine.formatTime(self.min_energy_intercept_time_guess-self.simulationTime)}\n"
-        self.hudText.setText(text)
+
+        aspect_ratio = self.getAspectRatio()
+
+        thrustMag = 20.0*u.kg*u.m/u.s/u.s
 
         if self.hitpointPos is None:
             self.hitpoint_np.hide()
@@ -356,43 +399,72 @@ class MyApp(ShowBase):
             self.hitpoint_np.setPos(self.hitpointPos)
             self.hitpoint_np.show()
 
-        thrust = [0,0,0]*u.kg*u.m/u.s/u.s
+        thrust_vector = np.array([0.,0.,0.])
         if self.keyState.get('w', True):
-            thrust[1] += thrustMag
+            thrust_vector += np.array([0,1.,0])
         if self.keyState.get('s', True):
-            thrust[1] -= thrustMag
+            thrust_vector -= np.array([0,1.,0])
         if self.keyState.get('a', True):
-            thrust[0] -= thrustMag
+            thrust_vector -= np.array([1.,0,0])
         if self.keyState.get('d', True):
-            thrust[0] += thrustMag
+            thrust_vector += np.array([1.,0,0])
         if self.keyState.get('q', True):
-            thrust[2] -= thrustMag
+            thrust_vector -= np.array([0,0,1.])
         if self.keyState.get('e', True):
-            thrust[2] += thrustMag
+            thrust_vector += np.array([0,0,1.])
 
         #target retrograde
         target_prograde = self.ship2.position-self.ship.position
-        target_prograde = target_prograde/np.linalg.norm(target_prograde)
-
         target_velocity = self.ship.velocity-self.ship2.velocity
-        target_velocity = target_velocity/np.linalg.norm(target_velocity)
+        target_prograde_mag = np.linalg.norm(target_prograde)
+        target_velocity_mag = np.linalg.norm(target_velocity)
+        ortho_velocity = 0 * u.m/u.s
+        if target_prograde_mag.value > epsilon and target_velocity_mag.value > epsilon:
+            target_prograde_vector = np.squeeze(target_prograde/target_prograde_mag)
+            target_velocity_vector = np.squeeze(target_velocity/target_velocity_mag)
+            orthogonal_velocity_vector = target_velocity_vector - np.dot(target_velocity_vector, target_prograde_vector)*target_prograde_vector
+            orthogonal_velocity_vector = orthogonal_velocity_vector/np.linalg.norm(orthogonal_velocity_vector)
+            ortho_velocity = np.linalg.norm(target_velocity*np.dot(target_velocity_vector, orthogonal_velocity_vector))
 
-        # anti-relative velocity
-        if self.keyState.get('r', True):
-            thrust = -target_velocity*thrustMag
-        #target prograde
-        if self.keyState.get('f', True):
-            thrust = target_prograde*thrustMag
+            # cancel non-target prograde velocity
+            if self.keyState.get('t', True):
+                thrust_vector -= orthogonal_velocity_vector
 
-        self.ship.setThrust(thrust)
+            # retro-target velocity
+            if self.keyState.get('r', True):                
+                thrust_vector -= target_velocity_vector
+            #target prograde
+            if self.keyState.get('f', True):
+                thrust_vector += target_prograde_vector
 
-        if np.linalg.norm(thrust.value) >= 0.0001:
+        if np.linalg.norm(thrust_vector) > epsilon:
+            thrust_vector = thrust_vector/np.linalg.norm(thrust_vector)
+            # thrust is applied compute updated intercept
             if self.intercept is None:
                 self.findApproximateClosestApproach()
             self.incrementallyFindClosestApproach()
 
+        thrust = thrustMag*thrust_vector
+        self.ship.setThrust(thrust) 
+
         self.orbitEngine.setScale(self.camera.getPos()*u.km)
         self.orbitEngine.update(self.simulationTime, dt)
+
+
+        # hud text
+        self.hudText.setPos(-0.95*aspect_ratio, 0.95)
+        text = f"Time: {orbitengine.formatTime(self.simulationTime)} (x{self.timeMultiplier:.0e})\n"
+        text += self.orbitEngine.getHUDInfo()+"\n"
+        text += f"Target:\n"+\
+            f"  Dist:{orbitengine.formatDistance(np.linalg.norm(self.ship.position - self.ship2.position))}\n"+\
+            f"  dV:{orbitengine.formatVelocity(np.linalg.norm(self.ship.velocity - self.ship2.velocity))}\n"+\
+            f"  orthoV:{orbitengine.formatVelocity(ortho_velocity)}\n"
+        if self.intercept is not None:
+            text += f"Closest Approach:\n  {orbitengine.formatDistance(self.intercept[0])}\n" +\
+                  f"  {orbitengine.formatVelocity(self.intercept[1])}:({(self.intercept[1]/(thrustMag/u.kg)).to(u.s):.2f})\n"+\
+                  f"  {orbitengine.formatTime(self.min_energy_intercept_time_guess-self.simulationTime)}\n"
+        self.hudText.setText(text)
+
 
         self.lastFrameUpdateTime = task.time
         return Task.cont
