@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np  # For array manipulation
 
 
-EARTH_RADIUS_KM = const.R_earth.to(u.km).value
+EARTH_RADIUS = const.R_earth.to(u.km)
 
 epsilon = np.finfo(float).eps
 
@@ -33,7 +33,7 @@ def formatTime(time):
         return f"{time.to(u.hour):.2f}"
     if time > 1*u.min:
         return f"{time.to(u.min):.2f}"
-    return f"{time:.2f}"
+    return f"{time.to(u.s):.2f}"
 
 def formatDistance(distance):
     if distance > 9.461e+12*u.km:
@@ -45,7 +45,7 @@ def formatDistance(distance):
     elif distance > 1000*u.km:
         return f"{distance.to(u.Mm):.2f}"
     elif distance > 1*u.km:
-        return f"{distance:.2f}"
+        return f"{distance.to(u.km):.2f}"
     else:
         return f"{distance.to(u.m):.2f}"
 
@@ -53,7 +53,7 @@ def formatVelocity(velocity):
     if velocity > 1000*u.km/u.s:
         return f"{velocity.to(u.Mm/u.s):.2f}"
     elif velocity > 1*u.km/u.s:
-        return f"{velocity:.2f}"
+        return f"{velocity.to(u.km/u.s):.2f}"
     else:
         return f"{velocity.to(u.m/u.s):.2f}"
 
@@ -164,8 +164,6 @@ class BodyOrbit:
         r = r.to(u.km).value
         v = v.to(u.km/u.s).value
 
-
-
         #for each maneuver, compute the acceleration period and then the post acceleration period
         # and concatenate the results
         for m in maneuvers:
@@ -173,7 +171,6 @@ class BodyOrbit:
             def ad(t0, state, k):
                 return m[0].to(u.km/u.s**2).value
 
-            print(r,v)
             r,v = pa.twobody.propagation.cowell(
                 self.orbit.attractor.k.to(u.km**3 / u.s**2).value, 
                 r, 
@@ -182,11 +179,26 @@ class BodyOrbit:
                 ad=ad, 
                 callback=callback)
 
+        # extrapolation 1 hour more for visualization
+        def adx(t0, state, k):
+            return [0,0,0]
+        pa.twobody.propagation.cowell(
+            self.orbit.attractor.k.to(u.km**3 / u.s**2).value, 
+            r, 
+            v,
+            3600,
+            ad=adx, 
+            callback=callback)
+
+
         path = primatives.createLineList(pos, False, self.color/2)
         if self.trajectory_np is not None:
             self.trajectory_np.removeNode()
         self.trajectory_np = NodePath(path)
         self.trajectory_np.reparentTo(self.renderer)
+
+        #final position and velocity
+        return r*u.km, v*u.km/u.s
 
         
     def propagate(self, t=0*u.s):
@@ -223,9 +235,10 @@ class Body:
             self.np.setPos(LVecBase3f(*pos.value))
             self.np.setHpr(0,-90,0)
 
-        vel_line = primatives.createLine(LVecBase3f(*pos.value), LVecBase3f(*(pos.value+1000*vel.value)), 2, color)
-        self.vel_line_np = NodePath(vel_line)
-        self.vel_line_np.reparentTo(renderer)
+        # velocity line
+        # vel_line = primatives.createLine(LVecBase3f(*pos.value), LVecBase3f(*(pos.value+1000*vel.value)), 2, color)
+        # self.vel_line_np = NodePath(vel_line)
+        # self.vel_line_np.reparentTo(renderer)
 
     def setScale(self,cameraPos):
         self.np.setScale(np.linalg.norm(self.position-cameraPos).to(u.km).value)
@@ -246,12 +259,12 @@ class Body:
         self.np.setPos(LVecBase3f(*pos.value))
 
         #update the velocity vector
-        vertex_data = self.vel_line_np.node().modify_geom(0).modify_vertex_data()
-        vertex_writer = GeomVertexWriter(vertex_data, 'vertex')
-        vertex_writer.set_row(0)
-        vertex_writer.set_data3f(LVecBase3f(*self.position.value))        
-        vertex_writer.set_row(1)
-        vertex_writer.set_data3f(LVecBase3f(*(self.position.value+1000*self.velocity.value)))
+        # vertex_data = self.vel_line_np.node().modify_geom(0).modify_vertex_data()
+        # vertex_writer = GeomVertexWriter(vertex_data, 'vertex')
+        # vertex_writer.set_row(0)
+        # vertex_writer.set_data3f(LVecBase3f(*self.position.value))        
+        # vertex_writer.set_row(1)
+        # vertex_writer.set_data3f(LVecBase3f(*(self.position.value+1000*self.velocity.value)))
 
     def getHUDInfo(self):
         return f"{self.name}\n"+\
