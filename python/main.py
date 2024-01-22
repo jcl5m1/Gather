@@ -44,22 +44,56 @@ def spherical_to_cartesian(r, theta, phi):
 def relativeEnergy(orbit1, orbit2, t):
     r1,v1 = orbit1.propagate(t*u.s)
     r2,v2 = orbit2.propagate(t*u.s)
-    dist = np.linalg.norm(r1-r2).value
-    dv = np.linalg.norm(v1-v2).value
-    return dist+dv*dv
+    dist = np.linalg.norm(r1-r2).to(u.m).value
+    dv = np.linalg.norm(v1-v2).to(u.m/u.s).value
+    # account for graviatonal constant?
+    # mass is the same so it cancels out
+    return dist+dv*dv/2
 
-def checkAdjustedOrbitInterceptEnergy(x, orbit1, orbit2, t_simulation):
+
+
+# find initial burn that minimizes dist+dv**2.... but hard to balance the two to get a total minimum dv
+def interceptManeuverOptimization(x, orbit1, orbit2, t_simulation,optimation_history):
     vx, vy, vz, t_intercept = x
     r_alt, v_alt = orbit1.propagate(t_simulation)
     v_alt[0] += vx*u.m/u.s
     v_alt[1] += vy*u.m/u.s
     v_alt[2] += vz*u.m/u.s
-    orbit_alt = orbitengine.BodyOrbit(orbit1.body, r_alt, v_alt,time=t_simulation, renderer=None, segments=0)
+    orbit_alt = orbitengine.BodyOrbit(orbit1.body, r_alt, v_alt,time=t_simulation, render=None, segments=0)
+
+
     dv = np.linalg.norm([vx,vy,vz])
-    energy = relativeEnergy(orbit_alt, orbit2, t_intercept) + dv*dv #total energy is distance + deltaV^2 + maneuver deltaV^2
-#    print(x, energy)
+    energy = relativeEnergy(orbit_alt, orbit2, t_intercept) + dv*dv/2 #total energy is distance + deltaV^2 + maneuver deltaV^2
+
+    #compute distance
+    # r1,v1 = orbit_alt.propagate(t_intercept*u.s)
+    # r2,v2 = orbit2.propagate(t_intercept*u.s)
+    # energy = np.linalg.norm(r1-r2).to(u.m).value +dv*dv/2
+
+    optimation_history.append([x, energy])
     return energy
 
+# find initial burn and final burn to minimize dv
+def interceptManeuverOptimization2(x, orbit1, orbit2, t_simulation,optimation_history):
+    vx, vy, vz, t_intercept = x
+    r_alt, v_alt = orbit1.propagate(t_simulation)    
+    v_alt[0] += vx*u.m/u.s
+    v_alt[1] += vy*u.m/u.s
+    v_alt[2] += vz*u.m/u.s
+    orbit_alt = orbitengine.BodyOrbit(orbit1.body, r_alt, v_alt,time=t_simulation, render=None, segments=0)
+
+    dv_initial = np.linalg.norm([vx,vy,vz])
+    #do cowell propagation to get final position and velocity?
+    rf, vf = orbit_alt.propagate(t_intercept*u.s)
+    rt, vt = orbit2.propagate(t_intercept*u.s)
+
+    dv_final = np.linalg.norm(vf-vt).to(u.m/u.s).value
+    dist_final = np.linalg.norm(rf-rt).to(u.m).value
+
+    energy = dist_final + dv_initial*dv_initial + dv_final*dv_final
+
+    optimation_history.append([x, energy])
+    return energy
 
 def checkInterceptEnergy(x, orbit1, orbit2):
     t_intercept = x[0]
@@ -111,7 +145,7 @@ class MyApp(ShowBase):
 
         self.orbitEngine = orbitengine.OrbitEngine(self.render)
 
-        self.ship =  orbitengine.Body("Ship",  [-35000, -1000, 0], [0, -2, 0], orbitengine.BodyType.VESSEL, self.render)
+        self.ship =  orbitengine.Body("Ship",  [-30000, -3000, 3000], [.5, -2, 1], orbitengine.BodyType.VESSEL, self.render)
         self.orbitEngine.addBody(self.ship)
 
         self.cameraFocus = 0
@@ -193,7 +227,7 @@ class MyApp(ShowBase):
         # # Define the bounds for the parameters
         # bounds = [(0, 3600*24), (-100, 100), (-100, 100), (-100, 100)]
 
-        MAX_ORBITS = 4
+        MAX_ORBITS = 1
         t = np.linspace(self.simulationTime, self.simulationTime+self.ship.orbit.orbit.period*MAX_ORBITS, num=100)  # Time range from 0 to 24 hours
         energy = []
         orbit1 = self.ship.orbit
@@ -210,39 +244,44 @@ class MyApp(ShowBase):
         self.graph.plot(energy)
         self.graph.vline(min_energy_index, color=LVecBase4f(1,0,0,1))
 
-        self.updateIntercept()
+        self.updateIntercept(self.ship.orbit.orbit, self.min_energy_intercept_time_guess, 
+                             self.ship2.orbit.orbit, self.min_energy_intercept_time_guess)
 
 
     def incrementallyFindClosestApproach(self):
-
+        global optimation_history
         x0 = [self.min_energy_intercept_time_guess.value]
         # Define the bounds for the parameters
         bounds = (self.simulationTime, None)
 
+
         result = minimize(checkInterceptEnergy, x0, args=(self.ship.orbit, self.ship2.orbit), tol=1e-1)
+
         minimized_energy = result.fun
         self.min_energy_intercept_time_guess = result.x[0]*u.s
         if self.min_energy_intercept_time_guess < self.simulationTime:
             self.min_energy_intercept_time_guess = self.simulationTime
         
-        self.updateIntercept()
+        self.updateIntercept(self.ship.orbit.orbit, self.min_energy_intercept_time_guess, 
+                        self.ship2.orbit.orbit, self.min_energy_intercept_time_guess)
 
 
 
-    def updateIntercept(self):
+
+    def updateIntercept(self, orbit1, t1, orbit2, t2):
         # mark closest approach
         if self.intercept_np is None:
             self.intercept = primatives.createCube(0.002,color=self.ship.color)
             self.intercept_np = NodePath(self.intercept)
             self.intercept_np.reparentTo(self.render)
-        r1, v1 = self.ship.orbit.propagate(self.min_energy_intercept_time_guess)
+        r1, v1 = orbit1.propagate(t1).rv()
         self.intercept_np.setPos(LVecBase3f(*r1.value))
 
         if self.intercept2_np is None:
             self.intercept2 = primatives.createCube(0.002,color=self.ship2.color)
             self.intercept2_np = NodePath(self.intercept2)
             self.intercept2_np.reparentTo(self.render)
-        r2, v2 = self.ship2.orbit.propagate(self.min_energy_intercept_time_guess)
+        r2, v2 = orbit2.propagate(t2).rv()
         self.intercept2_np.setPos(LVecBase3f(*r2.value))
 
         #store the intercept data for HUD
@@ -256,9 +295,17 @@ class MyApp(ShowBase):
         x0 = [0, 0, 0, self.min_energy_intercept_time_guess.value]
 
         # Define the bounds for the parameters
-        bounds = [(-1000, 1000), (-1000, 1000), (-1000, 1000), (None, None)]
+        bounds = [(-10000, 10000), (-10000, 10000), (-10000, 10000), (0, None)]
 
-        result = minimize(checkAdjustedOrbitInterceptEnergy, x0, args=(self.ship.orbit, self.ship2.orbit, self.simulationTime), bounds=bounds,tol=1e-5)
+
+        optimation_history = []
+        result = minimize(interceptManeuverOptimization2, x0, 
+                          args=(self.ship.orbit, self.ship2.orbit, self.simulationTime, optimation_history), 
+                          bounds=bounds,options={'maxiter':25})
+        for o in optimation_history:
+            print(o[0], o[1])
+
+
 
         minimized_energy = result.fun
         vx,vy,vz,t_intercept = result.x
@@ -270,13 +317,19 @@ class MyApp(ShowBase):
         v_alt[1] += vy*u.m/u.s
         v_alt[2] += vz*u.m/u.s
 
-        self.ship.orbit.setOrbit(Earth, r_alt, v_alt, time=self.simulationTime*1, segments=100)
-#        self.ship.orbit.setOrbit(Earth, r_alt, v_alt, time=self.simulationTime-epsilon*u.s, segments=100)
+        # the *1 is to avoid taking a reference to self.simulationTime
+        #self.ship.orbit.setOrbit(Earth, r_alt, v_alt, time=self.simulationTime*1, segments=100)
+        orbit_alt = pa.twobody.Orbit.from_vectors(Earth,r_alt,v_alt)
+        color = LVecBase4f(0,.1,0,1)
+        path = primatives.createLineList(orbitengine.convertToEllipse(orbit_alt), True, color)
+        if self.ship.orbit.trajectory_np is not None:
+            self.ship.orbit.trajectory_np.removeNode()
+        self.ship.orbit.trajectory_np = NodePath(path)
+        self.ship.orbit.trajectory_np.reparentTo(self.render)
+ 
+        self.updateIntercept(orbit_alt, self.min_energy_intercept_time_guess - self.simulationTime, 
+                        self.ship2.orbit.orbit, self.min_energy_intercept_time_guess)
 
-        
-        #print(result, minimized_energy)
-
-        self.updateIntercept()
 
 
     def handleKeyDown(self, key):

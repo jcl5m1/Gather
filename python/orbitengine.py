@@ -129,10 +129,10 @@ class OrbitEngine:
 
 
 class BodyOrbit:
-    def __init__(self, body, r0, v0, renderer, attractor=Earth, time=0*u.s,segments=100, width=2,  color=LVecBase4f(1,1,1,1)):
+    def __init__(self, body, r0, v0, render, attractor=Earth, time=0*u.s,segments=100, width=2,  color=LVecBase4f(1,1,1,1)):
         self.body = body
         self.color = color
-        self.renderer = renderer
+        self.render = render
         self.np = None
         self.trajectory_np = None
 
@@ -145,7 +145,7 @@ class BodyOrbit:
                 self.np.removeNode()
             path = primatives.createLineList(convertToEllipse(self.orbit, segments), True, self.color)
             self.np = NodePath(path)
-            self.np.reparentTo(self.renderer)
+            self.np.reparentTo(self.render)
             self.periapsis = self.orbit.r_p.to(u.km)
             self.apoapsis = self.orbit.r_a.to(u.km)
         self.startTime = time
@@ -195,7 +195,7 @@ class BodyOrbit:
         if self.trajectory_np is not None:
             self.trajectory_np.removeNode()
         self.trajectory_np = NodePath(path)
-        self.trajectory_np.reparentTo(self.renderer)
+        self.trajectory_np.reparentTo(self.render)
 
         #final position and velocity
         return r*u.km, v*u.km/u.s
