@@ -137,10 +137,10 @@ class Graph:
 
 
 
-def createLineList(points, close=False, color=LVecBase4f(1, 1, 1, 1)):
+def createLineList(points, close=False, color=LVecBase4f(1, 1, 1, 1), thickness=2):
     # Define the vertices and colors of the ellipse
     lines = LineSegs()
-    lines.setThickness(2)
+    lines.setThickness(thickness)
     lines.moveTo(points[0][0], points[0][1], points[0][2])
     for pt in points:
         lines.setColor(color)  # Red X-axis

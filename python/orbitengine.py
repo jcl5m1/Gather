@@ -18,11 +18,20 @@ import poliastro as pa
 
 import matplotlib.pyplot as plt
 import numpy as np  # For array manipulation
-
+import os
+import inspect
 
 EARTH_RADIUS = const.R_earth.to(u.km)
 
 epsilon = np.finfo(float).eps
+
+def debug(msg):
+    #print call stack
+    stack = inspect.stack()
+
+    #print parent function name and file and line number
+    print(f"{os.path.basename(stack[1].filename)}:{stack[1].lineno} {msg}")
+    
 
 def formatTime(time):
     if time > 1*u.year:
@@ -56,6 +65,15 @@ def formatVelocity(velocity):
         return f"{velocity.to(u.km/u.s):.2f}"
     else:
         return f"{velocity.to(u.m/u.s):.2f}"
+
+def formatAcceleration(acceleration):
+    if acceleration > 1000*u.km/u.s**2:
+        return f"{acceleration.to(u.Mm/u.s**2):.2f}"
+    elif acceleration > 1*u.km/u.s:
+        return f"{acceleration.to(u.km/u.s**2):.2f}"
+    else:
+        return f"{acceleration.to(u.m/u.s**2):.2f}"
+
 
 def convertToEllipse(orbit, segments=100):
     # Get the orbital elements
@@ -96,6 +114,11 @@ def convertToEllipse(orbit, segments=100):
     
     return points
 
+def spherical_to_cartesian(r, theta, phi):
+    x = r * np.sin(theta) * np.cos(phi)
+    y = r * np.sin(theta) * np.sin(phi)
+    z = r * np.cos(theta)
+    return x, y, z
 
 class BodyType(Enum):
     PLANET = 0
@@ -134,6 +157,7 @@ class BodyOrbit:
         self.color = color
         self.render = render
         self.np = None
+        self.prev_np = None
         self.trajectory_np = None
 
         self.setOrbit(attractor, r0,v0, time=time, segments=segments)
@@ -148,10 +172,29 @@ class BodyOrbit:
             self.np.reparentTo(self.render)
             self.periapsis = self.orbit.r_p.to(u.km)
             self.apoapsis = self.orbit.r_a.to(u.km)
-        self.startTime = time
+        #the *1 breaks the reference to the simulator time, which otherwise would mean the update does not move
+        self.startTime = time*1 
+        
+    def randomize(self, dist, vel, time=0*u.s, segments=100):
+
+        # random 3d unit vector
+        theta = np.random.uniform(0,2*np.pi)
+        phi = np.random.uniform(-np.pi/2,np.pi/2)
+        r = spherical_to_cartesian(dist.to(u.km).value, theta, phi)
+
+        theta = np.random.uniform(0,2*np.pi)
+        phi = np.random.uniform(-np.pi/2,np.pi/2)
+        v = spherical_to_cartesian(vel.to(u.km/u.s).value, theta, phi)
+        r = r*u.km
+        v = v*u.km/u.s
+
+        self.setOrbit(Earth, r, v, time=time, segments=segments)
+
+        if self.trajectory_np is not None:
+            self.trajectory_np.removeNode()
 
 
-    def computeManouverTrajectory(self, maneuvers):
+    def computeManouverTrajectory(self, maneuvers, color, t_start=0*u.s, thickness=5):
 
         pos = []
         def callback(t, y):            
@@ -160,7 +203,7 @@ class BodyOrbit:
             pos.append(rn.copy())
 
         #starting position and velocity
-        r, v = self.orbit.rv()
+        r, v = self.orbit.propagate(t_start - self.startTime).rv()
         r = r.to(u.km).value
         v = v.to(u.km/u.s).value
 
@@ -191,7 +234,7 @@ class BodyOrbit:
             callback=callback)
 
 
-        path = primatives.createLineList(pos, False, self.color/2)
+        path = primatives.createLineList(pos, False, color, thickness)
         if self.trajectory_np is not None:
             self.trajectory_np.removeNode()
         self.trajectory_np = NodePath(path)
@@ -200,12 +243,26 @@ class BodyOrbit:
         #final position and velocity
         return r*u.km, v*u.km/u.s
 
+    #copy np to prev_np
+    def copyNP(self):
+        if self.np is not None:
+            if self.prev_np is not None:
+                self.prev_np.removeNode()
+            self.prev_np = self.np.copyTo(self.render)
         
     def propagate(self, t=0*u.s):
-        return self.orbit.propagate(t-self.startTime).rv()
-    
-    # def propagateWithAccel(self, t=0*u.s, accel=[0,0,0]*u.km/u.s/u.s):
-    #     return self.orbit.propagate(t-self.startTime, method=pa.twobody.cowell).rv()
+        try:
+            return self.orbit.propagate(t-self.startTime).rv()
+        except RuntimeError as e:
+            if str(e) == "Maximum number of iterations reached":
+                debug(f"****************************************************************\n{e}")
+                pass
+            else:
+                raise
+            # print(e)
+            # r, v = self.orbit.rv()
+            # return pa.twobody.propagation.vallado(self.orbit.attractor.k.to(u.km**3 / u.s**2).value,
+            #     r.to(u.km).value, v.to(u.km/u.s).value, (t-self.startTime).to(u.s).value)
         
 class Body:
     def __init__(self, name, r0, v0, type, renderer,attractor=Earth, size=0.01, color=LVecBase4f(0,1,0,1)):
@@ -222,11 +279,14 @@ class Body:
         self.acceleration = np.zeros((1,3))
         self.rotation_acceleration = Rotation.identity()
         alpha = 0.5
-        self.orbit = BodyOrbit(self, r0* u.km, v0* u.km / u.s, 
+        self.orbit = BodyOrbit(self, r0, v0, 
                                renderer, attractor=attractor, 
                                color=LVecBase4f(color[0]*alpha, color[1]*alpha, color[2]*alpha,1))
 
         pos, vel = self.orbit.propagate()
+        self.landed = attractor.R.to(u.km).value + epsilon > np.linalg.norm(pos.to(u.km).value)
+        self.landedPrev = False
+
         if type == BodyType.VESSEL:
             ship = primatives.createPyramid(size, color)
 
@@ -247,16 +307,35 @@ class Body:
 
 
     def update(self, time, dt):
+
+        attractor = self.orbit.orbit.attractor
         if np.linalg.norm(self.thrust.value) >= epsilon:
+            if self.landed: # take off
+                self.orbit.setOrbit(attractor,self.position, self.velocity, time, segments=0)
             pos, vel = self.orbit.propagate(time-dt)
             self.deltaV = self.thrust*dt/self.mass
             vel = vel + self.deltaV
-            self.orbit.setOrbit(Earth,pos, vel, time-dt)
-        pos, vel = self.orbit.propagate(time)
-    
-        self.position = pos
-        self.velocity = vel
-        self.np.setPos(LVecBase3f(*pos.value))
+            self.orbit.setOrbit(attractor,pos, vel, time)
+        else:
+            if not self.landed: # flying
+                pos, vel = self.orbit.propagate(time)
+                self.position = pos.to(u.km)
+                self.velocity = vel.to(u.m/u.s)
+            elif not self.landedPrev:  # just landed
+                pos, vel = self.orbit.propagate(time)
+                #normlize pos to radius of attractor
+                pos = attractor.R*pos/np.linalg.norm(pos)
+                #velocity should match the surface rotation of attractor
+                vel = [0,0,0]*u.m/u.s
+                self.orbit.setOrbit(attractor,pos, vel, time, segments=0)
+                self.position = pos.to(u.km)
+                self.velocity = vel.to(u.m/u.s)
+
+        self.np.setPos(LVecBase3f(*self.position.value))
+        self.landedPrev = self.landed
+
+        #1 meter tolerance for landing
+        self.landed = attractor.R.to(u.m).value + 1 > np.linalg.norm(self.position.to(u.m).value)
 
         #update the velocity vector
         # vertex_data = self.vel_line_np.node().modify_geom(0).modify_vertex_data()
