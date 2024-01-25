@@ -196,8 +196,9 @@ class MyApp(ShowBase):
         self.orbitEngine = oe.OrbitEngine(self.render)
 
         self.ship = oe.Body("Ship",
-                            [2*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
-                            [0,6,0]*u.km/u.s, oe.BodyType.VESSEL, self.render, color=LVecBase4f(0,1,0,1))
+                            [ -4100.05375911,-3019.59041051, -18444.32350115]*u.km, [-4.04702647, -2.37660169, -1.72433788]*u.km/u.s,
+#                            [2*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, [0,6,0]*u.km/u.s, 
+                            oe.BodyType.VESSEL, self.render, color=LVecBase4f(0,1,0,1))
 
         self.orbitEngine.addBody(self.ship)
         self.ship.thrust_max = THRUST_MAG*1
@@ -350,7 +351,7 @@ class MyApp(ShowBase):
         orbit1 = self.ship.orbit
         orbit2 = self.ship2.orbit
         
-        t_start = self.simulationTime # don't optimize this for now, slows double the compute time
+        t_start = self.simulationTime*1 # don't optimize this for now, slows double the compute time
         t_flight = 1*u.s
         t_weight = 1e-6  # let user adjust this?
 
@@ -386,60 +387,53 @@ class MyApp(ShowBase):
 
         ts_stop = time.time()
 
-        print("iterations:", result.nit)
-        print(f"t_start: {t_start.to(u.hour):.2f}")
-        print(f"t_flight: {t_flight.to(u.hour):.2f}")
-        print(f"t_burn1: {(dv1/accel_max).to(u.h):.2f}")
-        print(f"t_burn2: {(dv2/accel_max).to(u.h):.2f}")
-        print(f"dv:{dv1:.2f} {dv2:.2f}")
-        print(f"total_cost: {result.fun:.2f}")
-        print(f"Compute Time elapsed: {ts_stop-ts_start:.2f}")
-
+        # print("iterations:", result.nit)
+        # print(f"t_start: {t_start.to(u.hour):.2f}")
+        # print(f"t_flight: {t_flight.to(u.hour):.2f}")
+        # print(f"t_burn1: {(dv1/accel_max).to(u.h):.2f}")
+        # print(f"t_burn2: {(dv2/accel_max).to(u.h):.2f}")
+        # print(f"dv:{dv1:.2f} {dv2:.2f}")
+        # print(f"total_cost: {result.fun:.2f}")
+        oe.debug(f"Compute Time elapsed: {ts_stop-ts_start:.2f}")
 
         self.updateIntercept(r1,v1,r2,v2)
 
-        # draw transfer trajectory
-        v1_mag = np.linalg.norm(v1)
-        v2_mag = np.linalg.norm(v2)
-        v1_sol_mag = np.linalg.norm(v1_sol)
-        v2_sol_mag = np.linalg.norm(v2_sol)
+        # # draw transfer trajectory
+        # v1_mag = np.linalg.norm(v1)
+        # v2_mag = np.linalg.norm(v2)
+        # v1_sol_mag = np.linalg.norm(v1_sol)
+        # v2_sol_mag = np.linalg.norm(v2_sol)
 
-        vec_initial_burn = v1_sol-v1
-        mag_initial_burn = np.linalg.norm(vec_initial_burn)
-        vec_initial_burn = vec_initial_burn/mag_initial_burn
-        t_initial_burn_duration = (mag_initial_burn/accel_max).to(u.s)
+        # vec_initial_burn = v1_sol-v1
+        # mag_initial_burn = np.linalg.norm(vec_initial_burn)
+        # vec_initial_burn = vec_initial_burn/mag_initial_burn
+        # t_initial_burn_duration = (mag_initial_burn/accel_max).to(u.s)
 
-        # compute final burn time
-        vec_final_burn = v2-v2_sol
-        mag_final_burn = np.linalg.norm(vec_final_burn)
-        vec_final_burn = vec_final_burn/mag_final_burn
+        # # compute final burn time
+        # vec_final_burn = v2-v2_sol
+        # mag_final_burn = np.linalg.norm(vec_final_burn)
+        # vec_final_burn = vec_final_burn/mag_final_burn
 
-        # estimated final burn time to cancel expected relative velocity
-        t_final_burn_duration = (mag_final_burn/accel_max).to(u.s)
+        # # estimated final burn time to cancel expected relative velocity
+        # t_final_burn_duration = (mag_final_burn/accel_max).to(u.s)
+        # t_final_burn_start = t_flight - t_final_burn_duration/2 - t_initial_burn_duration/2
 
-        # ratio1 = v1_mag/(v1_mag+v1_sol_mag)
-        # ratio2 = v2_sol_mag/(v2_mag+v2_sol_mag)
-        # ratio1 = v1_mag/(v1_mag+v1_sol_mag)
-        # ratio2 = v2_sol_mag/(v2_mag+v2_sol_mag)
-        ratio1 = 0.5
-        ratio2 = 0.5
-        oe.debug(f"ratio1: {ratio1:.2f} ratio2: {ratio2:.2f}")
-        t_final_burn_start = t_flight - t_final_burn_duration*ratio1 - t_initial_burn_duration*ratio2
-
-        maneuvers = [
-            [vec_initial_burn*accel_max, t_initial_burn_duration],
-            [np.array([0,0,0])*u.m/u.s**2,    t_final_burn_start],
-            [vec_final_burn*accel_max, t_final_burn_duration],
-        ]
-        total_dv = 0
-        total_dt = 0
-        for m in maneuvers:
-            total_dv += np.linalg.norm(m[0])*m[1]
-            total_dt += m[1]
+        # maneuvers = [
+        #     [vec_initial_burn*accel_max, t_initial_burn_duration],
+        #     [np.array([0,0,0])*u.m/u.s**2,    t_final_burn_start],
+        #     [vec_final_burn*accel_max, t_final_burn_duration],
+        # ]
+        # total_dv = 0
+        # total_dt = 0
+        # for m in maneuvers:
+        #     total_dv += np.linalg.norm(m[0])*m[1]
+        #     total_dt += m[1]
         
-        oe.debug(f'Maneuver dv: {oe.formatVelocity(total_dv)} dt:{oe.formatTime(total_dt)}')
+        # oe.debug(f'Maneuver dv: {oe.formatVelocity(total_dv)} dt:{oe.formatTime(total_dt)}')
 #        r,v = self.ship.orbit.computeCowellManouverTrajectory(maneuvers, color=self.ship.color, t_start=t_start, thickness=5)
-        r,v = self.ship.orbit.computePseudoManouverTrajectory(r1,v1,r2,v2,v1_sol, v2_sol,t_flight, color=self.ship.color, t_start=t_start, thickness=5)
+        r,v = self.ship.orbit.computePseudoManouverTrajectory(r1,v1,r2,v2,v1_sol, v2_sol,
+                                                               t_flight, color=self.ship.color, t_start=t_start, thickness=5)
+        oe.debug(f"pseudo trajectory complete")
         if self.ship.orbit.collision:
             oe.debug("orbit causes collision!!!")
     
@@ -472,6 +466,10 @@ class MyApp(ShowBase):
             self.changeCameraFocus(-1)
         if key == 'x':
             self.ship.orbit.randomize(3*oe.EARTH_RADIUS, 5*u.km/u.s, self.simulationTime)
+            r,v = self.ship.orbit.orbit.rv()
+            rs = ",".join([f"{i}" for i in r.to(u.km).value])
+            vs = ",".join([f"{i}" for i in v.to(u.km/u.s).value])
+            oe.debug(f"randomized orbit: [{rs}]*u.km, [{vs}]*u.km/u.s,")
             self.ship.landed = False
             self.ship.landedPrev = False
             self.clearManeuverVisualization()

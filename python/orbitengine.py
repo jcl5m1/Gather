@@ -161,9 +161,9 @@ def line_sphere_intersection(P1, P2, C, r):
         # If the intersections are outside the line segment, discard them
         intersections = []
         if 0 <= t1 <= 1:
-            intersections.append(P1 + t1*d)
+            intersections.append((t1, P1 + t1*d))
         if 0 <= t2 <= 1:
-            intersections.append(P1 + t2*d)
+            intersections.append((t2, P1 + t2*d))
 
         return intersections
 
@@ -208,7 +208,6 @@ class BodyOrbit:
         self.manuever_np = None
         self.collision = False
         self.collision_np = None
-        self.trajectory_duration = 1*u.s
         self.trajectory_state = []
 
         self.setOrbit(attractor, r0,v0, time=time, segments=segments)
@@ -326,12 +325,105 @@ class BodyOrbit:
                                                      r.to(u.km).value, 
                                                      [0,0,0], # replace with attractor position 
                                                      self.orbit.attractor.R.to(u.km).value)
-            self.setCollisionPoint(intersections[0])
+            self.setCollisionPoint(intersections[0][1])
             return intersections[0]
         return None
 
     # given lambert solution, create a psuedo manuever trajectory
-    def computePseudoManouverTrajectory(self,r1, v1, r2, v2, v1_sol, v2_sol, t_flight, color, t_start=0*u.s, thickness=5):
+    def computePseudoManouverTrajectory(self, r1, v1, r2, v2, v1_sol, v2_sol, t_flight, color, t_start, thickness=5):
+        dv1 = v1_sol - v1
+        dv2 = v2_sol - v2
+        accel_max = self.body.thrust_max/self.body.mass
+        t_burn1 = (np.linalg.norm(dv1)/accel_max).to(u.s)
+        t_burn2 = (np.linalg.norm(dv2)/accel_max).to(u.s)
+
+        # orbit_initial = Orbit.from_vectors(self.orbit.attractor, r1, v1)
+        # orbit_transfer = Orbit.from_vectors(self.orbit.attractor, r1, v1_sol)
+        # orbit_final = Orbit.from_vectors(self.orbit.attractor, r2, v2)
+
+        # # bezier style spline interpolation of orbit propogations 
+        self.collision = False
+        self.trajectory_state = []
+        t_duration = t_burn1/2+ t_flight + t_burn2/2
+        self.trajectory_params = [r1, v1, r2, v2, v1_sol, v2_sol, t_flight, t_start*1, t_duration]
+ 
+
+        # use propagate function        
+        pos = []
+        self.trajectory_state = []
+        times = np.linspace(t_start, t_start + t_duration, 100)
+        for t in times:
+            r,v = self.propagateManeuverTrajectory(t)
+            if len(self.trajectory_state) > 0:
+                t_prev, r_prev, v_prev = self.trajectory_state[-1]
+                res = self.checkCollision(r, r_prev)
+                if res is not None:
+                    i, rc = res
+                    vc = v_prev*(1-i) + v*i
+                    tc = t_prev*(1-i) + t*i
+                    self.trajectory_state.append((tc, rc*u.km, vc))
+                    break
+            self.trajectory_state.append((t,r,v))
+            pos.append(r.to(u.km).value)
+
+
+        # #compute it directly
+        # steps = np.linspace(0, 1, 10)
+        # for s in steps:
+        #     ra,va = orbit_initial.propagate((s-1)*t_burn1/2).rv()
+        #     rb,vb = orbit_transfer.propagate(s*t_burn1/2).rv()
+        #     rc = ra*(1-s) + rb*s
+        #     vc = va*(1-s) + vb*s
+        #     if len(self.trajectory_state) > 0:
+        #         collision = self.checkCollision(rc, self.trajectory_state[-1][1])
+        #         if collision is not None:
+        #             self.trajectory_state.append((s*t_burn1, collision*u.km, vc))
+        #             break
+        #     self.trajectory_state.append((s*t_burn1,rc,vc))
+
+        # # sample the transfer orbit
+        # if not self.collision:
+        #     steps = np.linspace(t_burn1/2, t_flight - t_burn2/2, 100)
+        #     for s in steps:
+        #         rb,vb = orbit_transfer.propagate(s).rv()
+        #         collision = self.checkCollision(rb, self.trajectory_state[-1][1])
+        #         if collision is not None:
+        #             self.trajectory_state.append((t_burn1/2+s, collision*u.km, vc))
+        #             break
+        #         self.trajectory_state.append((t_burn1/2+s,rb,vb))
+
+        # # bezier style spline interpolation of orbit propogations 
+        # if not self.collision:
+        #     steps = np.linspace(0, 1, 10)
+        #     for s in steps:
+        #         ra,va = orbit_transfer.propagate(t_flight + (s-1)*t_burn2/2).rv()
+        #         rb,vb = orbit_final.propagate(s*t_burn2/2).rv()
+        #         rc = ra*(1-s) + rb*s
+        #         vc = va*(1-s) + vb*s
+        #         collision = self.checkCollision(rc, self.trajectory_state[-1][1])
+        #         if collision is not None:
+        #             self.trajectory_state.append((t_burn1/2+t_flight-t_burn2/2 + s*t_burn2, collision*u.km, vc))
+        #             break
+        #         self.trajectory_state.append((t_burn1/2+t_flight-t_burn2/2 + s*t_burn2, rc, vc))
+
+        # pos = []
+        # for s in self.trajectory_state:
+        #     pos.append(s[1].to(u.km).value)
+
+        path = primatives.createLineList(pos, False, color, thickness)
+        if self.manuever_np is not None:
+            self.manuever_np.removeNode()
+        self.manuever_np = NodePath(path)
+        self.manuever_np.reparentTo(self.render)
+
+        #final position and velocity
+        #self.trajectory_duration = self.trajectory_state[-1][0]
+
+        return self.trajectory_state[-1][1], self.trajectory_state[-1][2]
+    
+    def propagateManeuverTrajectory(self, t):
+        r1, v1, r2, v2, v1_sol, v2_sol, t_flight, t_start, t_duration = self.trajectory_params
+        ts = t-t_start
         dv1 = v1_sol - v1
         dv2 = v2_sol - v2
         accel_max = self.body.thrust_max/self.body.mass
@@ -342,81 +434,34 @@ class BodyOrbit:
         orbit_transfer = Orbit.from_vectors(self.orbit.attractor, r1, v1_sol)
         orbit_final = Orbit.from_vectors(self.orbit.attractor, r2, v2)
 
-        # bezier style spline interpolation of orbit propogations 
-        self.collision = False
-        self.trajectory_state = []
-        steps = np.linspace(0, 1, 10)
-        self.trajectory_startTime = t_start*1
-        for s in steps:
+        t_burn1_start = 0*u.s
+        t_burn1_stop = 0*u.s + t_burn1
+        t_burn2_start = t_flight + t_burn1/2 - t_burn2/2
+        t_burn2_stop = t_flight + t_burn1/2 + t_burn2/2
+        if ts < t_burn1_stop:  
+            # (0,1)
+            s = (ts-t_burn1_start)/(t_burn1_stop-t_burn1_start)
             ra,va = orbit_initial.propagate((s-1)*t_burn1/2).rv()
             rb,vb = orbit_transfer.propagate(s*t_burn1/2).rv()
             rc = ra*(1-s) + rb*s
             vc = va*(1-s) + vb*s
-            if len(self.trajectory_state) > 0:
-                collision = self.checkCollision(rc, self.trajectory_state[-1][1])
-                if collision is not None:
-                    self.trajectory_state.append((s*t_burn1, collision*u.km, vc))
-                    break
-            self.trajectory_state.append((s*t_burn1,rc,vc))
-
-        # sample the transfer orbit
-        if not self.collision:
-            steps = np.linspace(t_burn1/2, t_flight - t_burn2/2, 100)
-            for s in steps:
-                rb,vb = orbit_transfer.propagate(s).rv()
-                collision = self.checkCollision(rb, self.trajectory_state[-1][1])
-                if collision is not None:
-                    self.trajectory_state.append((t_burn1/2+s, collision*u.km, vc))
-                    break
-                self.trajectory_state.append((t_burn1/2+s,rb,vb))
-
-        # bezier style spline interpolation of orbit propogations 
-        if not self.collision:
-            steps = np.linspace(0, 1, 10)
-            for s in steps:
-                ra,va = orbit_transfer.propagate(t_flight + (s-1)*t_burn2/2).rv()
-                rb,vb = orbit_final.propagate(s*t_burn2/2).rv()
-                rc = ra*(1-s) + rb*s
-                vc = va*(1-s) + vb*s
-                collision = self.checkCollision(rc, self.trajectory_state[-1][1])
-                if collision is not None:
-                    self.trajectory_state.append((t_burn1/2+t_flight-t_burn2/2 + s*t_burn2, collision*u.km, vc))
-                    break
-                self.trajectory_state.append((t_burn1/2+t_flight-t_burn2/2 + s*t_burn2, rc, vc))
-
-        pos = []
-        for s in self.trajectory_state:
-            pos.append(s[1].to(u.km).value)
-
-        path = primatives.createLineList(pos, False, color, thickness)
-        if self.manuever_np is not None:
-            self.manuever_np.removeNode()
-        self.manuever_np = NodePath(path)
-        self.manuever_np.reparentTo(self.render)
-
-        #final position and velocity
-        self.trajectory_duration = self.trajectory_state[-1][0]
-
-        return self.trajectory_state[-1][1], self.trajectory_state[-1][2]
-    
-    def propagateManeuverTrajectory(self, t):
-        ts = t-self.trajectory_startTime
-        if ts > self.trajectory_duration:
-            r = self.trajectory_state[-1][1]
-            v = self.trajectory_state[-1][2]
-            orbit = pa.twobody.Orbit.from_vectors( self.orbit.attractor, r,v)
-            return orbit.propagate(ts-self.trajectory_duration).rv()
+            return rc, vc
+        elif ts < t_burn2_start:
+            #  (t_burn1/2, t_flight - t_burn2/2)
+            s = ts-t_burn1/2
+            return orbit_transfer.propagate(s).rv()
+        elif ts < t_burn2_stop:
+            # (0,1)
+            s = (ts - t_burn2_start)/(t_burn2_stop-t_burn2_start)
+            ra,va = orbit_transfer.propagate(t_flight + (s-1)*t_burn2/2).rv()
+            rb,vb = orbit_final.propagate(s*t_burn2/2).rv()
+            rc = ra*(1-s) + rb*s
+            vc = va*(1-s) + vb*s
+            return rc, vc
         else:
-            for i in range(len(self.trajectory_state)-1):
-                if ts < self.trajectory_state[i+1][0]:                    
-                    t1 = self.trajectory_state[i][0]
-                    r1 = self.trajectory_state[i][1]
-                    t2 = self.trajectory_state[i+1][0]
-                    r2 = self.trajectory_state[i+1][1]
-                    ti = (ts-t1)/(t2-t1)
-                    return r1*(1-ti) + r2*ti, self.trajectory_state[i][2]
-
-
+            # t_burn2/2 ->
+            s = ts-t_burn2_stop+t_burn2/2
+            return orbit_final.propagate(s).rv()
 
     def setScale(self,cameraPos):
         if self.collision_np is not None:
