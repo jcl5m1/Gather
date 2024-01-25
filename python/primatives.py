@@ -28,14 +28,14 @@ def normalize(vector, size=1):
 def midpoint(v1, v2):
     return ((v1[0] + v2[0]) / 2, (v1[1] + v2[1]) / 2, (v1[2] + v2[2]) / 2)
 
-def createEllipse(radius_x, radius_y, num_segments, color=LVecBase4f(1, 1, 1, 1)):
+def createEllipse(radius_x, radius_y, num_segments, color=LVecBase4f(1, 1, 1, 1), thickness=2):
 
     # Calculate the angle between each segment
     angle_delta = 2 * math.pi / num_segments
 
     # Define the vertices and colors of the ellipse
     lines = LineSegs()
-    lines.setThickness(2)
+    lines.setThickness(thickness)
     lines.moveTo(radius_x, 0, 0)
     for i in range(num_segments):
         angle = i * angle_delta
