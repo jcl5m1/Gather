@@ -208,6 +208,8 @@ class BodyOrbit:
         self.manuever_np = None
         self.collision = False
         self.collision_np = None
+        self.trajectory_duration = 1*u.s
+        self.trajectory_state = []
 
         self.setOrbit(attractor, r0,v0, time=time, segments=segments)
 
@@ -243,13 +245,14 @@ class BodyOrbit:
             self.manuever_np.removeNode()
 
 
-    def setCollionPoint(self, position):
+    def setCollisionPoint(self, position):
         if self.collision_np is None or self.collision_np.is_empty():
             self.collision_np = NodePath(primatives.createCube(0.002,color=LVecBase4f(1,0,0,1)))
             self.collision_np.reparentTo(self.render)
         self.collision_np.setPos(LVecBase3f(*position))
 
     def clearManeuverVisualizations(self):
+        self.trajectory_state = []
         if self.prev_np is not None:
             if not self.prev_np.is_empty():
                 self.prev_np.removeNode()
@@ -260,8 +263,7 @@ class BodyOrbit:
             if not self.collision_np.is_empty():
                 self.collision_np.removeNode()
 
-
-    def computeManouverTrajectory(self, maneuvers, color, t_start=0*u.s, thickness=5):
+    def computeCowellManouverTrajectory(self, maneuvers, color, t_start=0*u.s, thickness=5):
         pos = []
         self.collision = False
         def callback(t, state):            
@@ -272,7 +274,7 @@ class BodyOrbit:
             if self.orbit.attractor.R.to(u.km).value + epsilon > np.linalg.norm(rn):
                 self.collision = True
                 intersections = line_sphere_intersection(pos[-1], rn, [0,0,0], self.orbit.attractor.R.to(u.km).value)
-                self.setCollionPoint(intersections[0])
+                self.setCollisionPoint(intersections[0])
                 pos.append(intersections[0])
                 return
             pos.append(rn.copy())
@@ -317,6 +319,105 @@ class BodyOrbit:
         #final position and velocity
         return r*u.km, v*u.km/u.s
 
+    def checkCollision(self, r, r_prev):
+        if self.orbit.attractor.R.to(u.km).value + epsilon > np.linalg.norm(r).to(u.km).value:
+            self.collision = True
+            intersections = line_sphere_intersection(r_prev.to(u.km).value, 
+                                                     r.to(u.km).value, 
+                                                     [0,0,0], # replace with attractor position 
+                                                     self.orbit.attractor.R.to(u.km).value)
+            self.setCollisionPoint(intersections[0])
+            return intersections[0]
+        return None
+
+    # given lambert solution, create a psuedo manuever trajectory
+    def computePseudoManouverTrajectory(self,r1, v1, r2, v2, v1_sol, v2_sol, t_flight, color, t_start=0*u.s, thickness=5):
+        dv1 = v1_sol - v1
+        dv2 = v2_sol - v2
+        accel_max = self.body.thrust_max/self.body.mass
+        t_burn1 = (np.linalg.norm(dv1)/accel_max).to(u.s)
+        t_burn2 = (np.linalg.norm(dv2)/accel_max).to(u.s)
+
+        orbit_initial = Orbit.from_vectors(self.orbit.attractor, r1, v1)
+        orbit_transfer = Orbit.from_vectors(self.orbit.attractor, r1, v1_sol)
+        orbit_final = Orbit.from_vectors(self.orbit.attractor, r2, v2)
+
+        # bezier style spline interpolation of orbit propogations 
+        self.collision = False
+        self.trajectory_state = []
+        steps = np.linspace(0, 1, 10)
+        self.trajectory_startTime = t_start*1
+        for s in steps:
+            ra,va = orbit_initial.propagate((s-1)*t_burn1/2).rv()
+            rb,vb = orbit_transfer.propagate(s*t_burn1/2).rv()
+            rc = ra*(1-s) + rb*s
+            vc = va*(1-s) + vb*s
+            if len(self.trajectory_state) > 0:
+                collision = self.checkCollision(rc, self.trajectory_state[-1][1])
+                if collision is not None:
+                    self.trajectory_state.append((s*t_burn1, collision*u.km, vc))
+                    break
+            self.trajectory_state.append((s*t_burn1,rc,vc))
+
+        # sample the transfer orbit
+        if not self.collision:
+            steps = np.linspace(t_burn1/2, t_flight - t_burn2/2, 100)
+            for s in steps:
+                rb,vb = orbit_transfer.propagate(s).rv()
+                collision = self.checkCollision(rb, self.trajectory_state[-1][1])
+                if collision is not None:
+                    self.trajectory_state.append((t_burn1/2+s, collision*u.km, vc))
+                    break
+                self.trajectory_state.append((t_burn1/2+s,rb,vb))
+
+        # bezier style spline interpolation of orbit propogations 
+        if not self.collision:
+            steps = np.linspace(0, 1, 10)
+            for s in steps:
+                ra,va = orbit_transfer.propagate(t_flight + (s-1)*t_burn2/2).rv()
+                rb,vb = orbit_final.propagate(s*t_burn2/2).rv()
+                rc = ra*(1-s) + rb*s
+                vc = va*(1-s) + vb*s
+                collision = self.checkCollision(rc, self.trajectory_state[-1][1])
+                if collision is not None:
+                    self.trajectory_state.append((t_burn1/2+t_flight-t_burn2/2 + s*t_burn2, collision*u.km, vc))
+                    break
+                self.trajectory_state.append((t_burn1/2+t_flight-t_burn2/2 + s*t_burn2, rc, vc))
+
+        pos = []
+        for s in self.trajectory_state:
+            pos.append(s[1].to(u.km).value)
+
+        path = primatives.createLineList(pos, False, color, thickness)
+        if self.manuever_np is not None:
+            self.manuever_np.removeNode()
+        self.manuever_np = NodePath(path)
+        self.manuever_np.reparentTo(self.render)
+
+        #final position and velocity
+        self.trajectory_duration = self.trajectory_state[-1][0]
+
+        return self.trajectory_state[-1][1], self.trajectory_state[-1][2]
+    
+    def propagateManeuverTrajectory(self, t):
+        ts = t-self.trajectory_startTime
+        if ts > self.trajectory_duration:
+            r = self.trajectory_state[-1][1]
+            v = self.trajectory_state[-1][2]
+            orbit = pa.twobody.Orbit.from_vectors( self.orbit.attractor, r,v)
+            return orbit.propagate(ts-self.trajectory_duration).rv()
+        else:
+            for i in range(len(self.trajectory_state)-1):
+                if ts < self.trajectory_state[i+1][0]:                    
+                    t1 = self.trajectory_state[i][0]
+                    r1 = self.trajectory_state[i][1]
+                    t2 = self.trajectory_state[i+1][0]
+                    r2 = self.trajectory_state[i+1][1]
+                    ti = (ts-t1)/(t2-t1)
+                    return r1*(1-ti) + r2*ti, self.trajectory_state[i][2]
+
+
+
     def setScale(self,cameraPos):
         if self.collision_np is not None:
             if not self.collision_np.is_empty():
@@ -331,7 +432,10 @@ class BodyOrbit:
         
     def propagate(self, t=0*u.s):
         try:
-            return self.orbit.propagate(t-self.startTime).rv()
+            if len(self.trajectory_state) > 0:
+                return self.propagateManeuverTrajectory(t)
+            else:
+                return self.orbit.propagate(t-self.startTime).rv()
         except RuntimeError as e:
             if str(e) == "Maximum number of iterations reached":
                 debug(f"****************************************************************\n{e}")

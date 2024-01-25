@@ -28,9 +28,9 @@ from poliastro.iod import vallado
 import time
 
 FONT_FILE = "Inconsolata-Regular.ttf"
-THRUST_MAG = 10.0*u.kg*u.m/u.s/u.s
-WINDOW_WIDTH = 1600
-WINDOW_HEIGHT = 900
+THRUST_MAG = 5.0*u.kg*u.m/u.s/u.s
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 720
 
 
 epsilon = np.finfo(float).eps
@@ -133,18 +133,23 @@ def compute_totaldv2(x, t_start, accel_max, orbit1, orbit2, time_weight, info):
 
     if info[0] is not None:
         r1_prev, v1_prev, r2_prev, v2_prev, v1_sol_prev, v2_sol_prev, dv1_prev, dv2_prev = info[0]
+        # burn time ratio
+        # v1_prev_mag = np.linalg.norm(v1_prev)
+        # v1_sol_prev_mag = np.linalg.norm(v1_sol_prev)
+        # ratio = v1_prev_mag/(v1_prev_mag+v1_sol_prev_mag)
     else:
         dv1_prev = 0*u.m/u.s
 
     #compute effective start position using last v1_sol last v1 and accel_max
     if accel_max.value > epsilon:
         t_burn1 = (dv1_prev/accel_max).to(u.s)
+        t_burn2 = (dv2_prev/accel_max).to(u.s)
     else:
         t_burn1 = 0*u.s
-#    oe.debug(f"t_burn: {t_burn:.2f}\tdv1_prev: {dv1_prev:.2f}\taccel_max: {accel_max:.2f}")
-
+        t_burn2 = 0*u.s
+        
     r1, v1 = orbit1.propagate(t_start + t_burn1/2)
-    r2, v2 = orbit2.propagate(t_start + t_flight)
+    r2, v2 = orbit2.propagate(t_start + t_flight + t_burn1/2)
 
     res = list(poliastro.iod.izzo.lambert(Earth.k, r1, r2, t_flight, M=0))
     if len(res) == 0 or len(res) > 1:
@@ -371,14 +376,13 @@ class MyApp(ShowBase):
         result = minimize(compute_totaldv2, x0, args=(t_start, accel_max, orbit1, orbit2, t_weight, info), bounds=bounds)
         t_flight = result.x[0]*u.s
 
-        r1, v1, r2, v2, v1_sol, v2_sol,dv1,dv2 = info[0]
+        r1, v1, r2, v2, v1_sol, v2_sol, dv1, dv2 = info[0]
         t_burn1 = (dv1/accel_max).to(u.s)
         t_burn2 = (dv2/accel_max).to(u.s)
-        if t_burn1 + t_burn2 > t_flight:
+        if t_burn1/2 + t_burn2/2 > t_flight:
             oe.debug(f"warning: t_burn1+t_burn2 > t_flight - not enough thrust to execute this trajectory!!!!!!!!")
             self.clearManeuverVisualization()
             return
-
 
         ts_stop = time.time()
 
@@ -395,6 +399,11 @@ class MyApp(ShowBase):
         self.updateIntercept(r1,v1,r2,v2)
 
         # draw transfer trajectory
+        v1_mag = np.linalg.norm(v1)
+        v2_mag = np.linalg.norm(v2)
+        v1_sol_mag = np.linalg.norm(v1_sol)
+        v2_sol_mag = np.linalg.norm(v2_sol)
+
         vec_initial_burn = v1_sol-v1
         mag_initial_burn = np.linalg.norm(vec_initial_burn)
         vec_initial_burn = vec_initial_burn/mag_initial_burn
@@ -407,7 +416,15 @@ class MyApp(ShowBase):
 
         # estimated final burn time to cancel expected relative velocity
         t_final_burn_duration = (mag_final_burn/accel_max).to(u.s)
-        t_final_burn_start = t_flight - t_final_burn_duration/2 - t_initial_burn_duration/2
+
+        # ratio1 = v1_mag/(v1_mag+v1_sol_mag)
+        # ratio2 = v2_sol_mag/(v2_mag+v2_sol_mag)
+        # ratio1 = v1_mag/(v1_mag+v1_sol_mag)
+        # ratio2 = v2_sol_mag/(v2_mag+v2_sol_mag)
+        ratio1 = 0.5
+        ratio2 = 0.5
+        oe.debug(f"ratio1: {ratio1:.2f} ratio2: {ratio2:.2f}")
+        t_final_burn_start = t_flight - t_final_burn_duration*ratio1 - t_initial_burn_duration*ratio2
 
         maneuvers = [
             [vec_initial_burn*accel_max, t_initial_burn_duration],
@@ -421,8 +438,8 @@ class MyApp(ShowBase):
             total_dt += m[1]
         
         oe.debug(f'Maneuver dv: {oe.formatVelocity(total_dv)} dt:{oe.formatTime(total_dt)}')
-        r,v = self.ship.orbit.computeManouverTrajectory(maneuvers, color=self.ship.color, t_start=t_start, thickness=5)
-
+#        r,v = self.ship.orbit.computeCowellManouverTrajectory(maneuvers, color=self.ship.color, t_start=t_start, thickness=5)
+        r,v = self.ship.orbit.computePseudoManouverTrajectory(r1,v1,r2,v2,v1_sol, v2_sol,t_flight, color=self.ship.color, t_start=t_start, thickness=5)
         if self.ship.orbit.collision:
             oe.debug("orbit causes collision!!!")
     
@@ -444,11 +461,11 @@ class MyApp(ShowBase):
         if key == 'm':
             self.computeInterceptManeuver2()
         if key == '-':
-            self.ship.thrust_max -= 1*u.kg*u.m/u.s/u.s
-            if self.ship.thrust_max < 1*u.kg*u.m/u.s/u.s:
-                self.ship.thrust_max = 1*u.kg*u.m/u.s/u.s
+            self.ship.thrust_max /= 1.1
+            if self.ship.thrust_max < 0.1*u.kg*u.m/u.s/u.s:
+                self.ship.thrust_max = 0.1*u.kg*u.m/u.s/u.s
         if key == '=':
-            self.ship.thrust_max += 1*u.kg*u.m/u.s/u.s
+            self.ship.thrust_max *= 1.1
         if key == ']':
             self.changeCameraFocus(1)
         if key == '[':
@@ -639,6 +656,8 @@ class MyApp(ShowBase):
         return Task.cont
 
     def cameraControl(self, task):
+        # if not self.mouseWatcherNode.hasMouse():
+        #     return
 
         if self.mouseButtonState[2]:
             if not self.mouseButtonStateLast[2]:
