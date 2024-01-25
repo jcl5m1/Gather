@@ -369,11 +369,11 @@ class MyApp(ShowBase):
         # result = minimize(compute_totaldv, x0, args=(t_start, orbit2, t_weight, r1, v1, info), bounds=bounds)
         # r2, v2, v1_sol, v2_sol = info[0]
 
-        result = minimize(compute_totaldv2, x0, args=(t_start, 0*u.m/u.s**2, orbit1, orbit2, t_weight, info), bounds=bounds)
+        result = minimize(compute_totaldv2, x0, args=(t_start, 0*u.m/u.s**2, orbit1, orbit2, t_weight, info), bounds=bounds, options={'maxiter':35})
         t_flight = result.x[0]*u.s
         #do it again but with accel_max considered
         x0 = result.x.copy()
-        result = minimize(compute_totaldv2, x0, args=(t_start, accel_max, orbit1, orbit2, t_weight, info), bounds=bounds)
+        result = minimize(compute_totaldv2, x0, args=(t_start, accel_max, orbit1, orbit2, t_weight, info), bounds=bounds, options={'maxiter':35})
         t_flight = result.x[0]*u.s
 
         r1, v1, r2, v2, v1_sol, v2_sol, dv1, dv2 = info[0]
