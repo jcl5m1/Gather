@@ -26,7 +26,7 @@ from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode
 from poliastro.iod import vallado
 import time
-
+import threading
 FONT_FILE = "Inconsolata-Regular.ttf"
 THRUST_MAG = 5.0*u.kg*u.m/u.s/u.s
 WINDOW_WIDTH = 1280
@@ -34,6 +34,7 @@ WINDOW_HEIGHT = 720
 
 
 epsilon = np.finfo(float).eps
+sem = threading.Semaphore()
 
 def spherical_to_cartesian(r, theta, phi):
     x = r * np.sin(phi) * np.cos(theta)
@@ -273,58 +274,58 @@ class MyApp(ShowBase):
 
 
 
-    def findApproximateClosestApproach(self, t_max=0):
-        # #initial guess
-        # x0 = [0, 0, 0, 0]
+#     def findApproximateClosestApproach(self, t_max=0):
+#         # #initial guess
+#         # x0 = [0, 0, 0, 0]
 
-        # # Define the bounds for the parameters
-        # bounds = [(0, 3600*24), (-100, 100), (-100, 100), (-100, 100)]
+#         # # Define the bounds for the parameters
+#         # bounds = [(0, 3600*24), (-100, 100), (-100, 100), (-100, 100)]
 
-        MAX_ORBITS = 3 # find reasonable window based on the period of the orbits
-#        oe.debug(f"{self.ship.orbit.orbit.period}/{self.ship2.orbit.orbit.period}= {self.ship.orbit.orbit.period/self.ship2.orbit.orbit.period}")
+#         MAX_ORBITS = 3 # find reasonable window based on the period of the orbits
+# #        oe.debug(f"{self.ship.orbit.orbit.period}/{self.ship2.orbit.orbit.period}= {self.ship.orbit.orbit.period/self.ship2.orbit.orbit.period}")
 
-        max_period = max(self.ship.orbit.orbit.period, self.ship2.orbit.orbit.period)
+#         max_period = max(self.ship.orbit.orbit.period, self.ship2.orbit.orbit.period)
 
-        if t_max == 0:
-            t_max = self.ship.orbit.orbit.period*MAX_ORBITS
-        t = np.linspace(self.simulationTime, self.simulationTime+max_period*MAX_ORBITS, num=100)  # Time range from 0 to 24 hours
-        energy = []
-        orbit1 = self.ship.orbit
-        orbit2 = self.ship2.orbit
+#         if t_max == 0:
+#             t_max = self.ship.orbit.orbit.period*MAX_ORBITS
+#         t = np.linspace(self.simulationTime, self.simulationTime+max_period*MAX_ORBITS, num=100)  # Time range from 0 to 24 hours
+#         energy = []
+#         orbit1 = self.ship.orbit
+#         orbit2 = self.ship2.orbit
 
-        state = []
-        for time in t:
-            e, s = relativeEnergy(orbit1, orbit2, time.value)
-            energy.append(e)
-            state.append(s)
+#         state = []
+#         for time in t:
+#             e, s = relativeEnergy(orbit1, orbit2, time.value)
+#             energy.append(e)
+#             state.append(s)
 
-        # find minimum energy time
-        min_energy = np.min(energy)
-        min_energy_index = np.argmin(energy)
-        self.min_energy_intercept_time_guess = t[min_energy_index]
-        self.graph.clear()
-        self.graph.plot(energy)
-        self.graph.vline(min_energy_index, color=LVecBase4f(1,0,0,1))
+#         # find minimum energy time
+#         min_energy = np.min(energy)
+#         min_energy_index = np.argmin(energy)
+#         self.min_energy_intercept_time_guess = t[min_energy_index]
+#         self.graph.clear()
+#         self.graph.plot(energy)
+#         self.graph.vline(min_energy_index, color=LVecBase4f(1,0,0,1))
 
-        self.updateIntercept(*state[min_energy_index])
+#         self.updateIntercept(*state[min_energy_index])
         
 
-    def incrementallyFindClosestApproach(self):
-        global optimation_history
-        x0 = [self.min_energy_intercept_time_guess.value]
-        # Define the bounds for the parameters
-        bounds = [(self.simulationTime.to(u.s).value, None)]
+    # def incrementallyFindClosestApproach(self):
+    #     global optimation_history
+    #     x0 = [self.min_energy_intercept_time_guess.value]
+    #     # Define the bounds for the parameters
+    #     bounds = [(self.simulationTime.to(u.s).value, None)]
 
-        intercept_state = [0]
-        result = minimize(checkInterceptEnergy, x0, args=(self.ship.orbit, self.ship2.orbit, intercept_state), bounds=bounds,
-                          tol=1e-1, options={'maxiter':5})
+    #     intercept_state = [0]
+    #     result = minimize(checkInterceptEnergy, x0, args=(self.ship.orbit, self.ship2.orbit, intercept_state), bounds=bounds,
+    #                       tol=1e-1, options={'maxiter':5})
 
-        minimized_energy = result.fun
-        self.min_energy_intercept_time_guess = result.x[0]*u.s
-        if self.min_energy_intercept_time_guess < self.simulationTime:
-            self.min_energy_intercept_time_guess = self.simulationTime
+    #     minimized_energy = result.fun
+    #     self.min_energy_intercept_time_guess = result.x[0]*u.s
+    #     if self.min_energy_intercept_time_guess < self.simulationTime:
+    #         self.min_energy_intercept_time_guess = self.simulationTime
         
-        self.updateIntercept(*intercept_state[0])
+    #     self.updateIntercept(*intercept_state[0])
 
 
     def updateIntercept(self, r1, v1, r2, v2):
@@ -367,9 +368,6 @@ class MyApp(ShowBase):
         info = [None]
         accel_max = self.ship.thrust_max/self.ship.mass
 
-        # result = minimize(compute_totaldv, x0, args=(t_start, orbit2, t_weight, r1, v1, info), bounds=bounds)
-        # r2, v2, v1_sol, v2_sol = info[0]
-
         result = minimize(compute_totaldv2, x0, args=(t_start, 0*u.m/u.s**2, orbit1, orbit2, t_weight, info), bounds=bounds, options={'maxiter':35})
         t_flight = result.x[0]*u.s
         #do it again but with accel_max considered
@@ -386,54 +384,12 @@ class MyApp(ShowBase):
             return
 
         ts_stop = time.time()
-
-        # print("iterations:", result.nit)
-        # print(f"t_start: {t_start.to(u.hour):.2f}")
-        # print(f"t_flight: {t_flight.to(u.hour):.2f}")
-        # print(f"t_burn1: {(dv1/accel_max).to(u.h):.2f}")
-        # print(f"t_burn2: {(dv2/accel_max).to(u.h):.2f}")
-        # print(f"dv:{dv1:.2f} {dv2:.2f}")
-        # print(f"total_cost: {result.fun:.2f}")
         oe.debug(f"Compute Time elapsed: {ts_stop-ts_start:.2f}")
 
         self.updateIntercept(r1,v1,r2,v2)
 
-        # # draw transfer trajectory
-        # v1_mag = np.linalg.norm(v1)
-        # v2_mag = np.linalg.norm(v2)
-        # v1_sol_mag = np.linalg.norm(v1_sol)
-        # v2_sol_mag = np.linalg.norm(v2_sol)
-
-        # vec_initial_burn = v1_sol-v1
-        # mag_initial_burn = np.linalg.norm(vec_initial_burn)
-        # vec_initial_burn = vec_initial_burn/mag_initial_burn
-        # t_initial_burn_duration = (mag_initial_burn/accel_max).to(u.s)
-
-        # # compute final burn time
-        # vec_final_burn = v2-v2_sol
-        # mag_final_burn = np.linalg.norm(vec_final_burn)
-        # vec_final_burn = vec_final_burn/mag_final_burn
-
-        # # estimated final burn time to cancel expected relative velocity
-        # t_final_burn_duration = (mag_final_burn/accel_max).to(u.s)
-        # t_final_burn_start = t_flight - t_final_burn_duration/2 - t_initial_burn_duration/2
-
-        # maneuvers = [
-        #     [vec_initial_burn*accel_max, t_initial_burn_duration],
-        #     [np.array([0,0,0])*u.m/u.s**2,    t_final_burn_start],
-        #     [vec_final_burn*accel_max, t_final_burn_duration],
-        # ]
-        # total_dv = 0
-        # total_dt = 0
-        # for m in maneuvers:
-        #     total_dv += np.linalg.norm(m[0])*m[1]
-        #     total_dt += m[1]
-        
-        # oe.debug(f'Maneuver dv: {oe.formatVelocity(total_dv)} dt:{oe.formatTime(total_dt)}')
-#        r,v = self.ship.orbit.computeCowellManouverTrajectory(maneuvers, color=self.ship.color, t_start=t_start, thickness=5)
         r,v = self.ship.orbit.computePseudoManouverTrajectory(r1,v1,r2,v2,v1_sol, v2_sol,
                                                                t_flight, color=self.ship.color, t_start=t_start, thickness=5)
-        oe.debug(f"pseudo trajectory complete")
         if self.ship.orbit.collision:
             oe.debug("orbit causes collision!!!")
     
@@ -465,14 +421,19 @@ class MyApp(ShowBase):
         if key == '[':
             self.changeCameraFocus(-1)
         if key == 'x':
-            self.ship.orbit.randomize(3*oe.EARTH_RADIUS, 5*u.km/u.s, self.simulationTime)
-            r,v = self.ship.orbit.orbit.rv()
-            rs = ",".join([f"{i}" for i in r.to(u.km).value])
-            vs = ",".join([f"{i}" for i in v.to(u.km/u.s).value])
-            oe.debug(f"randomized orbit: [{rs}]*u.km, [{vs}]*u.km/u.s,")
-            self.ship.landed = False
-            self.ship.landedPrev = False
-            self.clearManeuverVisualization()
+            try:
+                sem.acquire()
+                r,v = self.ship.orbit.randomize(3*oe.EARTH_RADIUS, 5*u.km/u.s, self.simulationTime)
+                rs = ",".join([f"{i}" for i in r.to(u.km).value])
+                vs = ",".join([f"{i}" for i in v.to(u.km/u.s).value])
+                oe.debug(f"randomized orbit: [{rs}]*u.km, [{vs}]*u.km/u.s,")
+                self.ship.landed = False
+                self.ship.landedPrev = False
+                self.clearManeuverVisualization()
+                self.computeInterceptManeuver2()
+            finally:
+                sem.release()
+
 
         
     def clearManeuverVisualization(self):
@@ -633,7 +594,6 @@ class MyApp(ShowBase):
         if self.intercept2_np is not None and not self.intercept2_np.is_empty():
             self.intercept2_np.setScale(np.linalg.norm(self.intercept2_np.getPos()-self.camera.getPos()))
 
-
         # hud text
         self.hudText.setPos(-0.95*aspect_ratio, 0.95)
         text = f"Time: {oe.formatTime(self.simulationTime)}"
@@ -643,19 +603,23 @@ class MyApp(ShowBase):
             f"  Dist:{oe.formatDistance(np.linalg.norm(self.ship.position - self.ship2.position))}\n"+\
             f"  dV:{oe.formatVelocity(np.linalg.norm(self.ship.velocity - self.ship2.velocity))}\n"+\
             f"  orthoV:{oe.formatVelocity(ortho_velocity)}\n"
-        # if self.intercept is not None:
-        #     text += f"Closest Approach:\n  {oe.formatDistance(self.intercept[0])}\n" +\
-        #           f"  {oe.formatVelocity(self.intercept[1])}:({oe.formatTime((self.intercept[1]/(self.ship.thrust_max/u.kg)))})\n"+\
-        #           f"  {oe.formatTime(self.min_energy_intercept_time_guess-self.simulationTime)}\n"
+
         self.hudText.setText(text)
 
-
+        # test interval
+        if True:
+            TEST_INTERVAL = 2
+            if task.time%TEST_INTERVAL > TEST_INTERVAL/2 and self.lastFrameUpdateTime%TEST_INTERVAL < TEST_INTERVAL/2:
+                thread = threading.Thread(target=self.handleKeyDown, args=('x'))
+                thread.start()
+            
         self.lastFrameUpdateTime = task.time
         return Task.cont
 
     def cameraControl(self, task):
         # if not self.mouseWatcherNode.hasMouse():
         #     return
+        self.cameraRot[1] += 0.01
 
         if self.mouseButtonState[2]:
             if not self.mouseButtonStateLast[2]:

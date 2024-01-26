@@ -33,6 +33,15 @@ def debug(msg):
     print(f"{os.path.basename(stack[1].filename)}:{stack[1].lineno} {msg}")
     
 
+def debug2(t,r,v):
+    rs = ",".join([f"{x}" for x in r])
+    vs = ",".join([f"{x}" for x in v])
+
+    stack = inspect.stack()
+    msg = f"t,r,v={t.value}*u.s, [{rs}]*u.km, [{vs}]*u.km/u.s"
+    print(f"{os.path.basename(stack[1].filename)}:{stack[1].lineno} {msg}")
+
+
 def formatTime(time):
     if time > 1*u.year:
         return f"{time.to(u.year):.2f}"
@@ -199,7 +208,7 @@ class OrbitEngine:
 
 
 class BodyOrbit:
-    def __init__(self, body, r0, v0, render, attractor=Earth, time=0*u.s,segments=100, width=2,  color=LVecBase4f(1,1,1,1)):
+    def __init__(self, body, r0, v0, render=None, attractor=Earth, time=0*u.s,segments=0, width=2,  color=LVecBase4f(1,1,1,1)):
         self.body = body
         self.color = color
         self.render = render
@@ -209,22 +218,62 @@ class BodyOrbit:
         self.collision = False
         self.collision_np = None
         self.trajectory_state = []
+        self.set(attractor, r0,v0, time=time, segments=segments)
 
-        self.setOrbit(attractor, r0,v0, time=time, segments=segments)
+    def set(self, attractor, r0,v0, time=0*u.s, segments=0):
 
-    def setOrbit(self, attractor, r0,v0, time=0*u.s, segments=100):
-        self.orbit = Orbit.from_vectors(attractor, r0, v0)
+        self.attractor = attractor
+        self.r0 = r0
+        self.v0 = v0
+        self.startTime = time*1  #breaks the reference to the simulator time, which otherwise would causes the update to not move
+        self.kepler = Orbit.from_vectors(attractor, r0, v0)
+
         if segments > 0:
-            if self.np is not None:
-                self.np.removeNode()
-            path = primatives.createLineList(convertToEllipse(self.orbit, segments), True, self.color)
-            self.np = NodePath(path)
-            self.np.reparentTo(self.render)
-            self.periapsis = self.orbit.r_p.to(u.km)
-            self.apoapsis = self.orbit.r_a.to(u.km)
+            t_end = time + 1*u.hour
+            #if valid kepler orbit, find kepler orbit period
+            orbit = Orbit.from_vectors(attractor, r0, v0)
+            if orbit.r_a.value > 0 and orbit.r_p.value > 0:
+                t_end = time + orbit.period
+            self.generatePath(time, t_end, segments)
+
+        #use kepler orbit calculation, but this doesn't support hyperbolic or parabolic orbits and sometimes fails        
+        # self.orbit = Orbit.from_vectors(attractor, r0, v0)
+        # if segments > 0:
+        #     if self.np is not None:
+        #         self.np.removeNode()
+        #     path = primatives.createLineList(convertToEllipse(self.orbit, segments), True, self.color)
+        #     self.np = NodePath(path)
+        #     self.np.reparentTo(self.render)
+        #     self.periapsis = self.orbit.r_p.to(u.km)
+        #     self.apoapsis = self.orbit.r_a.to(u.km)
         #the *1 breaks the reference to the simulator time, which otherwise would mean the update does not move
-        self.startTime = time*1 
-        
+    def __str__(self):
+        return f"BodyOrbit r0:{self.r0} v0:{self.v0} startTime:{self.startTime}"
+
+    def generatePath(self, t_start, t_end, segments=50):
+        pos = []
+        self.collision = False
+
+        times = np.linspace(t_start, t_end, segments)
+        for t in times:
+            try:
+                r,v = pa.twobody.propagation.cowell(
+                    self.attractor.k.to(u.km**3 / u.s**2).value, 
+                    self.r0.to(u.km).value,
+                    self.v0.to(u.km/u.s).value,
+                    t.to(u.s).value)
+                pos.append(r.copy())
+            except RuntimeError as e:
+                debug(f"{e}  break ------------------------------------------------------------")
+                break
+
+
+        if self.np is not None:
+            self.np.removeNode()
+        path = primatives.createLineList(pos, close=False, color=self.color)
+        self.np = NodePath(path)
+        self.np.reparentTo(self.render)
+
     def randomize(self, dist, vel, time=0*u.s, segments=100):
 
         # random 3d unit vector
@@ -238,10 +287,12 @@ class BodyOrbit:
         r = r*u.km
         v = v*u.km/u.s
 
-        self.setOrbit(Earth, r, v, time=time, segments=segments)
+        self.set(Earth, r, v, time=time, segments=segments)
 
         if self.manuever_np is not None:
             self.manuever_np.removeNode()
+
+        return r, v
 
 
     def setCollisionPoint(self, position):
@@ -262,101 +313,97 @@ class BodyOrbit:
             if not self.collision_np.is_empty():
                 self.collision_np.removeNode()
 
-    def computeCowellManouverTrajectory(self, maneuvers, color, t_start=0*u.s, thickness=5):
-        pos = []
-        self.collision = False
-        def callback(t, state):            
-            if self.collision:
-                return
-            rn = state[:3]  # Position vector
-            vn = state[3:]  # Velocity vector
-            if self.orbit.attractor.R.to(u.km).value + epsilon > np.linalg.norm(rn):
-                self.collision = True
-                intersections = line_sphere_intersection(pos[-1], rn, [0,0,0], self.orbit.attractor.R.to(u.km).value)
-                self.setCollisionPoint(intersections[0])
-                pos.append(intersections[0])
-                return
-            pos.append(rn.copy())
+    # def computeCowellManouverTrajectory(self, maneuvers, color, t_start=0*u.s, thickness=5):
+    #     pos = []
+    #     self.collision = False
+    #     def callback(t, state):            
+    #         if self.collision:
+    #             return
+    #         rn = state[:3]  # Position vector
+    #         vn = state[3:]  # Velocity vector
+    #         if self.attractor.R.to(u.km).value + epsilon > np.linalg.norm(rn):
+    #             self.collision = True
+    #             intersections = line_sphere_intersection(pos[-1], rn, [0,0,0], self.attractor.R.to(u.km).value)
+    #             self.setCollisionPoint(intersections[0][1])
+    #             pos.append(intersections[0][1])
+    #             return
+    #         pos.append(rn.copy())
 
-        #starting position and velocity
-        r, v = self.orbit.propagate(t_start - self.startTime).rv()
-        r = r.to(u.km).value
-        v = v.to(u.km/u.s).value
+    #     #starting position and velocity
+    #     r, v = self.propagate(t_start - self.startTime)
+    #     r = r.to(u.km).value
+    #     v = v.to(u.km/u.s).value
 
-        #for each maneuver, compute the acceleration period and then the post acceleration period
-        # and concatenate the results
-        for m in maneuvers:
-            accel, dt = m
-            # Define the additional acceleration function
-            def ad(t0, state, k):
-                return accel.to(u.km/u.s**2).value
+    #     #for each maneuver, compute the acceleration period and then the post acceleration period
+    #     # and concatenate the results
+    #     for m in maneuvers:
+    #         accel, dt = m
+    #         # Define the additional acceleration function
+    #         def ad(t0, state, k):
+    #             return accel.to(u.km/u.s**2).value
 
-            r,v = pa.twobody.propagation.cowell(
-                self.orbit.attractor.k.to(u.km**3 / u.s**2).value, 
-                r, 
-                v,
-                dt.to(u.s).value,
-                ad=ad, 
-                callback=callback)
+    #         r,v = pa.twobody.propagation.cowell(
+    #             self.attractor.k.to(u.km**3 / u.s**2).value, 
+    #             r, 
+    #             v,
+    #             dt.to(u.s).value,
+    #             ad=ad, 
+    #             callback=callback)
 
-        if not self.collision:
-            # extrapolate for 1 hour more for visualization
-            pa.twobody.propagation.cowell(
-                self.orbit.attractor.k.to(u.km**3 / u.s**2).value, 
-                r, 
-                v,
-                1*3600,
-                ad=None, 
-                callback=callback)
+    #     if not self.collision:
+    #         # extrapolate for 1 hour more for visualization
+    #         pa.twobody.propagation.cowell(
+    #             self.attractor.k.to(u.km**3 / u.s**2).value, 
+    #             r, 
+    #             v,
+    #             1*3600,
+    #             ad=None, 
+    #             callback=callback)
 
-        path = primatives.createLineList(pos, False, color, thickness)
-        if self.manuever_np is not None:
-            self.manuever_np.removeNode()
-        self.manuever_np = NodePath(path)
-        self.manuever_np.reparentTo(self.render)
+    #     path = primatives.createLineList(pos, False, color, thickness)
+    #     if self.manuever_np is not None:
+    #         self.manuever_np.removeNode()
+    #     self.manuever_np = NodePath(path)
+    #     self.manuever_np.reparentTo(self.render)
 
-        #final position and velocity
-        return r*u.km, v*u.km/u.s
+    #     #final position and velocity
+    #     return r*u.km, v*u.km/u.s
 
     def checkCollision(self, r, r_prev):
-        if self.orbit.attractor.R.to(u.km).value + epsilon > np.linalg.norm(r).to(u.km).value:
+        if self.attractor.R.to(u.km).value + epsilon > np.linalg.norm(r).to(u.km).value:
             self.collision = True
             intersections = line_sphere_intersection(r_prev.to(u.km).value, 
                                                      r.to(u.km).value, 
                                                      [0,0,0], # replace with attractor position 
-                                                     self.orbit.attractor.R.to(u.km).value)
+                                                     self.attractor.R.to(u.km).value)
             self.setCollisionPoint(intersections[0][1])
             return intersections[0]
         return None
 
     # given lambert solution, create a psuedo manuever trajectory
-    def computePseudoManouverTrajectory(self, r1, v1, r2, v2, v1_sol, v2_sol, t_flight, color, t_start, thickness=5):
+    def computePseudoManouverTrajectory(self, r1, v1, r2, v2, v1_sol, v2_sol, t_flight, color, t_start, thickness=5, segments=50):
         dv1 = v1_sol - v1
         dv2 = v2_sol - v2
         accel_max = self.body.thrust_max/self.body.mass
         t_burn1 = (np.linalg.norm(dv1)/accel_max).to(u.s)
         t_burn2 = (np.linalg.norm(dv2)/accel_max).to(u.s)
 
-        # orbit_initial = Orbit.from_vectors(self.orbit.attractor, r1, v1)
-        # orbit_transfer = Orbit.from_vectors(self.orbit.attractor, r1, v1_sol)
-        # orbit_final = Orbit.from_vectors(self.orbit.attractor, r2, v2)
-
-        # # bezier style spline interpolation of orbit propogations 
+        # bezier style spline interpolation of orbit propogations 
         self.collision = False
         self.trajectory_state = []
         t_duration = t_burn1/2+ t_flight + t_burn2/2
         self.trajectory_params = [r1, v1, r2, v2, v1_sol, v2_sol, t_flight, t_start*1, t_duration]
- 
 
         # use propagate function        
         pos = []
         self.trajectory_state = []
-        times = np.linspace(t_start, t_start + t_duration, 100)
+        times = np.linspace(t_start, t_start + t_duration, segments)
         for t in times:
             r,v = self.propagateManeuverTrajectory(t)
             if len(self.trajectory_state) > 0:
                 t_prev, r_prev, v_prev = self.trajectory_state[-1]
                 res = self.checkCollision(r, r_prev)
+                # store interpolated position and velocity
                 if res is not None:
                     i, rc = res
                     vc = v_prev*(1-i) + v*i
@@ -366,58 +413,11 @@ class BodyOrbit:
             self.trajectory_state.append((t,r,v))
             pos.append(r.to(u.km).value)
 
-
-        # #compute it directly
-        # steps = np.linspace(0, 1, 10)
-        # for s in steps:
-        #     ra,va = orbit_initial.propagate((s-1)*t_burn1/2).rv()
-        #     rb,vb = orbit_transfer.propagate(s*t_burn1/2).rv()
-        #     rc = ra*(1-s) + rb*s
-        #     vc = va*(1-s) + vb*s
-        #     if len(self.trajectory_state) > 0:
-        #         collision = self.checkCollision(rc, self.trajectory_state[-1][1])
-        #         if collision is not None:
-        #             self.trajectory_state.append((s*t_burn1, collision*u.km, vc))
-        #             break
-        #     self.trajectory_state.append((s*t_burn1,rc,vc))
-
-        # # sample the transfer orbit
-        # if not self.collision:
-        #     steps = np.linspace(t_burn1/2, t_flight - t_burn2/2, 100)
-        #     for s in steps:
-        #         rb,vb = orbit_transfer.propagate(s).rv()
-        #         collision = self.checkCollision(rb, self.trajectory_state[-1][1])
-        #         if collision is not None:
-        #             self.trajectory_state.append((t_burn1/2+s, collision*u.km, vc))
-        #             break
-        #         self.trajectory_state.append((t_burn1/2+s,rb,vb))
-
-        # # bezier style spline interpolation of orbit propogations 
-        # if not self.collision:
-        #     steps = np.linspace(0, 1, 10)
-        #     for s in steps:
-        #         ra,va = orbit_transfer.propagate(t_flight + (s-1)*t_burn2/2).rv()
-        #         rb,vb = orbit_final.propagate(s*t_burn2/2).rv()
-        #         rc = ra*(1-s) + rb*s
-        #         vc = va*(1-s) + vb*s
-        #         collision = self.checkCollision(rc, self.trajectory_state[-1][1])
-        #         if collision is not None:
-        #             self.trajectory_state.append((t_burn1/2+t_flight-t_burn2/2 + s*t_burn2, collision*u.km, vc))
-        #             break
-        #         self.trajectory_state.append((t_burn1/2+t_flight-t_burn2/2 + s*t_burn2, rc, vc))
-
-        # pos = []
-        # for s in self.trajectory_state:
-        #     pos.append(s[1].to(u.km).value)
-
         path = primatives.createLineList(pos, False, color, thickness)
         if self.manuever_np is not None:
             self.manuever_np.removeNode()
         self.manuever_np = NodePath(path)
         self.manuever_np.reparentTo(self.render)
-
-        #final position and velocity
-        #self.trajectory_duration = self.trajectory_state[-1][0]
 
         return self.trajectory_state[-1][1], self.trajectory_state[-1][2]
     
@@ -430,38 +430,49 @@ class BodyOrbit:
         t_burn1 = (np.linalg.norm(dv1)/accel_max).to(u.s)
         t_burn2 = (np.linalg.norm(dv2)/accel_max).to(u.s)
 
-        orbit_initial = Orbit.from_vectors(self.orbit.attractor, r1, v1)
-        orbit_transfer = Orbit.from_vectors(self.orbit.attractor, r1, v1_sol)
-        orbit_final = Orbit.from_vectors(self.orbit.attractor, r2, v2)
+
+        orbit_initial = BodyOrbit(self.body, r1, v1,self.render,self.attractor)
+        orbit_transfer = BodyOrbit(self.body, r1, v1_sol, self.render,self.attractor) 
+        orbit_final = BodyOrbit(self.body, r2, v2,self.render,self.attractor)
 
         t_burn1_start = 0*u.s
         t_burn1_stop = 0*u.s + t_burn1
         t_burn2_start = t_flight + t_burn1/2 - t_burn2/2
         t_burn2_stop = t_flight + t_burn1/2 + t_burn2/2
-        if ts < t_burn1_stop:  
-            # (0,1)
+        try:
+            if ts < t_burn1_stop:  
+                # (0,1)
+                s = (ts-t_burn1_start)/(t_burn1_stop-t_burn1_start)
+                ra,va = orbit_initial.propagate((s-1)*t_burn1/2)
+                rb,vb = orbit_transfer.propagate(s*t_burn1/2)
+                rc = ra*(1-s) + rb*s
+                vc = va*(1-s) + vb*s
+                return rc, vc
+            elif ts < t_burn2_start:
+                #  (t_burn1/2, t_flight - t_burn2/2)
+                s = ts-t_burn1/2
+                return orbit_transfer.propagate(s)
+            elif ts < t_burn2_stop:
+                # (0,1)
+                s = (ts - t_burn2_start)/(t_burn2_stop-t_burn2_start)
+                ra,va = orbit_transfer.propagate(t_flight + (s-1)*t_burn2/2)
+                rb,vb = orbit_final.propagate(s*t_burn2/2)
+                rc = ra*(1-s) + rb*s
+                vc = va*(1-s) + vb*s
+                return rc, vc
+            else:
+                # t_burn2/2 ->
+                s = ts-t_burn2_stop+t_burn2/2
+                return orbit_final.propagate(s)
+        except u.core.UnitConversionError as e:
+            debug(f"{e} ------------------------------------------------------------")
             s = (ts-t_burn1_start)/(t_burn1_stop-t_burn1_start)
-            ra,va = orbit_initial.propagate((s-1)*t_burn1/2).rv()
-            rb,vb = orbit_transfer.propagate(s*t_burn1/2).rv()
-            rc = ra*(1-s) + rb*s
-            vc = va*(1-s) + vb*s
-            return rc, vc
-        elif ts < t_burn2_start:
-            #  (t_burn1/2, t_flight - t_burn2/2)
-            s = ts-t_burn1/2
-            return orbit_transfer.propagate(s).rv()
-        elif ts < t_burn2_stop:
-            # (0,1)
-            s = (ts - t_burn2_start)/(t_burn2_stop-t_burn2_start)
-            ra,va = orbit_transfer.propagate(t_flight + (s-1)*t_burn2/2).rv()
-            rb,vb = orbit_final.propagate(s*t_burn2/2).rv()
-            rc = ra*(1-s) + rb*s
-            vc = va*(1-s) + vb*s
-            return rc, vc
-        else:
-            # t_burn2/2 ->
-            s = ts-t_burn2_stop+t_burn2/2
-            return orbit_final.propagate(s).rv()
+            ra,va = orbit_initial.propagate((s-1)*t_burn1/2)
+            rb,vb = orbit_transfer.propagate(s*t_burn1/2)
+            debug(f"t, ra,va: {s}, {ra}, {va}")
+            debug(f"t, rb,vb: {s}, {rb}, {vb}")
+
+    
 
     def setScale(self,cameraPos):
         if self.collision_np is not None:
@@ -480,20 +491,27 @@ class BodyOrbit:
             if len(self.trajectory_state) > 0:
                 return self.propagateManeuverTrajectory(t)
             else:
-                return self.orbit.propagate(t-self.startTime).rv()
+                # only use kepler if we have a valid elliptical orbit
+                if self.kepler.r_a.value > 0 and self.kepler.r_p.value > 0:
+                    return self.kepler.propagate(t-self.startTime).rv()
+                else:
+                    r,v = pa.twobody.propagation.cowell(
+                    self.attractor.k.to(u.km**3 / u.s**2).value, 
+                    self.r0.to(u.km).value,
+                    self.v0.to(u.km/u.s).value, 
+                    (t-self.startTime).to(u.s).value)
+                    return r*u.km, v*u.km/u.s
         except RuntimeError as e:
-            if str(e) == "Maximum number of iterations reached":
-                debug(f"****************************************************************\n{e}")
-                pass
-            else:
-                raise
+            debug(f"{e} ------------------------------------------------------------")
+            debug(f"t, r0,v0: {t}, {self.r0.value}*u.km,  {self.v0.value}*u.km/u.s")
         
 class Body:
-    def __init__(self, name, r0, v0, type, renderer,attractor=Earth, size=0.01, color=LVecBase4f(0,1,0,1)):
+    def __init__(self, name, r0, v0, type, render,attractor=Earth, size=0.01, color=LVecBase4f(0,1,0,1)):
         self.name = name
         self.mass = 1*u.kg
         self.type = type
         self.color = color
+        self.attractor = attractor
         self.thrust_max = 0*u.kg*u.m/u.s/u.s
         self.thrust = [0,0,0]*u.kg*u.m/u.s/u.s
         self.deltaV = [0,0,0]*u.m/u.s
@@ -503,10 +521,10 @@ class Body:
         self.rotation_velocity = Rotation.identity()
         self.acceleration = np.zeros((1,3))
         self.rotation_acceleration = Rotation.identity()
-        alpha = 0.5
+        color2 = color/2
         self.orbit = BodyOrbit(self, r0, v0, 
-                               renderer, attractor=attractor, 
-                               color=LVecBase4f(color[0]*alpha, color[1]*alpha, color[2]*alpha,1))
+                               render, attractor=attractor, 
+                               color=color2, segments=100)
 
         pos, vel = self.orbit.propagate()
         self.landed = attractor.R.to(u.km).value + epsilon > np.linalg.norm(pos.to(u.km).value)
@@ -516,7 +534,7 @@ class Body:
             ship = primatives.createPyramid(size, color)
 
             self.np = NodePath(ship)
-            self.np.reparentTo(renderer)
+            self.np.reparentTo(render)
             self.np.setPos(LVecBase3f(*pos.value))
             self.np.setHpr(0,-90,0)
 
@@ -534,14 +552,13 @@ class Body:
 
     def update(self, time, dt):
 
-        attractor = self.orbit.orbit.attractor
         if np.linalg.norm(self.thrust.value) >= epsilon:
             if self.landed: # take off
-                self.orbit.setOrbit(attractor,self.position, self.velocity, time, segments=0)
+                self.orbit.set(self.attractor,self.position, self.velocity, time, segments=0)
             pos, vel = self.orbit.propagate(time-dt)
             self.deltaV = self.thrust*dt/self.mass
             vel = vel + self.deltaV
-            self.orbit.setOrbit(attractor,pos, vel, time)
+            self.orbit.set(self.attractor,pos, vel, time)
         else:
             if not self.landed: # flying
                 pos, vel = self.orbit.propagate(time)
@@ -550,10 +567,10 @@ class Body:
             elif not self.landedPrev:  # just landed
                 pos, vel = self.orbit.propagate(time)
                 #normlize pos to radius of attractor
-                pos = attractor.R*pos/np.linalg.norm(pos)
+                pos = self.attractor.R*pos/np.linalg.norm(pos)
                 #velocity should match the surface rotation of attractor
                 vel = [0,0,0]*u.m/u.s
-                self.orbit.setOrbit(attractor,pos, vel, time, segments=0)
+                self.orbit.set(self.attractor,pos, vel, time, segments=0)
                 self.position = pos.to(u.km)
                 self.velocity = vel.to(u.m/u.s)
 
@@ -561,23 +578,13 @@ class Body:
         self.landedPrev = self.landed
 
         #1 meter tolerance for landing
-        self.landed = attractor.R.to(u.m).value + 1 > np.linalg.norm(self.position.to(u.m).value)
-
-        #update the velocity vector
-        # vertex_data = self.vel_line_np.node().modify_geom(0).modify_vertex_data()
-        # vertex_writer = GeomVertexWriter(vertex_data, 'vertex')
-        # vertex_writer.set_row(0)
-        # vertex_writer.set_data3f(LVecBase3f(*self.position.value))        
-        # vertex_writer.set_row(1)
-        # vertex_writer.set_data3f(LVecBase3f(*(self.position.value+1000*self.velocity.value)))
+        self.landed = self.attractor.R.to(u.m).value + 1 > np.linalg.norm(self.position.to(u.m).value)
 
     def getHUDInfo(self):
         return f"{self.name}\n"+\
             f" ThrustMax: {self.thrust_max:.2f}\n"+ \
             f" Alt: {formatDistance(np.linalg.norm(self.position))}\n"+ \
-            f" Vel: {formatVelocity(np.linalg.norm(self.velocity))}\n"+ \
-            f" Apo: {formatDistance(self.orbit.apoapsis)}\n" + \
-            f" Per: {formatDistance(self.orbit.periapsis)}\n"
+            f" Vel: {formatVelocity(np.linalg.norm(self.velocity))}\n"
     
     def setDeltaV(self, dv):
         self.deltaV = dv
