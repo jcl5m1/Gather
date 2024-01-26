@@ -347,8 +347,6 @@ class MyApp(ShowBase):
 
 
     def computeInterceptManeuver2(self):
-        self.ship.orbit.copyNP()
-
         orbit1 = self.ship.orbit
         orbit2 = self.ship2.orbit
         
@@ -378,18 +376,22 @@ class MyApp(ShowBase):
         r1, v1, r2, v2, v1_sol, v2_sol, dv1, dv2 = info[0]
         t_burn1 = (dv1/accel_max).to(u.s)
         t_burn2 = (dv2/accel_max).to(u.s)
+
+
         if t_burn1/2 + t_burn2/2 > t_flight:
             oe.debug(f"warning: t_burn1+t_burn2 > t_flight - not enough thrust to execute this trajectory!!!!!!!!")
-            self.clearManeuverVisualization()
             return
-
         ts_stop = time.time()
-        oe.debug(f"Compute Time elapsed: {ts_stop-ts_start:.2f}")
+        oe.debug(f"Trajectory optimzation Time: {ts_stop-ts_start:.2f}")
 
-        self.updateIntercept(r1,v1,r2,v2)
+#        self.updateIntercept(r1,v1,r2,v2)
+        ts_start = time.time()
 
         r,v = self.ship.orbit.computePseudoManouverTrajectory(r1,v1,r2,v2,v1_sol, v2_sol,
                                                                t_flight, color=self.ship.color, t_start=t_start, thickness=5)
+        ts_stop = time.time()
+        oe.debug(f"PseudoManouver geometery Time: {ts_stop-ts_start:.2f}")
+
         if self.ship.orbit.collision:
             oe.debug("orbit causes collision!!!")
     
@@ -423,13 +425,13 @@ class MyApp(ShowBase):
         if key == 'x':
             try:
                 sem.acquire()
+                self.clearManeuverVisualization()
                 r,v = self.ship.orbit.randomize(3*oe.EARTH_RADIUS, 5*u.km/u.s, self.simulationTime)
                 rs = ",".join([f"{i}" for i in r.to(u.km).value])
                 vs = ",".join([f"{i}" for i in v.to(u.km/u.s).value])
                 oe.debug(f"randomized orbit: [{rs}]*u.km, [{vs}]*u.km/u.s,")
                 self.ship.landed = False
                 self.ship.landedPrev = False
-                self.clearManeuverVisualization()
                 self.computeInterceptManeuver2()
             finally:
                 sem.release()

@@ -267,14 +267,16 @@ class BodyOrbit:
                 debug(f"{e}  break ------------------------------------------------------------")
                 break
 
-
+        
         if self.np is not None:
             self.np.removeNode()
+        if len(pos) == 0:
+            return
         path = primatives.createLineList(pos, close=False, color=self.color)
         self.np = NodePath(path)
         self.np.reparentTo(self.render)
 
-    def randomize(self, dist, vel, time=0*u.s, segments=100):
+    def randomize(self, dist, vel, time=0*u.s, segments=50):
 
         # random 3d unit vector
         theta = np.random.uniform(0,2*np.pi)
@@ -392,10 +394,12 @@ class BodyOrbit:
         self.collision = False
         self.trajectory_state = []
         t_duration = t_burn1/2+ t_flight + t_burn2/2
-        self.trajectory_params = [r1, v1, r2, v2, v1_sol, v2_sol, t_flight, t_start*1, t_duration]
+        self.trajectory_params = [r1, v1, r2, v2, v1_sol, v2_sol, t_flight, t_start*1, t_burn1, t_burn2]
+        self.orbit_initial = BodyOrbit(self.body, r1, v1,self.render,self.attractor)
+        self.orbit_transfer = BodyOrbit(self.body, r1, v1_sol, self.render,self.attractor) 
+        self.orbit_final = BodyOrbit(self.body, r2, v2,self.render,self.attractor)
 
         # use propagate function        
-        pos = []
         self.trajectory_state = []
         times = np.linspace(t_start, t_start + t_duration, segments)
         for t in times:
@@ -411,6 +415,9 @@ class BodyOrbit:
                     self.trajectory_state.append((tc, rc*u.km, vc))
                     break
             self.trajectory_state.append((t,r,v))
+
+        pos = []
+        for t,r,v in self.trajectory_state:
             pos.append(r.to(u.km).value)
 
         path = primatives.createLineList(pos, False, color, thickness)
@@ -422,18 +429,14 @@ class BodyOrbit:
         return self.trajectory_state[-1][1], self.trajectory_state[-1][2]
     
     def propagateManeuverTrajectory(self, t):
-        r1, v1, r2, v2, v1_sol, v2_sol, t_flight, t_start, t_duration = self.trajectory_params
+        r1, v1, r2, v2, v1_sol, v2_sol, t_flight, t_start, t_burn1, t_burn2 = self.trajectory_params
         ts = t-t_start
-        dv1 = v1_sol - v1
-        dv2 = v2_sol - v2
-        accel_max = self.body.thrust_max/self.body.mass
-        t_burn1 = (np.linalg.norm(dv1)/accel_max).to(u.s)
-        t_burn2 = (np.linalg.norm(dv2)/accel_max).to(u.s)
+        # dv1 = v1_sol - v1
+        # dv2 = v2_sol - v2
+        # accel_max = self.body.thrust_max/self.body.mass
+        # t_burn1 = (np.linalg.norm(dv1)/accel_max).to(u.s)
+        # t_burn2 = (np.linalg.norm(dv2)/accel_max).to(u.s)
 
-
-        orbit_initial = BodyOrbit(self.body, r1, v1,self.render,self.attractor)
-        orbit_transfer = BodyOrbit(self.body, r1, v1_sol, self.render,self.attractor) 
-        orbit_final = BodyOrbit(self.body, r2, v2,self.render,self.attractor)
 
         t_burn1_start = 0*u.s
         t_burn1_stop = 0*u.s + t_burn1
@@ -443,32 +446,32 @@ class BodyOrbit:
             if ts < t_burn1_stop:  
                 # (0,1)
                 s = (ts-t_burn1_start)/(t_burn1_stop-t_burn1_start)
-                ra,va = orbit_initial.propagate((s-1)*t_burn1/2)
-                rb,vb = orbit_transfer.propagate(s*t_burn1/2)
+                ra,va = self.orbit_initial.propagate((s-1)*t_burn1/2)
+                rb,vb = self.orbit_transfer.propagate(s*t_burn1/2)
                 rc = ra*(1-s) + rb*s
                 vc = va*(1-s) + vb*s
                 return rc, vc
             elif ts < t_burn2_start:
                 #  (t_burn1/2, t_flight - t_burn2/2)
                 s = ts-t_burn1/2
-                return orbit_transfer.propagate(s)
+                return self.orbit_transfer.propagate(s)
             elif ts < t_burn2_stop:
                 # (0,1)
                 s = (ts - t_burn2_start)/(t_burn2_stop-t_burn2_start)
-                ra,va = orbit_transfer.propagate(t_flight + (s-1)*t_burn2/2)
-                rb,vb = orbit_final.propagate(s*t_burn2/2)
+                ra,va = self.orbit_transfer.propagate(t_flight + (s-1)*t_burn2/2)
+                rb,vb = self.orbit_final.propagate(s*t_burn2/2)
                 rc = ra*(1-s) + rb*s
                 vc = va*(1-s) + vb*s
                 return rc, vc
             else:
                 # t_burn2/2 ->
                 s = ts-t_burn2_stop+t_burn2/2
-                return orbit_final.propagate(s)
+                return self.orbit_final.propagate(s)
         except u.core.UnitConversionError as e:
             debug(f"{e} ------------------------------------------------------------")
             s = (ts-t_burn1_start)/(t_burn1_stop-t_burn1_start)
-            ra,va = orbit_initial.propagate((s-1)*t_burn1/2)
-            rb,vb = orbit_transfer.propagate(s*t_burn1/2)
+            ra,va = self.orbit_initial.propagate((s-1)*t_burn1/2)
+            rb,vb = self.orbit_transfer.propagate(s*t_burn1/2)
             debug(f"t, ra,va: {s}, {ra}, {va}")
             debug(f"t, rb,vb: {s}, {rb}, {vb}")
 
