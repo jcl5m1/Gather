@@ -257,7 +257,7 @@ def createCube(size, color=LVecBase4f(1, 1, 1, 1)):
     return node
 
 
-def createIcosphere(size, subdivisions):
+def createIcosphere(size, subdivisions, color):
     # Golden ratio
     phi = (1 + math.sqrt(5)) / 2
 
@@ -358,6 +358,8 @@ def createIcosphere(size, subdivisions):
 
     node = GeomNode("icosphere")
     node.addGeom(geom)
+
+    #node.setAttrib(ColorAttrib.makeFlat(color))
 
     return node
 

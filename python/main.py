@@ -151,27 +151,39 @@ class MyApp(ShowBase):
         self.cameraWheelSensitivity = 0.92
         self.mouseButtonState = [False, False, False]
 
-        earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 5)
-        earth_np = NodePath(earth)
-        earth_np.reparentTo(self.render)
-        earth_np.setRenderModeWireframe()
+        self.cameraTarget = 0
+        self.paused = False
 
         self.orbitEngine = oe.OrbitEngine(self.render)
 
-        self.ship = oe.Body("Ship",[1*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, [0,0,0]*u.km/u.s, 
-                            oe.BodyType.VESSEL, self.render, color=LVecBase4f(0,1,0,1))
+        self.planet = oe.Body("Earth", locked=True)
+        self.planet.createGeometry(type=oe.Body.Type.PLANET, render=self.render,size=oe.EARTH_RADIUS)
+        # earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 5)
+        # earth_np = NodePath(earth)
+        # earth_np.reparentTo(self.render)
+        # earth_np.setRenderModeWireframe()
 
-        self.orbitEngine.addBody(self.ship)
-        self.ship.thrust_max = THRUST_MAX*1
+        self.orbitEngine.addBody(self.planet)
 
-        self.cameraFocus = 0
-        self.paused = False
 
-        self.ship2 = oe.Body("Ship2",
-                            [10000, 0, 0]*u.km, 
-                            [0,7,0]*u.km/u.s, oe.BodyType.VESSEL, self.render, color=LVecBase4f(1,0,0,1))
-        self.orbitEngine.addBody(self.ship2)
-        self.ship2.thrust_max = THRUST_MAX*1
+        # if type == BodyType.VESSEL:
+        #     ship = primatives.createPyramid(size, color)
+        #     self.np = NodePath(ship)
+        #     self.np.reparentTo(render)
+        #     self.np.setPos(LVecBase3f(*pos.value))
+        #     self.np.setHpr(0,-90,0)
+
+
+        # self.ship = oe.Body("Ship",[1*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, [0,0,0]*u.km/u.s, 
+        #                     oe.BodyType.VESSEL, self.render, color=LVecBase4f(0,1,0,1))
+        # self.orbitEngine.addBody(self.ship)
+        # self.ship.thrust_max = THRUST_MAX*1
+
+        # self.ship2 = oe.Body("Ship2",
+        #                     [10000, 0, 0]*u.km, 
+        #                     [0,7,0]*u.km/u.s, oe.BodyType.VESSEL, self.render, color=LVecBase4f(1,0,0,1))
+        # self.orbitEngine.addBody(self.ship2)
+        # self.ship2.thrust_max = THRUST_MAX*1
 
         axis = primatives.createAxis(oe.EARTH_RADIUS.value/2)
         axis_np = NodePath(axis)
@@ -351,7 +363,7 @@ class MyApp(ShowBase):
         self.ship.orbit.clearManeuverVisualizations()
 
     def changeCameraFocus(self,step=1):
-        self.cameraFocus = (self.cameraFocus+step)%3
+        self.cameraTarget = (self.cameraTarget+step)%3
 
     def handleKeyUp(self, key):
         self.keyState[key] = False
@@ -436,52 +448,52 @@ class MyApp(ShowBase):
             self.hitpoint_np.setPos(self.hitpointPos)
             self.hitpoint_np.show()
 
-        thrust_vector = np.array([0.,0.,0.])
-        if self.keyState.get('w', True):
-            thrust_vector += np.array([0,1.,0])
-        if self.keyState.get('s', True):
-            thrust_vector -= np.array([0,1.,0])
-        if self.keyState.get('a', True):
-            thrust_vector -= np.array([1.,0,0])
-        if self.keyState.get('d', True):
-            thrust_vector += np.array([1.,0,0])
-        if self.keyState.get('q', True):
-            thrust_vector -= np.array([0,0,1.])
-        if self.keyState.get('e', True):
-            thrust_vector += np.array([0,0,1.])
+        # thrust_vector = np.array([0.,0.,0.])
+        # if self.keyState.get('w', True):
+        #     thrust_vector += np.array([0,1.,0])
+        # if self.keyState.get('s', True):
+        #     thrust_vector -= np.array([0,1.,0])
+        # if self.keyState.get('a', True):
+        #     thrust_vector -= np.array([1.,0,0])
+        # if self.keyState.get('d', True):
+        #     thrust_vector += np.array([1.,0,0])
+        # if self.keyState.get('q', True):
+        #     thrust_vector -= np.array([0,0,1.])
+        # if self.keyState.get('e', True):
+        #     thrust_vector += np.array([0,0,1.])
 
-        #target retrograde
-        target_prograde = self.ship2.position-self.ship.position
-        target_velocity = self.ship.velocity-self.ship2.velocity
-        target_prograde_mag = np.linalg.norm(target_prograde)
-        target_velocity_mag = np.linalg.norm(target_velocity)
-        ortho_velocity = 0 * u.m/u.s
-        if target_prograde_mag.value > epsilon and target_velocity_mag.value > epsilon:
-            target_prograde_vector = np.squeeze(target_prograde/target_prograde_mag)
-            target_velocity_vector = np.squeeze(target_velocity/target_velocity_mag)
-            orthogonal_velocity_vector = target_velocity_vector - np.dot(target_velocity_vector, target_prograde_vector)*target_prograde_vector
-            orthogonal_velocity_vector = orthogonal_velocity_vector/np.linalg.norm(orthogonal_velocity_vector)
-            ortho_velocity = np.linalg.norm(target_velocity*np.dot(target_velocity_vector, orthogonal_velocity_vector))
+        # #target retrograde
+        # target_prograde = self.ship2.position-self.ship.position
+        # target_velocity = self.ship.velocity-self.ship2.velocity
+        # target_prograde_mag = np.linalg.norm(target_prograde)
+        # target_velocity_mag = np.linalg.norm(target_velocity)
+        # ortho_velocity = 0 * u.m/u.s
+        # if target_prograde_mag.value > epsilon and target_velocity_mag.value > epsilon:
+        #     target_prograde_vector = np.squeeze(target_prograde/target_prograde_mag)
+        #     target_velocity_vector = np.squeeze(target_velocity/target_velocity_mag)
+        #     orthogonal_velocity_vector = target_velocity_vector - np.dot(target_velocity_vector, target_prograde_vector)*target_prograde_vector
+        #     orthogonal_velocity_vector = orthogonal_velocity_vector/np.linalg.norm(orthogonal_velocity_vector)
+        #     ortho_velocity = np.linalg.norm(target_velocity*np.dot(target_velocity_vector, orthogonal_velocity_vector))
 
-            # cancel non-target prograde velocity
-            if self.keyState.get('t', True):
-                thrust_vector -= orthogonal_velocity_vector
+        #     # cancel non-target prograde velocity
+        #     if self.keyState.get('t', True):
+        #         thrust_vector -= orthogonal_velocity_vector
 
-            # retro-target velocity
-            if self.keyState.get('r', True):                
-                thrust_vector -= target_velocity_vector
-            #target prograde
-            if self.keyState.get('f', True):
-                thrust_vector += target_prograde_vector
+        #     # retro-target velocity
+        #     if self.keyState.get('r', True):                
+        #         thrust_vector -= target_velocity_vector
+        #     #target prograde
+        #     if self.keyState.get('f', True):
+        #         thrust_vector += target_prograde_vector
 
-        if np.linalg.norm(thrust_vector) > epsilon:
-            thrust_vector = thrust_vector/np.linalg.norm(thrust_vector)
-            # thrust is applied compute updated intercept
-            if self.intercept is None:
-                self.findApproximateClosestApproach()
-            self.incrementallyFindClosestApproach()
+        # if np.linalg.norm(thrust_vector) > epsilon:
+        #     thrust_vector = thrust_vector/np.linalg.norm(thrust_vector)
+        #     # thrust is applied compute updated intercept
+        #     if self.intercept is None:
+        #         self.findApproximateClosestApproach()
+        #     self.incrementallyFindClosestApproach()
 
-        thrust = self.ship.thrust_max*thrust_vector
+        # thrust = self.ship.thrust_max*thrust_vector
 #        self.ship.setThrust(thrust) 
 
         self.orbitEngine.setScale(self.camera.getPos()*u.km)
@@ -497,10 +509,6 @@ class MyApp(ShowBase):
         text = f"Time: {oe.formatTime(self.simulationTime)}"
         text += " (paused)\n" if self.paused else f" (x{self.timeMultiplier:.0e})\n"
         text += self.orbitEngine.getHUDInfo()+"\n"
-        text += f"Target:\n"+\
-            f"  Dist:{oe.formatDistance(np.linalg.norm(self.ship.position - self.ship2.position))}\n"+\
-            f"  dV:{oe.formatVelocity(np.linalg.norm(self.ship.velocity - self.ship2.velocity))}\n"+\
-            f"  orthoV:{oe.formatVelocity(ortho_velocity)}\n"
 
         self.hudText.setText(text)
 
@@ -534,16 +542,16 @@ class MyApp(ShowBase):
         y = self.cameraDist.value * math.sin(self.cameraRot[0]) * math.sin(self.cameraRot[1])
         z = self.cameraDist.value * math.cos(self.cameraRot[0])
 
-        if self.cameraFocus == 0:
+        if self.cameraTarget == 0:
             self.camera.setPos(x,y,z)
             self.cameraDistMin = oe.EARTH_RADIUS*1.1
             self.camera.lookAt(0, 0, 0)
-        elif self.cameraFocus == 1:
+        elif self.cameraTarget == 1:
             self.cameraDistMin = 10*u.m
             target_pos = self.ship.position.value
             self.camera.setPos(x+target_pos[0],y+target_pos[1],z+target_pos[2])
             self.camera.lookAt(*target_pos)
-        elif self.cameraFocus == 2:
+        elif self.cameraTarget == 2:
             self.cameraDistMin = 10*u.m
             target_pos = self.ship2.position.value
             self.camera.setPos(x+target_pos[0],y+target_pos[1],z+target_pos[2])

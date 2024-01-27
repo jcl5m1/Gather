@@ -25,8 +25,12 @@ import time
 from scipy.integrate import ode
 
 EARTH_RADIUS = const.R_earth.to(u.km)
-
-epsilon = np.finfo(float).eps
+T_ZERO = 0*u.s
+R_ZERO = [0,0,0]*u.km
+V_ZERO = [0,0,0]*u.km/u.s
+ROT_R_ZERO = [0,0,0]*u.rad
+ROT_V_ZERO = [0,0,0]*u.rad/u.s
+EPSILON = np.finfo(float).eps
 
 def debug(msg):
     #print call stack
@@ -242,7 +246,7 @@ def compute_totaldv(x, t_start, accel_max, orbit1, orbit2, time_weight, info):
         dv1_prev = 0*u.m/u.s
 
     #compute effective start position using last v1_sol last v1 and accel_max
-    if accel_max.value > epsilon:
+    if accel_max.value > EPSILON:
         t_burn1 = (dv1_prev/accel_max).to(u.s)
     else:
         t_burn1 = 0*u.s
@@ -260,9 +264,6 @@ def compute_totaldv(x, t_start, accel_max, orbit1, orbit2, time_weight, info):
     info[0] = [r1, v1, r2, v2, v1_sol, v2_sol, dv1, dv2]
     return (dv1+dv2).value + time_weight*t_flight.value
 
-class BodyType(Enum):
-    PLANET = 0
-    VESSEL = 1
 
 class OrbitEngine:
     def __init__(self, renderer):
@@ -310,7 +311,7 @@ class BodyOrbit:
         self.startTime = time*1  #breaks the reference to the simulator time, which otherwise would causes the update to not move
         h = np.cross(r0, v0)
 
-        if np.linalg.norm(h).value > epsilon:
+        if np.linalg.norm(h).value > EPSILON:
             self.kepler = Orbit.from_vectors(attractor, r0, v0)
             if self.kepler.r_a < 0 or self.kepler.r_p < 0:
                 debug(f"invalid kepler orbit {self.kepler.r_a}, {self.kepler.r_p}")
@@ -469,7 +470,7 @@ class BodyOrbit:
     #     return r*u.km, v*u.km/u.s
 
     def checkCollision(self, r, r_prev=None):
-        if self.attractor.R.to(u.km).value + epsilon > np.linalg.norm(r).to(u.km).value:
+        if self.attractor.R.to(u.km).value + EPSILON > np.linalg.norm(r).to(u.km).value:
             self.collision = True
             if r_prev is None:
                 self.setCollisionPoint(r.to(u.km).value)
@@ -625,47 +626,71 @@ class BodyOrbit:
             debug(f"{e} ------------------------------------------------------------")
             debug(f"t, r0,v0: {t}, {self.r0.value}*u.km,  {self.v0.value}*u.km/u.s")
         
+class TrajectorySegment:
+    class Type(Enum):
+        GROUNDED = 0
+        THRUST = 1
+        BALLISTIC = 2
+ 
+    def __init__(self, body=None, attractor=None, r0=R_ZERO, v0=V_ZERO, r1=R_ZERO, v1=V_ZERO, t0=T_ZERO, t1=T_ZERO, type=Type.BALLISTIC):
+        self.type = type
+        self.body = body
+        self.attractor = attractor
+
+        # entry state
+        self.r0 = r0
+        self.v0 = v0
+        self.t0 = t0
+
+        # exit state
+        self.r1 = r1
+        self.v1 = v1
+        self.t1 = t1
+
+    def createGeometry(self, lineTHickness=2, color=LVecBase4f(0,1,0,1)):
+        self.color = color
+        self.lineTHickness = lineTHickness
+
 class Body:
-    def __init__(self, name, r0, v0, type, render,attractor=Earth, size=0.01, color=LVecBase4f(0,1,0,1)):
+
+    class Type(Enum):
+        PLANET = 0
+        VESSEL = 1
+
+    def __init__(self, name="Unamed", r0=R_ZERO, v0=V_ZERO, rr0=ROT_R_ZERO, rv0=ROT_V_ZERO, t_start=T_ZERO, attractor=None, locked=False):
         self.name = name
         self.mass = 1*u.kg
+        self.locked = False
         self.type = type
-        self.color = color
         self.attractor = attractor
-        self.thrust_max = 0*u.kg*u.m/u.s/u.s
-        self.thrust = [0,0,0]*u.kg*u.m/u.s/u.s
-        self.deltaV = [0,0,0]*u.m/u.s
-        self.position = np.zeros((1,3))*u.km
-        self.rotation = Rotation.identity()
-        self.velocity = np.zeros((1,3))*u.m/u.s
-        self.rotation_velocity = Rotation.identity()
-        self.acceleration = np.zeros((1,3))
-        self.rotation_acceleration = Rotation.identity()
-        color2 = color/2
-        self.orbit = BodyOrbit(self, r0, v0, 
-                               render, attractor=attractor, 
-                               color=color2, segments=100)
+        # self.thrust_max = 0*u.kg*u.m/u.s/u.s
+        # self.thrust = [0,0,0]*u.kg*u.m/u.s/u.s
+        self.position = r0
+        self.velocity = v0
+        self.rotation = rr0
+        self.rotation_velocity = rv0
+        self.target = None
+ 
+        # self.orbit = BodyOrbit(self, r0, v0, 
+        #                        render, attractor=attractor, 
+        #                        color=color2, segments=100)
 
-        pos, vel = self.orbit.propagate()
-        self.landed = attractor.R.to(u.m).value + 1 > np.linalg.norm(pos.to(u.m).value)
-        self.landedPrev = False
+        # pos, vel = self.orbit.propagate()
+        # self.landed = attractor.R.to(u.m).value + 1 > np.linalg.norm(pos.to(u.m).value)
+        # self.landedPrev = False
 
-        if type == BodyType.VESSEL:
-            ship = primatives.createPyramid(size, color)
-
-            self.np = NodePath(ship)
-            self.np.reparentTo(render)
-            self.np.setPos(LVecBase3f(*pos.value))
-            self.np.setHpr(0,-90,0)
 
         # velocity line
         # vel_line = primatives.createLine(LVecBase3f(*pos.value), LVecBase3f(*(pos.value+1000*vel.value)), 2, color)
         # self.vel_line_np = NodePath(vel_line)
         # self.vel_line_np.reparentTo(renderer)
 
+    def setTarget(self, target):
+        self.target = target
+
     def setScale(self,cameraPos):
         self.np.setScale(np.linalg.norm(self.position-cameraPos).to(u.km).value)
-        self.orbit.setScale(cameraPos)
+        #self.orbit.setScale(cameraPos)
         # self.orbit.apoapsis_np.setScale(np.linalg.norm(self.orbit.apoapsis_np.getPos()-cameraPos))
         # self.orbit.periapsis_np.setScale(np.linalg.norm(self.orbit.periapsis_np.getPos()-cameraPos))
 
@@ -679,32 +704,41 @@ class Body:
         #     vel = vel + self.deltaV
         #     self.orbit.set(self.attractor,pos, vel, time)
         # else:
-        if not self.landed: # flying
-            pos, vel = self.orbit.propagate(time)
-            self.position = pos.to(u.km)
-            self.velocity = vel.to(u.m/u.s)
-        elif not self.landedPrev:  # just landed
-            pos, vel = self.orbit.propagate(time)
-            #normlize pos to radius of attractor
-            pos = self.attractor.R*pos/np.linalg.norm(pos)
-            #velocity should match the surface rotation of attractor
-            vel = [0,0,0]*u.m/u.s
-            self.orbit.set(self.attractor,pos, vel, time, segments=0)
-            self.position = pos.to(u.km)
-            self.velocity = vel.to(u.m/u.s)
 
-        self.np.setPos(LVecBase3f(*self.position.value))
-        self.landedPrev = self.landed
+        if self.locked:
+            return
 
-        #1 meter tolerance for landing
-        self.landed = self.attractor.R.to(u.m).value + 1 > np.linalg.norm(self.position.to(u.m).value)
+        # if not self.landed: # flying
+        #     pos, vel = self.orbit.propagate(time)
+        #     self.position = pos.to(u.km)
+        #     self.velocity = vel.to(u.m/u.s)
+        # elif not self.landedPrev:  # just landed
+        #     pos, vel = self.orbit.propagate(time)
+        #     #normlize pos to radius of attractor
+        #     pos = self.attractor.R*pos/np.linalg.norm(pos)
+        #     #velocity should match the surface rotation of attractor
+        #     vel = [0,0,0]*u.m/u.s
+        #     self.orbit.set(self.attractor,pos, vel, time, segments=0)
+        #     self.position = pos.to(u.km)
+        #     self.velocity = vel.to(u.m/u.s)
+
+        # self.np.setPos(LVecBase3f(*self.position.value))
+        # self.landedPrev = self.landed
+
+        # #1 meter tolerance for landing
+        # self.landed = self.attractor.R.to(u.m).value + 1 > np.linalg.norm(self.position.to(u.m).value)
 
     def getHUDInfo(self):
-        return f"{self.name}\n"+\
-            f" ThrustMax: {self.thrust_max:.2f}\n"+ \
-            f" Alt: {formatDistance(np.linalg.norm(self.position))}\n"+ \
-            f" Vel: {formatVelocity(np.linalg.norm(self.velocity))}\n"
+        info = f"{self.name}"+\
+            f"  Alt: {formatDistance(np.linalg.norm(self.position))}"+ \
+            f"  Vel: {formatVelocity(np.linalg.norm(self.velocity))}\n"
     
+        if self.target is not None:
+            info += f"  Target: {self.target.name}"+\
+                f"  Dist:{formatDistance(np.linalg.norm(self.position - self.target.position))}" + \
+                f"  dV:{formatVelocity(np.linalg.norm(self.velocity - self.target.velocity))}\n"
+        return info
+
     def setDeltaV(self, dv):
         self.deltaV = dv
 
@@ -798,3 +832,25 @@ class Body:
         self.landedPrev = self.landed
         return r, v
 
+
+    def createGeometry(self, render, type=Type.VESSEL, size=0.01*u.km, color=LVecBase4f(1,1,1,1)):
+        self.color = color
+        self.render = render
+        self.size = size
+        if type == Body.Type.VESSEL:
+            data = primatives.createPyramid(size.to(u.km).value, color)
+        if type == Body.Type.PLANET:
+            data = primatives.createIcosphere(size.to(u.km).value, 5, color)
+        self.np = NodePath(data)
+        self.np.reparentTo(render)
+
+
+#        self.np.setPos(LVecBase3f(*pos.value))
+
+        #     earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 5)
+        #     earth_np = NodePath(earth)
+        #     earth_np.reparentTo(self.render)
+        #     earth_np.setRenderModeWireframe()
+
+        # self.np = NodePath(primatives.createCube(size, color=self.color))
+        # self.np.reparentTo(render)
