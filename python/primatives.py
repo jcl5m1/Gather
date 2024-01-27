@@ -82,7 +82,6 @@ class Graph:
 
         self.vertLabels = OnscreenText(text='[info]', pos=(0.85, -0.95), scale=0.04, fg=(1, 1, 1, 1), align=TextNode.ALeft, font=font)
 
-
         self.np.reparentTo(renderer)
 
 
@@ -261,6 +260,18 @@ def createIcosphere(size, subdivisions, color):
     # Golden ratio
     phi = (1 + math.sqrt(5)) / 2
 
+    angle = math.atan2(1,phi)
+    def rotate_vertices(angle, vertices):
+        # Rotate all vertices by the negative of the angle
+        rotated_vertices = []
+        for vertex in vertices:
+            x = vertex[0]
+            y = vertex[1] * math.cos(angle) - vertex[2] * math.sin(angle)
+            z = vertex[1] * math.sin(angle) + vertex[2] * math.cos(angle)
+            rotated_vertices.append((x, y, z))
+
+        return rotated_vertices
+
     # Create icosahedron vertices
     vertices = [
         (-1,  phi,  0),
@@ -276,6 +287,8 @@ def createIcosphere(size, subdivisions, color):
         (-phi,  0, -1),
         (-phi,  0,  1)
     ]
+
+    vertices = rotate_vertices(angle,vertices)
 
     faces = [
         (0, 11, 5),

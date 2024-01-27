@@ -7,7 +7,7 @@ from poliastro import iod
 from scipy.optimize import fsolve
 from scipy.spatial.transform import Rotation
 import primatives
-from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode
+from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode, LQuaternion, Vec3
 from enum import Enum
 import math
 from scipy.optimize import minimize
@@ -16,7 +16,7 @@ from poliastro.bodies import Earth, Mars, Sun  # Or your desired bodies
 from poliastro.maneuver import Maneuver
 from poliastro.twobody import Orbit
 import poliastro as pa
-
+import sys
 import matplotlib.pyplot as plt
 import numpy as np  # For array manipulation
 import os
@@ -26,6 +26,7 @@ from scipy.integrate import ode
 
 EARTH_RADIUS = const.R_earth.to(u.km)
 T_ZERO = 0*u.s
+T_INFINITY = sys.float_info.max*u.s
 R_ZERO = [0,0,0]*u.km
 V_ZERO = [0,0,0]*u.km/u.s
 ROT_R_ZERO = [0,0,0]*u.rad
@@ -628,11 +629,23 @@ class BodyOrbit:
         
 class TrajectorySegment:
     class Type(Enum):
-        GROUNDED = 0
-        THRUST = 1
-        BALLISTIC = 2
+        POSITION_LOCKED = 0
+        LANDED = 1
+        THRUST = 2
+        BALLISTIC = 3
  
-    def __init__(self, body=None, attractor=None, r0=R_ZERO, v0=V_ZERO, r1=R_ZERO, v1=V_ZERO, t0=T_ZERO, t1=T_ZERO, type=Type.BALLISTIC):
+    def __init__(self, 
+                 body=None, 
+                 attractor=None, 
+                 r0=R_ZERO, 
+                 v0=V_ZERO, 
+                 rr0=ROT_R_ZERO,
+                 rv0=ROT_V_ZERO,
+                 t0=T_ZERO, 
+                 r1=R_ZERO, 
+                 v1=V_ZERO, 
+                 t1=T_INFINITY,
+                 type=Type.POSITION_LOCKED):
         self.type = type
         self.body = body
         self.attractor = attractor
@@ -641,35 +654,85 @@ class TrajectorySegment:
         self.r0 = r0
         self.v0 = v0
         self.t0 = t0
+        self.rr0=rr0
+        self.rv0=rv0
 
         # exit state
         self.r1 = r1
         self.v1 = v1
         self.t1 = t1
+        self.rr1=rr0
+        self.rv1=rv0
 
     def createGeometry(self, lineTHickness=2, color=LVecBase4f(0,1,0,1)):
         self.color = color
         self.lineTHickness = lineTHickness
 
-class Body:
+    def propagate(self, t=0*u.s):
+        if t < self.t0:
+            return None
+        
+        ts = t.to(u.s)-self.t0
+        if ts > self.t1:
+            return None
 
+
+        #propagate rotation
+        axis_quat = LQuaternion()
+        axis_quat.setHpr(Vec3(*self.rr0.value))
+        axis_vec = Vec3(0,0,1)
+        axis_vec = axis_quat.xform(axis_vec)
+
+        rotation_quat = LQuaternion()
+        rotation_angle = self.rv0*ts
+        rotation_quat.setFromAxisAngle(rotation_angle[0].value, axis_vec)
+        axis_quat *= rotation_quat
+
+        if self.type == TrajectorySegment.Type.POSITION_LOCKED:
+            return self.r0, self.v0, axis_quat.getHpr()*u.deg
+
+        # if self.landed:
+        #     return self.position, self.velocity
+
+        # return self.orbit.propagate(t)
+        return self.position, self.velocity, None
+
+class Body:
     class Type(Enum):
         PLANET = 0
         VESSEL = 1
 
-    def __init__(self, name="Unamed", r0=R_ZERO, v0=V_ZERO, rr0=ROT_R_ZERO, rv0=ROT_V_ZERO, t_start=T_ZERO, attractor=None, locked=False):
+    def __init__(self, 
+                 type=Type.VESSEL,
+                 name="Unamed", 
+                 r0=R_ZERO, 
+                 v0=V_ZERO, 
+                 rr0=ROT_R_ZERO, 
+                 rv0=ROT_V_ZERO, 
+                 t_start=T_ZERO, 
+                 parent=None, 
+                 lockedPosition=False,
+                 fixedScale=False):
         self.name = name
         self.mass = 1*u.kg
-        self.locked = False
+        self.lockedPosition = lockedPosition
+        self.fixedScale = fixedScale
         self.type = type
-        self.attractor = attractor
+        self.parent = parent
         # self.thrust_max = 0*u.kg*u.m/u.s/u.s
         # self.thrust = [0,0,0]*u.kg*u.m/u.s/u.s
+        self.trajectorySegments = []
         self.position = r0
         self.velocity = v0
         self.rotation = rr0
-        self.rotation_velocity = rv0
         self.target = None
+        self.np = None
+
+        if lockedPosition:
+            seg = TrajectorySegment(self,parent,r0,v0,rr0,rv0,t_start,type=TrajectorySegment.Type.POSITION_LOCKED)
+            self.trajectorySegments.append(seg)
+        else:
+            pass
  
         # self.orbit = BodyOrbit(self, r0, v0, 
         #                        render, attractor=attractor, 
@@ -689,10 +752,41 @@ class Body:
         self.target = target
 
     def setScale(self,cameraPos):
+        if self.np is None:
+            return
+        if self.fixedScale:
+            return
         self.np.setScale(np.linalg.norm(self.position-cameraPos).to(u.km).value)
+
         #self.orbit.setScale(cameraPos)
         # self.orbit.apoapsis_np.setScale(np.linalg.norm(self.orbit.apoapsis_np.getPos()-cameraPos))
         # self.orbit.periapsis_np.setScale(np.linalg.norm(self.orbit.periapsis_np.getPos()-cameraPos))
+
+    def propagate(self, t=0*u.s):
+        for seg in self.trajectorySegments:
+            res = seg.propagate(t)
+            if res is not None:
+                return res
+        # if self.lockedPosition:
+        #     #get axis of rotation
+        #     axis_quat = LQuaternion()
+        #     axis_quat.setHpr(Vec3(*self.rr0.value))
+
+        #     axis_vec = Vec3(0,0,1)
+        #     axis_vec = axis_quat.xform(axis_vec)
+
+        #     rotation_quat = LQuaternion()
+        #     rotation_angle = self.rv0*t.to(u.s)
+        #     rotation_quat.setFromAxisAngle(rotation_angle[0].value, axis_vec)
+        #     axis_quat *= rotation_quat
+        #     self.rotation = axis_quat.getHpr()*u.deg
+        #     return self.position, self.velocity, rotation_quat
+
+        # # if self.landed:
+        # #     return self.position, self.velocity
+
+        # # return self.orbit.propagate(t)
+        # return self.position, self.velocity
 
     def update(self, time, dt):
 
@@ -705,8 +799,18 @@ class Body:
         #     self.orbit.set(self.attractor,pos, vel, time)
         # else:
 
-        if self.locked:
+        self.position, self.velocity, self.rotation = self.propagate(time)
+
+        if self.np is None:
             return
+        self.np.setPos(LVecBase3f(*self.position.to(u.km).value))
+        self.np.setHpr(LVecBase3f(*self.rotation.to(u.deg).value))
+
+
+        # if self.lockedPosition:
+        #     # only update rotation
+        #     self.rotation = self.rotation + self.rotation_velocity*dt
+        #     return
 
         # if not self.landed: # flying
         #     pos, vel = self.orbit.propagate(time)
@@ -763,7 +867,7 @@ class Body:
         r = self.orbit.r_launch + self.orbit.v_launch*t_launch + 0.5*acc*t_launch**2
         self.landed = False
 
-        self.orbit.set(self.attractor, r, v, t_start + t_launch)
+        self.orbit.set(self.parent, r, v, t_start + t_launch)
         self.computeInterceptManeuver(t_start + t_launch, orbit2, t_launch=t_launch)
 
     def computeInterceptManeuver(self, t_start, orbit2, t_launch=0.0*u.s):
@@ -828,7 +932,7 @@ class Body:
         # vs = ",".join([f"{i}" for i in v.to(u.km/u.s).value])
         # debug(f"randomized orbit: [{rs}]*u.km, [{vs}]*u.km/u.s,")
 
-        self.landed = (dist.to(u.m).value < self.attractor.R.to(u.m).value +1)
+        self.landed = (dist.to(u.m).value < self.parent.R.to(u.m).value +1)
         self.landedPrev = self.landed
         return r, v
 
@@ -838,12 +942,29 @@ class Body:
         self.render = render
         self.size = size
         if type == Body.Type.VESSEL:
+            self.fixedScale = False
             data = primatives.createPyramid(size.to(u.km).value, color)
+            self.np = NodePath(data)
         if type == Body.Type.PLANET:
-            data = primatives.createIcosphere(size.to(u.km).value, 5, color)
-        self.np = NodePath(data)
+            self.fixedScale = True #at some point, should convert to icon
+            data = primatives.createIcosphere(size.to(u.km).value, 3, color)
+            # rotate so the icosphere is aligned with the z axis
+            self.np = NodePath(data)
+            self.np.setRenderModeWireframe()
+
+            #draw pole axis
+            axis_data = primatives.createLine(LVecBase3f(0,0,size.to(u.km).value*0.8), 
+                                              LVecBase3f(0,0,size.to(u.km).value*1.2), 2, color)
+            axis_np = NodePath(axis_data)
+            axis_np.reparentTo(self.np)
+
+
         self.np.reparentTo(render)
 
+        # earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 1, None)
+        # earth_np = NodePath(earth)
+        # earth_np.reparentTo(self.render)
+        # earth_np.setRenderModeWireframe()
 
 #        self.np.setPos(LVecBase3f(*pos.value))
 

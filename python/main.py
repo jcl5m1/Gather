@@ -131,7 +131,6 @@ class MyApp(ShowBase):
 
         #set background to black
         self.camLens.setFar(100000000000)
-#        self.camLens.setNear(0.00001)
         self.setBackgroundColor(0,0,0,1)
         self.disable_mouse()
 
@@ -145,25 +144,28 @@ class MyApp(ShowBase):
         self.win.requestProperties(props)
         aspect_ratio = WINDOW_WIDTH/WINDOW_HEIGHT
 
-        self.cameraDist = oe.EARTH_RADIUS*15
+        self.cameraDist = oe.EARTH_RADIUS*10
         self.cameraDistMin = oe.EARTH_RADIUS*2
-        self.cameraRot = [0,0,0]
-        self.cameraWheelSensitivity = 0.92
+        self.cameraRot = [1,.7,0]
+        self.cameraWheelSensitivity = 0.95
         self.mouseButtonState = [False, False, False]
 
         self.cameraTarget = 0
         self.paused = False
 
         self.orbitEngine = oe.OrbitEngine(self.render)
+        rr0_earth = [0, 22.5, 0]*u.deg
+        rv0_earth = [2, 0, 0]*u.deg/u.s
+        self.planet = oe.Body("Earth",rr0=rr0_earth, rv0=rv0_earth, lockedPosition=True)
+        self.planet.createGeometry(type=oe.Body.Type.PLANET, 
+                                   render=self.render,size=oe.EARTH_RADIUS)
+        self.orbitEngine.addBody(self.planet)
 
-        self.planet = oe.Body("Earth", locked=True)
-        self.planet.createGeometry(type=oe.Body.Type.PLANET, render=self.render,size=oe.EARTH_RADIUS)
-        # earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 5)
+        
+        # earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 1, None)
         # earth_np = NodePath(earth)
         # earth_np.reparentTo(self.render)
         # earth_np.setRenderModeWireframe()
-
-        self.orbitEngine.addBody(self.planet)
 
 
         # if type == BodyType.VESSEL:
@@ -212,15 +214,14 @@ class MyApp(ShowBase):
 
 
         # HUD / 2D content
-
         font = self.loader.loadFont(FONT_FILE)
         self.hudText = OnscreenText(text='[HUD info]', pos=(-0.95*aspect_ratio, -0.95), scale=0.04, fg=(1, 1, 1, 1), align=TextNode.ALeft, font=font)
 
 
-        self.graph = primatives.Graph(self.render2d, *graph_size, color=LVecBase4f(0.1,0.1,0.1,1), font=font)
-        self.graph.np.setPos(0.95-graph_size[0],0.0,-0.95)
+        # self.graph = primatives.Graph(self.render2d, *graph_size, color=LVecBase4f(0.1,0.1,0.1,1), font=font)
+        # self.graph.np.setPos(0.95-graph_size[0],0.0,-0.95)
 
-
+        #UI callbacks
         self.accept('mouse1', self.handleMouseLeftDown)
         self.accept('mouse1-up', self.handleMouseLeftUp)
         self.accept('mouse2', self.handleMouseMiddleDown)
