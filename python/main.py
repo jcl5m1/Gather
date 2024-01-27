@@ -28,7 +28,7 @@ from poliastro.iod import vallado
 import time
 import threading
 FONT_FILE = "Inconsolata-Regular.ttf"
-THRUST_MAG = 5.0*u.kg*u.m/u.s/u.s
+THRUST_MAX = 10.0*u.kg*u.m/u.s/u.s
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
 
@@ -50,8 +50,6 @@ def relativeEnergy(orbit1, orbit2, t):
     # account for graviatonal constant?
     # mass is the same so it cancels out
     return dist+dv*dv/2,(r1,v1,r2,v2)
-
-
 
 # find initial burn that minimizes dist+dv**2.... but hard to balance the two to get a total minimum dv
 def interceptManeuverOptimization(x, orbit1, orbit2, t_simulation,optimation_history):
@@ -80,7 +78,7 @@ def interceptManeuverOptimization2(x, orbit1, orbit2, t_simulation,optimation_hi
 
     # find the burn time based on dv and max thrust
     dv = np.linalg.norm([vx,vy,vz])*u.m/u.s
-    t_burn = (dv/(THRUST_MAG/orbit1.body.mass)).to(u.s)
+    t_burn = (dv/(THRUST_MAX/orbit1.body.mass)).to(u.s)
 
     # halfway through the burn is the effective position of the object in the future on the new orbit
     # this is from the cowell propagation simulation
@@ -113,7 +111,6 @@ def checkInterceptEnergy(x, orbit1, orbit2, intercept_state):
     intercept_state[0] = state
     return energy
 
-
 # don't optimize the starting time, just the time of flight
 def compute_totaldv(x, t_start, orbit_target, time_weight, r1, v1, info):
     t_flight = x[0]*u.s
@@ -127,41 +124,6 @@ def compute_totaldv(x, t_start, orbit_target, time_weight, r1, v1, info):
     info[0] = [r2, v2, v1_sol, v2_sol]
     total_dv = np.linalg.norm(v1 - v1_sol) + np.linalg.norm(v2 - v2_sol)
     return total_dv.value + time_weight*t_flight.value
-
-# optimize lambert accounting for max_acceleration
-def compute_totaldv2(x, t_start, accel_max, orbit1, orbit2, time_weight, info):
-    t_flight = x[0]*u.s
-
-    if info[0] is not None:
-        r1_prev, v1_prev, r2_prev, v2_prev, v1_sol_prev, v2_sol_prev, dv1_prev, dv2_prev = info[0]
-        # burn time ratio
-        # v1_prev_mag = np.linalg.norm(v1_prev)
-        # v1_sol_prev_mag = np.linalg.norm(v1_sol_prev)
-        # ratio = v1_prev_mag/(v1_prev_mag+v1_sol_prev_mag)
-    else:
-        dv1_prev = 0*u.m/u.s
-
-    #compute effective start position using last v1_sol last v1 and accel_max
-    if accel_max.value > epsilon:
-        t_burn1 = (dv1_prev/accel_max).to(u.s)
-        t_burn2 = (dv2_prev/accel_max).to(u.s)
-    else:
-        t_burn1 = 0*u.s
-        t_burn2 = 0*u.s
-        
-    r1, v1 = orbit1.propagate(t_start + t_burn1/2)
-    r2, v2 = orbit2.propagate(t_start + t_flight + t_burn1/2)
-
-    res = list(poliastro.iod.izzo.lambert(Earth.k, r1, r2, t_flight, M=0))
-    if len(res) == 0 or len(res) > 1:
-        raise RuntimeError(f"compute_totaldv labert produced {len(res)} solutions")
-
-    v1_sol, v2_sol = res[0]
-    dv1 = np.linalg.norm(v1 - v1_sol)
-    dv2 = np.linalg.norm(v2 - v2_sol)
-    info[0] = [r1, v1, r2, v2, v1_sol, v2_sol, dv1, dv2]
-    return (dv1+dv2).value + time_weight*t_flight.value
-
 
 class MyApp(ShowBase):
     def __init__(self):
@@ -189,20 +151,18 @@ class MyApp(ShowBase):
         self.cameraWheelSensitivity = 0.92
         self.mouseButtonState = [False, False, False]
 
-        earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 2)
+        earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 5)
         earth_np = NodePath(earth)
         earth_np.reparentTo(self.render)
         earth_np.setRenderModeWireframe()
 
         self.orbitEngine = oe.OrbitEngine(self.render)
 
-        self.ship = oe.Body("Ship",
-                            [ -4100.05375911,-3019.59041051, -18444.32350115]*u.km, [-4.04702647, -2.37660169, -1.72433788]*u.km/u.s,
-#                            [2*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, [0,6,0]*u.km/u.s, 
+        self.ship = oe.Body("Ship",[1*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, [0,0,0]*u.km/u.s, 
                             oe.BodyType.VESSEL, self.render, color=LVecBase4f(0,1,0,1))
 
         self.orbitEngine.addBody(self.ship)
-        self.ship.thrust_max = THRUST_MAG*1
+        self.ship.thrust_max = THRUST_MAX*1
 
         self.cameraFocus = 0
         self.paused = False
@@ -211,7 +171,7 @@ class MyApp(ShowBase):
                             [10000, 0, 0]*u.km, 
                             [0,7,0]*u.km/u.s, oe.BodyType.VESSEL, self.render, color=LVecBase4f(1,0,0,1))
         self.orbitEngine.addBody(self.ship2)
-        self.ship2.thrust_max = THRUST_MAG*1
+        self.ship2.thrust_max = THRUST_MAX*1
 
         axis = primatives.createAxis(oe.EARTH_RADIUS.value/2)
         axis_np = NodePath(axis)
@@ -345,57 +305,6 @@ class MyApp(ShowBase):
         #store the intercept data for HUD
         self.intercept = [np.linalg.norm(r1-r2), np.linalg.norm(v1-v2)]
 
-
-    def computeInterceptManeuver2(self):
-        orbit1 = self.ship.orbit
-        orbit2 = self.ship2.orbit
-        
-        t_start = self.simulationTime*1 # don't optimize this for now, slows double the compute time
-        t_flight = 1*u.s
-        t_weight = 1e-6  # let user adjust this?
-
-        # # Initial guess for the parameters
-        #x0 = np.array([t_start.value, t_flight.value])
-        x0 = np.array([t_flight.value])
-        r1, v1 = orbit1.propagate(t_start)
-
-        # Define the bounds for the parameters
-        bounds = [(1, None)]
-#        bounds = [(self.simulationTime.to(u.s).value, None), (1, None)]
-        ts_start = time.time()
-        info = [None]
-        accel_max = self.ship.thrust_max/self.ship.mass
-
-        result = minimize(compute_totaldv2, x0, args=(t_start, 0*u.m/u.s**2, orbit1, orbit2, t_weight, info), bounds=bounds, options={'maxiter':35})
-        t_flight = result.x[0]*u.s
-        #do it again but with accel_max considered
-        x0 = result.x.copy()
-        result = minimize(compute_totaldv2, x0, args=(t_start, accel_max, orbit1, orbit2, t_weight, info), bounds=bounds, options={'maxiter':35})
-        t_flight = result.x[0]*u.s
-
-        r1, v1, r2, v2, v1_sol, v2_sol, dv1, dv2 = info[0]
-        t_burn1 = (dv1/accel_max).to(u.s)
-        t_burn2 = (dv2/accel_max).to(u.s)
-
-
-        if t_burn1/2 + t_burn2/2 > t_flight:
-            oe.debug(f"warning: t_burn1+t_burn2 > t_flight - not enough thrust to execute this trajectory!!!!!!!!")
-            return
-        ts_stop = time.time()
-        oe.debug(f"Trajectory optimzation Time: {ts_stop-ts_start:.2f}")
-
-#        self.updateIntercept(r1,v1,r2,v2)
-        ts_start = time.time()
-
-        r,v = self.ship.orbit.computePseudoManouverTrajectory(r1,v1,r2,v2,v1_sol, v2_sol,
-                                                               t_flight, color=self.ship.color, t_start=t_start, thickness=5)
-        ts_stop = time.time()
-        oe.debug(f"PseudoManouver geometery Time: {ts_stop-ts_start:.2f}")
-
-        if self.ship.orbit.collision:
-            oe.debug("orbit causes collision!!!")
-    
-
     def handleKeyDown(self, key):
 
         self.keyState[key] = True
@@ -411,7 +320,7 @@ class MyApp(ShowBase):
             if self.timeMultiplier < 0.001:
                 self.timeMultiplier = 0.001
         if key == 'm':
-            self.computeInterceptManeuver2()
+            self.ship.computeInterceptManeuver(self.simulationTime, self.ship2.orbit)
         if key == '-':
             self.ship.thrust_max /= 1.1
             if self.ship.thrust_max < 0.1*u.kg*u.m/u.s/u.s:
@@ -423,20 +332,13 @@ class MyApp(ShowBase):
         if key == '[':
             self.changeCameraFocus(-1)
         if key == 'x':
-            try:
-                sem.acquire()
                 self.clearManeuverVisualization()
-                r,v = self.ship.orbit.randomize(3*oe.EARTH_RADIUS, 5*u.km/u.s, self.simulationTime)
-                rs = ",".join([f"{i}" for i in r.to(u.km).value])
-                vs = ",".join([f"{i}" for i in v.to(u.km/u.s).value])
-                oe.debug(f"randomized orbit: [{rs}]*u.km, [{vs}]*u.km/u.s,")
-                self.ship.landed = False
-                self.ship.landedPrev = False
-                self.computeInterceptManeuver2()
-            finally:
-                sem.release()
-
-
+                self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime)
+                self.ship.computeInterceptManeuver(self.simulationTime, self.ship2.orbit)
+ 
+#                self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime)
+                # thread = threading.Thread(target=self.ship.computeInterceptManeuver, args=(self.simulationTime, self.ship2.orbit))
+                # thread.start()
         
     def clearManeuverVisualization(self):
         # clear out the other intermediate visualizations
@@ -448,14 +350,11 @@ class MyApp(ShowBase):
                 self.intercept2_np.removeNode()
         self.ship.orbit.clearManeuverVisualizations()
 
-
     def changeCameraFocus(self,step=1):
         self.cameraFocus = (self.cameraFocus+step)%3
 
-
     def handleKeyUp(self, key):
         self.keyState[key] = False
-
 
     def exit(self):
         self.closeWindow(self.win)
@@ -469,11 +368,9 @@ class MyApp(ShowBase):
         if self.cameraDist < self.cameraDistMin:
             self.cameraDist = self.cameraDistMin
 
-
     def handleMouseWheelDown(self):
         self.cameraDist /= self.cameraWheelSensitivity
     
-
     def handleMouseLeftDown(self):
         # Get the mouse position
         if self.mouseWatcherNode.hasMouse():
@@ -521,7 +418,6 @@ class MyApp(ShowBase):
     def handleMouseRightUp(self):
         if self.mouseWatcherNode.hasMouse():
             self.mouseButtonState[2] = False
-
 
     def frameUpdate(self, task):
 
@@ -586,7 +482,7 @@ class MyApp(ShowBase):
             self.incrementallyFindClosestApproach()
 
         thrust = self.ship.thrust_max*thrust_vector
-        self.ship.setThrust(thrust) 
+#        self.ship.setThrust(thrust) 
 
         self.orbitEngine.setScale(self.camera.getPos()*u.km)
         self.orbitEngine.update(self.simulationTime, dt)
@@ -609,7 +505,7 @@ class MyApp(ShowBase):
         self.hudText.setText(text)
 
         # test interval
-        if True:
+        if False:
             TEST_INTERVAL = 2
             if task.time%TEST_INTERVAL > TEST_INTERVAL/2 and self.lastFrameUpdateTime%TEST_INTERVAL < TEST_INTERVAL/2:
                 thread = threading.Thread(target=self.handleKeyDown, args=('x'))
@@ -621,7 +517,7 @@ class MyApp(ShowBase):
     def cameraControl(self, task):
         # if not self.mouseWatcherNode.hasMouse():
         #     return
-        self.cameraRot[1] += 0.01
+        #self.cameraRot[1] += 0.002
 
         if self.mouseButtonState[2]:
             if not self.mouseButtonStateLast[2]:
@@ -655,8 +551,6 @@ class MyApp(ShowBase):
         
         self.mouseButtonStateLast = self.mouseButtonState.copy()
         return Task.cont
-
-
 
 app = MyApp()
 app.run()

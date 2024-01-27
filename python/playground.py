@@ -1,43 +1,15 @@
 import numpy as np
-# from scipy.optimize import minimize
-# import poliastro
 from poliastro.bodies import Earth
-# from poliastro.twobody import Orbit
-# from poliastro import iod
 from astropy import units as u
-# import time
+import poliastro as pa
 import orbitengine as oe
-# import numpy as np
 
 np.set_printoptions(precision=3)
-# # don't optimize the starting time, just the time of flight
-# def compute_totaldv(x, orbit_target, time_weight, r1, v1, info):
-#     t_flight = x[0]*u.s
-#     r2, v2 = orbit_target.propagate(t_flight).rv()
-
-#     res = list(poliastro.iod.izzo.lambert(Earth.k, r1, r2, t_flight, M=0))
-#     if len(res) == 0 or len(res) > 1:
-#         raise RuntimeError(f"compute_totaldv labert produced {len(res)} solutions")
-
-#     v1_sol, v2_sol = res[0]
-#     info[0] = [v1, v2, v1_sol, v2_sol]
-#     total_dv = np.linalg.norm(v1 - v1_sol) + np.linalg.norm(v2 - v2_sol)
-#     return total_dv.value + time_weight*t_flight.value
-
-
-
-# t=10*u.s
-r = [ 10000,0,0]*u.km
-v = [ 1,0,0]*u.km/u.s
-
-
 
 import numpy as np
 from scipy.integrate import ode
 
-
-
-def func_twobody(t0, u_, k):
+def func_twobody(t0, u_, k, ad):
     """Differential equation for the initial value two body problem.
 
     This function follows Cowell's formulation.
@@ -54,6 +26,8 @@ def func_twobody(t0, u_, k):
          Non Keplerian acceleration (km/s2).
 
     """
+    ax, ay, az = ad(t0, u_, k)
+
     x, y, z, vx, vy, vz = u_
     r3 = (x**2 + y**2 + z**2)**1.5
 
@@ -61,39 +35,42 @@ def func_twobody(t0, u_, k):
         vx,
         vy,
         vz,
-        -k * x / r3,
-        -k * y / r3,
-        -k * z / r3
+        -k * x / r3 + ax,
+        -k * y / r3 + ay,
+        -k * z / r3 + az
     ])
 
-    print(f"{t0:.2f} {du}")
     return du
 
+def cowell(k, r0, v0, tof, rtol=1e-10, *, ad=None, callback=None, nsteps=1000):
+    x, y, z = r0.to(u.km).value
+    vx, vy, vz = v0.to(u.km/u.s).value
+    u0 = np.array([x, y, z, vx, vy, vz])
 
-# # Define the ODE function
-# def ode_func(t, y, k):
-#     print(f"{t:.2f} {y} {k}")
-#     return -k * y
+    # Set the non Keplerian acceleration
+    if ad is None:
+        ad = lambda t0, u_, k_: (0, 0, 0)
 
+    # Create an ode object
+    rtol=1e-10
+    nsteps=1000
+    solver = ode(func_twobody).set_integrator('lsoda', method='bdf',rtol=rtol, nsteps=nsteps)  # Use VODE with BDF method
+    solver.set_initial_value(u0)  # Set initial value at t=0
+    solver.set_f_params(k.to(u.km**3/u.s**2).value, ad)  # Pass parameter k to the ODE function
+    # Integrate the ODE at specific time points
+    sol1 = solver.integrate(tof.to(u.s).value)
+    return sol1[:3]*u.km, sol1[3:]*u.km/u.s
 
-x, y, z = r.value
-vx, vy, vz = v.value
-u0 = np.array([x, y, z, vx, vy, vz])
-k = Earth.k.value
-# Create an ode object
-rtol=1e-4
-nsteps=1000
-r = ode(func_twobody).set_integrator('lsoda', method='bdf',rtol=rtol, nsteps=nsteps)  # Use VODE with BDF method
-r.set_initial_value(u0)  # Set initial value at t=0
-r.set_f_params(k)  # Pass parameter k to the ODE function
+r0 = [ 10000,0,0]*u.km
+v0 = [ 1,0,0]*u.km/u.s
+k = Earth.k
 
-# Integrate the ODE at specific time points
-t1 = 3000.0
-sol1 = r.integrate(t1)
-print(f"t={t1}: {sol1}")
+times = np.linspace(0, 5000, 100)
+xs = []
+for t in times:
+    r,v = cowell(k, r0, v0, t*u.s)
+    xs.append(r[0].value)
 
-
-orbit = oe.BodyOrbit(None, r, v)
-print(orbit)
-
-print(orbit.propagate(t*u.s))
+import matplotlib.pyplot as plt
+plt.plot(times, xs)
+plt.show()
