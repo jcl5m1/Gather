@@ -33,6 +33,8 @@ V_ZERO = [0,0,0]*u.km/u.s
 ROT_R_ZERO = [0,0,0]*u.rad
 ROT_V_ZERO = [0,0,0]*u.rad/u.s
 EPSILON = np.finfo(float).eps
+PLANET_ICOSHPERE_LEVEL = 4
+
 
 def debug(msg):
     #print call stack
@@ -663,14 +665,14 @@ class TrajectorySegment:
         # entry state
         self.r0 = r0
         self.v0 = v0
-        self.t0 = t0
+        self.t0 = t0*1 #break reference
         self.rr0=rr0
         self.rv0=rv0
 
         # exit state
         self.r1 = r1
         self.v1 = v1
-        self.t1 = t1
+        self.t1 = t1*1 # break reference
         self.rr1=rr0
         self.rv1=rv0
 
@@ -679,6 +681,11 @@ class TrajectorySegment:
         self.kepler = None
         self.collision = False
         self.collision_np = None
+
+        if self.attractor is not None:
+            if self.attractor.size.to(u.m) + 1*u.m > np.linalg.norm(self.r0):
+                self.collision = True
+                type = TrajectorySegment.Type.LANDED
         self.computePeriod()
 
     def computePeriod(self):
@@ -796,12 +803,13 @@ class TrajectorySegment:
         if self.attractor is not None:
             r += self.attractor.position
         v = v*u.km/u.s
-        self.t0 = time
+        self.t0 = time*1
         self.r0 = r
         self.v0 = v
         return r, v
 
     def propagate(self, t=0*u.s):
+
         if t < self.t0:
             return None
         
@@ -976,7 +984,7 @@ class Body:
         #     self.orbit.set(self.attractor,pos, vel, time)
         # else:
 
-        res = self.propagate(time)
+        res = self.propagate(time)        
         if res is None:
             return
 
@@ -1145,7 +1153,7 @@ class Body:
             self.np = NodePath(data)
         if type == Body.Type.PLANET:
             self.fixedScale = True #at some point, should convert to icon
-            data = primatives.createIcosphere(size.to(u.km).value, 3, color)
+            data = primatives.createIcosphere(size.to(u.km).value, PLANET_ICOSHPERE_LEVEL, color)
             # rotate so the icosphere is aligned with the z axis
             self.np = NodePath(data)
             self.np.setRenderModeWireframe()

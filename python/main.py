@@ -185,7 +185,6 @@ class MyApp(ShowBase):
                             color=LVecBase4f(1,0,0,1))
         self.orbitEngine.addBody(self.ship2)
 
-
         axis = primatives.createAxis(oe.EARTH_RADIUS.value/2)
         axis_np = NodePath(axis)
         axis_np.reparentTo(self.render)
