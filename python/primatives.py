@@ -372,7 +372,7 @@ def createIcosphere(size, subdivisions, color):
     node = GeomNode("icosphere")
     node.addGeom(geom)
 
-    #node.setAttrib(ColorAttrib.makeFlat(color))
+    node.setAttrib(ColorAttrib.makeFlat(color))
 
     return node
 

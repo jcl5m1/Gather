@@ -3,6 +3,7 @@ from poliastro.bodies import Earth
 from astropy import units as u
 import poliastro as pa
 import orbitengine as oe
+from astropy.constants import M_earth
 
 np.set_printoptions(precision=3)
 
@@ -61,16 +62,19 @@ def cowell(k, r0, v0, tof, rtol=1e-10, *, ad=None, callback=None, nsteps=1000):
     sol1 = solver.integrate(tof.to(u.s).value)
     return sol1[:3]*u.km, sol1[3:]*u.km/u.s
 
-r0 = [ 10000,0,0]*u.km
-v0 = [ 1,0,0]*u.km/u.s
-k = Earth.k
+# r0 = [ 10000,0,0]*u.km
+# v0 = [ 1,0,0]*u.km/u.s
+# k = Earth.k
 
-times = np.linspace(0, 5000, 100)
-xs = []
-for t in times:
-    r,v = cowell(k, r0, v0, t*u.s)
-    xs.append(r[0].value)
+# times = np.linspace(0, 5000, 100)
+# xs = []
+# for t in times:
+#     r,v = cowell(k, r0, v0, t*u.s)
+#     xs.append(r[0].value)
 
-import matplotlib.pyplot as plt
-plt.plot(times, xs)
-plt.show()
+# import matplotlib.pyplot as plt
+# plt.plot(times, xs)
+# plt.show()
+import scipy.constants
+print(Earth.k.to(u.km**3/u.s**2))
+print((scipy.constants.G*u.m**3/u.kg/u.s**2).to(u.km**3/u.kg/u.s**2) * M_earth.to(u.kg))

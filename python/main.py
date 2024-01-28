@@ -3,9 +3,6 @@ from astropy import units as u
 
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
-from direct.actor.Actor import Actor
-from direct.interval.IntervalGlobal import Sequence
-from matplotlib import pyplot as plt
 from panda3d.core import Point3, LVecBase3f, LVecBase4f
 from panda3d.core import Geom, GeomVertexFormat, GeomVertexData, GeomVertexWriter, GeomTriangles, GeomNode, CollisionRay, CollisionNode, CollisionHandlerQueue, CollisionTraverser
 from panda3d.core import NodePath
@@ -15,22 +12,21 @@ from panda3d.core import WindowProperties
 import primatives
 import numpy as np
 from scipy.optimize import minimize
-from poliastro.twobody import Orbit
 import orbitengine as oe
 import numpy as np
 from poliastro.bodies import Earth
-from poliastro.maneuver import Maneuver
 import poliastro
-import poliastro as pa
 from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode
-from poliastro.iod import vallado
-import time
 import threading
+from astropy.constants import M_earth
+
 FONT_FILE = "Inconsolata-Regular.ttf"
 THRUST_MAX = 10.0*u.kg*u.m/u.s/u.s
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
+EARTH_TILT_DEG = 23.44
+SHIP_SIZE = 0.005*u.km
 
 
 epsilon = np.finfo(float).eps
@@ -154,38 +150,41 @@ class MyApp(ShowBase):
         self.paused = False
 
         self.orbitEngine = oe.OrbitEngine(self.render)
-        rr0_earth = [0, 22.5, 0]*u.deg
-        rv0_earth = [2, 0, 0]*u.deg/u.s
-        self.planet = oe.Body("Earth",rr0=rr0_earth, rv0=rv0_earth, lockedPosition=True)
+        rr0_earth = [0, EARTH_TILT_DEG, 0]*u.deg
+        rv0_earth = [360/u.day.to(u.s), 0, 0]*u.deg/u.s
+        self.planet = oe.Body(name="Earth", 
+                              type=oe.Body.Type.PLANET,
+                              rr0=rr0_earth, 
+                              rv0=rv0_earth, 
+                              mass = M_earth.to(u.kg),
+                              lockedPosition=True)
         self.planet.createGeometry(type=oe.Body.Type.PLANET, 
-                                   render=self.render,size=oe.EARTH_RADIUS)
+                                   render=self.render,size=oe.EARTH_RADIUS,
+                                   color=LVecBase4f(.3,.3,.3,1))
         self.orbitEngine.addBody(self.planet)
 
-        
-        # earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 1, None)
-        # earth_np = NodePath(earth)
-        # earth_np.reparentTo(self.render)
-        # earth_np.setRenderModeWireframe()
+        self.ship = oe.Body(name="Ship", 
+                            type=oe.Body.Type.VESSEL,
+                            parent=self.planet,
+                            r0=[1*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
+                            v0=[0,0,0]*u.km/u.s)
+        self.ship.createGeometry(render=self.render,
+                            type=oe.Body.Type.VESSEL,
+                            size=SHIP_SIZE,
+                            color=LVecBase4f(0,1,0,1))
+        self.orbitEngine.addBody(self.ship)
 
+        self.ship2 = oe.Body(name="Ship2", 
+                            type=oe.Body.Type.VESSEL,
+                            parent=self.planet,
+                            r0=[3*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
+                            v0=[0,3,0]*u.km/u.s)
+        self.ship2.createGeometry(render=self.render,
+                            type=oe.Body.Type.VESSEL,
+                            size=SHIP_SIZE,
+                            color=LVecBase4f(1,0,0,1))
+        self.orbitEngine.addBody(self.ship2)
 
-        # if type == BodyType.VESSEL:
-        #     ship = primatives.createPyramid(size, color)
-        #     self.np = NodePath(ship)
-        #     self.np.reparentTo(render)
-        #     self.np.setPos(LVecBase3f(*pos.value))
-        #     self.np.setHpr(0,-90,0)
-
-
-        # self.ship = oe.Body("Ship",[1*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, [0,0,0]*u.km/u.s, 
-        #                     oe.BodyType.VESSEL, self.render, color=LVecBase4f(0,1,0,1))
-        # self.orbitEngine.addBody(self.ship)
-        # self.ship.thrust_max = THRUST_MAX*1
-
-        # self.ship2 = oe.Body("Ship2",
-        #                     [10000, 0, 0]*u.km, 
-        #                     [0,7,0]*u.km/u.s, oe.BodyType.VESSEL, self.render, color=LVecBase4f(1,0,0,1))
-        # self.orbitEngine.addBody(self.ship2)
-        # self.ship2.thrust_max = THRUST_MAX*1
 
         axis = primatives.createAxis(oe.EARTH_RADIUS.value/2)
         axis_np = NodePath(axis)
@@ -345,9 +344,9 @@ class MyApp(ShowBase):
         if key == '[':
             self.changeCameraFocus(-1)
         if key == 'x':
-                self.clearManeuverVisualization()
+#                self.clearManeuverVisualization()
                 self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime)
-                self.ship.computeInterceptManeuver(self.simulationTime, self.ship2.orbit)
+ #               self.ship.computeInterceptManeuver(self.simulationTime, self.ship2.orbit)
  
 #                self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime)
                 # thread = threading.Thread(target=self.ship.computeInterceptManeuver, args=(self.simulationTime, self.ship2.orbit))
@@ -364,7 +363,7 @@ class MyApp(ShowBase):
         self.ship.orbit.clearManeuverVisualizations()
 
     def changeCameraFocus(self,step=1):
-        self.cameraTarget = (self.cameraTarget+step)%3
+        self.cameraTarget = (self.cameraTarget+step)%len(self.orbitEngine.bodies)
 
     def handleKeyUp(self, key):
         self.keyState[key] = False
@@ -543,21 +542,27 @@ class MyApp(ShowBase):
         y = self.cameraDist.value * math.sin(self.cameraRot[0]) * math.sin(self.cameraRot[1])
         z = self.cameraDist.value * math.cos(self.cameraRot[0])
 
+        target = self.orbitEngine.bodies[self.cameraTarget]
+
         if self.cameraTarget == 0:
-            self.camera.setPos(x,y,z)
             self.cameraDistMin = oe.EARTH_RADIUS*1.1
-            self.camera.lookAt(0, 0, 0)
-        elif self.cameraTarget == 1:
+        else:
             self.cameraDistMin = 10*u.m
-            target_pos = self.ship.position.value
-            self.camera.setPos(x+target_pos[0],y+target_pos[1],z+target_pos[2])
-            self.camera.lookAt(*target_pos)
-        elif self.cameraTarget == 2:
-            self.cameraDistMin = 10*u.m
-            target_pos = self.ship2.position.value
-            self.camera.setPos(x+target_pos[0],y+target_pos[1],z+target_pos[2])
-            self.camera.lookAt(*target_pos)
-        
+        # elif self.cameraTarget == 1:
+        #     self.cameraDistMin = 10*u.m
+        #     target_pos = self.ship.position.value
+        #     self.camera.setPos(x+target_pos[0],y+target_pos[1],z+target_pos[2])
+        #     self.camera.lookAt(*target_pos)
+        # elif self.cameraTarget == 2:
+        #     self.cameraDistMin = 10*u.m
+        #     target_pos = self.ship2.position.value
+        #     self.camera.setPos(x+target_pos[0],y+target_pos[1],z+target_pos[2])
+        #     self.camera.lookAt(*target_pos)
+
+        target_pos = target.position.value
+        self.camera.setPos(x+target_pos[0],y+target_pos[1],z+target_pos[2])
+        self.camera.lookAt(*target_pos)
+
         self.mouseButtonStateLast = self.mouseButtonState.copy()
         return Task.cont
 
