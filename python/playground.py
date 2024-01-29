@@ -4,77 +4,94 @@ from astropy import units as u
 import poliastro as pa
 import orbitengine as oe
 from astropy.constants import M_earth
+from scipy.integrate import ode
+import matplotlib.pyplot as plt
+from poliastro import iod
+import time
+from scipy.optimize import minimize
 
 np.set_printoptions(precision=3)
 
-import numpy as np
-from scipy.integrate import ode
 
-def func_twobody(t0, u_, k, ad):
-    """Differential equation for the initial value two body problem.
+def randomize(dist, vel):
+    # random 3d unit vector
+    theta = np.random.uniform(0,2*np.pi)
+    phi = np.random.uniform(-np.pi/2,np.pi/2)
+    r = oe.spherical_to_cartesian(dist.to(u.km).value, theta, phi)
 
-    This function follows Cowell's formulation.
+    theta = np.random.uniform(0,2*np.pi)
+    phi = np.random.uniform(-np.pi/2,np.pi/2)
+    v = oe.spherical_to_cartesian(vel.to(u.km/u.s).value, theta, phi)
+    r = r*u.km
+    v = v*u.km/u.s
 
-    Parameters
-    ----------
-    t0 : float
-        Time.
-    u_ : ~numpy.ndarray
-        Six component state vector [x, y, z, vx, vy, vz] (km, km/s).
-    k : float
-        Standard gravitational parameter.
-    ad : function(t0, u, k)
-         Non Keplerian acceleration (km/s2).
+    return oe.Orbit.from_vectors(Earth, r,v)
 
-    """
-    ax, ay, az = ad(t0, u_, k)
 
-    x, y, z, vx, vy, vz = u_
-    r3 = (x**2 + y**2 + z**2)**1.5
+o1 = randomize(2*oe.EARTH_RADIUS.to(u.km), 5*u.km/u.s)
+o2 = randomize(5*oe.EARTH_RADIUS.to(u.km), 3*u.km/u.s)
+print(o1, o1.period.to(u.s))
+print(o2, o2.period.to(u.s))
+per = 2*np.max([o1.period.to(u.s).value, o2.period.to(u.s).value])
 
-    du = np.array([
-        vx,
-        vy,
-        vz,
-        -k * x / r3 + ax,
-        -k * y / r3 + ay,
-        -k * z / r3 + az
-    ])
+def compute_dv(x0, orbit1, orbit2):
+    t_start, t_flight = x0
+    t_start *= u.s
+    t_flight *= u.s
 
-    return du
+    r1, v1 = orbit1.propagate(t_start).rv()
+    r2, v2 = orbit2.propagate(t_start + t_flight).rv()
 
-def cowell(k, r0, v0, tof, rtol=1e-10, *, ad=None, callback=None, nsteps=1000):
-    x, y, z = r0.to(u.km).value
-    vx, vy, vz = v0.to(u.km/u.s).value
-    u0 = np.array([x, y, z, vx, vy, vz])
+    res = list(iod.izzo.lambert(Earth.k, r1, r2, t_flight, M=0))
+    if len(res) == 0 or len(res) > 1:
+        raise RuntimeError(f"compute_totaldv labert produced {len(res)} solutions")
 
-    # Set the non Keplerian acceleration
-    if ad is None:
-        ad = lambda t0, u_, k_: (0, 0, 0)
+    v1_sol, v2_sol = res[0]
+    dv1 = np.linalg.norm(v1 - v1_sol)
+    dv2 = np.linalg.norm(v2 - v2_sol)
+    return  (dv1 + dv2).value
 
-    # Create an ode object
-    rtol=1e-10
-    nsteps=1000
-    solver = ode(func_twobody).set_integrator('lsoda', method='bdf',rtol=rtol, nsteps=nsteps)  # Use VODE with BDF method
-    solver.set_initial_value(u0)  # Set initial value at t=0
-    solver.set_f_params(k.to(u.km**3/u.s**2).value, ad)  # Pass parameter k to the ODE function
-    # Integrate the ODE at specific time points
-    sol1 = solver.integrate(tof.to(u.s).value)
-    return sol1[:3]*u.km, sol1[3:]*u.km/u.s
+def porkchop(orbit1, orbit2, resolution=5, show=False):
 
-# r0 = [ 10000,0,0]*u.km
-# v0 = [ 1,0,0]*u.km/u.s
-# k = Earth.k
+    period = 2*np.max([orbit1.period.to(u.s).value, orbit2.period.to(u.s).value])
+    # Generate some random data for the heat map
+    guess = [period/2, period/2]
+    radius = period/2
 
-# times = np.linspace(0, 5000, 100)
-# xs = []
-# for t in times:
-#     r,v = cowell(k, r0, v0, t*u.s)
-#     xs.append(r[0].value)
+    # search for the starting point
+    t_start = np.linspace(guess[1] - radius, guess[1] + radius, resolution)
+    t_flight = np.linspace(guess[0] - radius*.9, guess[0] + radius*.9, resolution)
+    data = np.zeros((len(t_flight), len(t_start)))
+    for i in range(len(t_start)):
+        for j in range(len(t_flight)):
+            data[i, j] = compute_dv([t_start[i], t_flight[j]], orbit1, orbit2)
+    # Find the indices of the minimum value
+    min_index = np.unravel_index(np.argmin(data), data.shape)
+    min_value = data[min_index]
+    guess = [t_start[min_index[0]], t_flight[min_index[1]]]
 
-# import matplotlib.pyplot as plt
-# plt.plot(times, xs)
-# plt.show()
-import scipy.constants
-print(Earth.k.to(u.km**3/u.s**2))
-print((scipy.constants.G*u.m**3/u.kg/u.s**2).to(u.km**3/u.kg/u.s**2) * M_earth.to(u.kg))
+    if show:
+        # Create the heat map
+        plt.imshow(data, cmap='plasma', origin='lower', extent=[t_start.min(), t_start.max(), t_flight.min(), t_flight.max()])
+
+        # Draw a dot on the minimum value
+        plt.plot(t_start[min_index[1]], t_flight[min_index[0]], 'ro')
+
+        # Uncomment the line below to add a colorbar
+        # plt.colorbar(label='Value')
+
+        plt.xlabel('t_flight')
+        plt.ylabel('t_delay')
+        plt.title('Energy')
+
+        # Show the plot
+        plt.show()
+
+    return guess, min_value
+
+guess, min_value = porkchop(o1,o2, 5, show=False)
+print(guess, min_value)
+
+bounds = [(0,2*per), (1,2*per)]
+res = minimize(compute_dv, guess, args=(o1,o2), bounds=bounds)
+print(res.x, res.fun)

@@ -25,7 +25,7 @@ FONT_FILE = "Inconsolata-Regular.ttf"
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
 EARTH_TILT_DEG = 23.44
-SHIP_SIZE = 0.005*u.km
+SHIP_SIZE = 0.01*u.km
 
 
 epsilon = np.finfo(float).eps
@@ -165,8 +165,8 @@ class MyApp(ShowBase):
         self.ship = oe.Body(name="Ship", 
                             type=oe.Body.Type.VESSEL,
                             parent=self.planet,
-                            r0=[1*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
-                            v0=[0,0,0]*u.km/u.s)
+                            r0=[2*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
+                            v0=[0,5,0]*u.km/u.s)
         self.ship.createGeometry(render=self.render,
                             type=oe.Body.Type.VESSEL,
                             size=SHIP_SIZE,
@@ -177,7 +177,7 @@ class MyApp(ShowBase):
                             type=oe.Body.Type.VESSEL,
                             parent=self.planet,
                             r0=[3*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
-                            v0=[0,3,0]*u.km/u.s)
+                            v0=[0,4,0]*u.km/u.s)
         self.ship2.createGeometry(render=self.render,
                             type=oe.Body.Type.VESSEL,
                             size=SHIP_SIZE,
@@ -330,13 +330,13 @@ class MyApp(ShowBase):
             if self.timeMultiplier < 0.001:
                 self.timeMultiplier = 0.001
         if key == 'm':
-            self.ship.computeInterceptManeuver(self.simulationTime, self.ship2.orbit)
+            self.ship.computeInterceptManeuver2(self.simulationTime, self.ship2)
         if key == '-':
             self.ship.thrust_max /= 1.1
             if self.ship.thrust_max < 0.1*u.kg*u.m/u.s/u.s:
                 self.ship.thrust_max = 0.1*u.kg*u.m/u.s/u.s
         if key == 'l':
-            self.ship.launch(self.simulationTime)
+            self.ship.launch2(self.simulationTime, self.ship2)
         if key == 'b':
             self.ship.flag = True
         if key == '=':
@@ -346,13 +346,7 @@ class MyApp(ShowBase):
         if key == '[':
             self.changeCameraFocus(-1)
         if key == 'x':
-#                self.clearManeuverVisualization()
-                self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime)
- #               self.ship.computeInterceptManeuver(self.simulationTime, self.ship2.orbit)
- 
-#                self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime)
-                # thread = threading.Thread(target=self.ship.computeInterceptManeuver, args=(self.simulationTime, self.ship2.orbit))
-                # thread.start()
+            self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime)
         
     def clearManeuverVisualization(self):
         # clear out the other intermediate visualizations
