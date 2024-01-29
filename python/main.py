@@ -338,7 +338,7 @@ class MyApp(ShowBase):
         if key == 'l':
             self.ship.launch2(self.simulationTime, self.ship2)
         if key == 'b':
-            self.ship.flag = True
+            self.ship2.flag = True
         if key == '=':
             self.ship.thrust_max *= 1.1
         if key == ']':

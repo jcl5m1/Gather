@@ -967,7 +967,6 @@ class TrajectorySegment:
             return r, v, axis_quat.getHpr()*u.deg, w
 
         if self.type == TrajectorySegment.Type.BALLISTIC:
-            self.kepler = None
             if self.kepler is not None:
                 ts %= self.kepler.period
                 try:
