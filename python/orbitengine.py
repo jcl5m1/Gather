@@ -34,6 +34,9 @@ ROT_R_ZERO = [0,0,0]*u.rad
 ROT_V_ZERO = [0,0,0]*u.rad/u.s
 EPSILON = np.finfo(float).eps
 PLANET_ICOSHPERE_LEVEL = 4
+THRUST_MAX = 10.0*u.kg*u.m/u.s/u.s
+MIMIMUM_MANEUVER_ALTITUDE = 20*u.km
+TRAJECTORY_LAUNCH_MIN_ALTITUDE = 100*u.km
 
 
 def debug(msg):
@@ -65,11 +68,11 @@ def formatTime(time):
 
 def formatDistance(distance):
     if distance > 9.461e+12*u.km:
-        return f"{distance/9.461e+12:.2f}Lyr"
+        return f"{distance.to(u.km).value/9.461e+12:.2f} Lyr"
     elif distance > 1.079e+9*u.km:
-        return f"{distance/1.079e+97:.2f}Lhr"
+        return f"{distance.to(u.km).value/1.079e+97:.2f} Lhr"
     elif distance > 299792*u.km:
-        return f"{distance.to(u.lightsec):.2f}"
+        return f"{distance.to(u.km).value/299792:.2f} Ls"
     elif distance > 1000*u.km:
         return f"{distance.to(u.Mm):.2f}"
     elif distance > 1*u.km:
@@ -164,6 +167,8 @@ def line_sphere_intersection(P1, P2, C, r):
 
     # Solve the quadratic equation
     a = np.dot(d, d)
+    if a < EPSILON:
+        return [(0,P1)]
     b = 2 * np.dot(f, d)
     c = np.dot(f, f) - r**2
 
@@ -631,6 +636,7 @@ class TrajectorySegment:
         LANDED = 1
         THRUST = 2
         BALLISTIC = 3
+        LAUNCH = 4
  
     def __init__(self, 
                  body=None, 
@@ -683,21 +689,24 @@ class TrajectorySegment:
         self.collision_np = None
 
         if self.attractor is not None:
-            if self.attractor.size.to(u.m) + 1*u.m > np.linalg.norm(self.r0):
-                self.collision = True
-                type = TrajectorySegment.Type.LANDED
-        self.computePeriod()
+            #check if the entry state should be landed
+            if type != TrajectorySegment.Type.LAUNCH:
+                if self.attractor.size.to(u.m) + 1*u.m > np.linalg.norm(self.r0):
+                    self.collision = True
+                    type = TrajectorySegment.Type.LANDED
+        self.computePeriodOrDuration()
 
-    def computePeriod(self):
+    def computePeriodOrDuration(self):
+
         # compute properties of trajectory
         if self.type == TrajectorySegment.Type.POSITION_LOCKED:
             if self.rv0[0].value > EPSILON:
                 self.period = self.t0 + (360*u.deg/self.rv0[0]).to(u.s)
 
-        if self.type == TrajectorySegment.Type.LANDED:
+        elif self.type == TrajectorySegment.Type.LANDED:
             self.period = self.attractor.trajectorySegments[0].period
 
-        if self.type == TrajectorySegment.Type.BALLISTIC:
+        elif self.type == TrajectorySegment.Type.BALLISTIC:
             # Compute the magnitudes of the initial position and velocity vectors
             r = np.linalg.norm(self.r0)
             v = np.linalg.norm(self.v0)
@@ -709,36 +718,62 @@ class TrajectorySegment:
             if a > 0*u.km:
                 # Compute the period of the orbit
                 self.period = 2 * np.pi * np.sqrt(a**3 / self.attractor.k)
-
+        elif self.type == TrajectorySegment.Type.LAUNCH:
+            # compute time to reach target altitude
+            alt = np.linalg.norm(self.r0 - self.attractor.position)
+            g = self.attractor.k/alt**2
+            acc = self.body.thrust_max/self.body.mass - g
+            self.period = np.sqrt(2*TRAJECTORY_LAUNCH_MIN_ALTITUDE/acc).to(u.s)
 
     def createGeometry(self, render=None, thickness=2, color=LVecBase4f(0,1,0,1)):                
         self.color = color
         self.thickness = thickness
         TRAJECTORY_SAMPLES = 100
+        TRAJECTORY_NONPERIODIC_TIME_LIMIT = 4*u.hour
         if render is None:
             render = self.body.render
 
         if self.type == TrajectorySegment.Type.POSITION_LOCKED:
             return
         
-        if self.type == TrajectorySegment.Type.LANDED:
+        elif self.type == TrajectorySegment.Type.LANDED:
             steps = TRAJECTORY_SAMPLES
-            times = np.linspace(self.t0, self.t0+self.period, steps)
+            t_stop = self.t1 
+            if self.t0+self.period < t_stop:
+                t_stop = self.t0 + self.period
+            times = np.linspace(self.t0, t_stop, steps)
 
-        if self.type == TrajectorySegment.Type.BALLISTIC:
-            t_stop = self.period
-            if t_stop is None:
-                #hyperbolic orbit, 
-                t_stop = 2*u.hour
+        elif self.type == TrajectorySegment.Type.BALLISTIC:
+            t_stop = self.t1 
+            if self.period is None:
+                #hyperbolic orbit, non-elliptical
+                t_stop = self.t0 + TRAJECTORY_NONPERIODIC_TIME_LIMIT
+                debug(f"non-periodic segment too long, truncating to {TRAJECTORY_NONPERIODIC_TIME_LIMIT}")
+            else:
+                if self.t0+self.period < t_stop:
+                    t_stop = self.t0+self.period
             steps = TRAJECTORY_SAMPLES
-            times = np.linspace(self.t0, self.t0+t_stop, steps)
+            times = np.linspace(self.t0, t_stop, steps)
+
+        elif self.type == TrajectorySegment.Type.LAUNCH:
+            t_stop = self.t1
+            # limit the trajectory if it is taking too long?
+            # if t_stop - self.t0 > TRAJECTORY_NONPERIODIC_TIME_LIMIT:
+            #     t_stop = self.t0 + TRAJECTORY_NONPERIODIC_TIME_LIMIT
+            #     debug(f"launch taking too long, truncating to {TRAJECTORY_NONPERIODIC_TIME_LIMIT}")
+            #     self.t1 = self.t0 + TRAJECTORY_NONPERIODIC_TIME_LIMIT
+            steps = TRAJECTORY_SAMPLES
+            times = np.linspace(self.t0, t_stop, steps)
 
         positions = []
         t_last = self.t0
         v_last = self.v0
         r_last = self.r0
         for t in times:
-            r,v,rot,w = self.propagate(t)
+            res = self.propagate(t)
+            if res is None:
+                debug(f"trajectory segment propagate failed: {t} -> {res}")
+            r,v,rot,w = res
             res = self.checkCollision(r, r_last, render)
             if res is not None:
                 i, rc = res
@@ -754,6 +789,12 @@ class TrajectorySegment:
             r_last = r
             v_last = v
             t_last = t
+
+        # if self.type == TrajectorySegment.Type.LAUNCH:
+        #     self.t1 = t_last
+        #     self.r1 = r_last
+        #     self.v1 = v_last
+        #     # TODO handle rotation 
 
         if self.np is not None:
             self.np.removeNode()
@@ -811,11 +852,16 @@ class TrajectorySegment:
     def propagate(self, t=0*u.s):
 
         if t < self.t0:
+#            debug("propagate before segment start")
+            return None
+        if t > self.t1:
+ #           debug("propagate after segment stop")
             return None
         
+        if self.t0 == self.t1:
+            return self.r0, self.v0, self.rr0, self.rv0
+
         ts = t.to(u.s)-self.t0
-        if ts > self.t1:
-            return None
 
         #propagate rotation
         axis_quat = LQuaternion()
@@ -855,12 +901,31 @@ class TrajectorySegment:
             v = np.cross(w2_axis*w2_mag, r).value*u.km/u.s #for conversion to km/s?
             return r, v, axis_quat.getHpr()*u.deg, p_quat
 
+        if self.type == TrajectorySegment.Type.LAUNCH:
+            # vec is normal to the planet
+            vec = self.r0 - self.body.parent.position
+            alt = np.linalg.norm(vec)
+            vec = vec/alt
+            g = self.body.parent.k/alt**2
+            accel = self.body.thrust_max/self.body.mass - g.to(u.m/u.s/u.s)
+
+            # this set absolute max accel
+            if accel.value <= 0:
+                accel = 0*u.m/u.s/u.s
+                debug(f"net thurst accel {accel:.2f} not enough for lift off")
+
+            # need to check this is above the planet's accel
+            accel_vec = vec*accel
+            v = self.v0 + accel_vec*ts
+            r = self.r0 + self.v0*ts + 0.5*accel_vec*ts*ts
+            return r, v, axis_quat.getHpr()*u.deg, w
 
         if self.type == TrajectorySegment.Type.BALLISTIC:
             if self.kepler is None:
-                kepler = Orbit.from_vectors(Earth, self.r0, self.v0)
-                if kepler.r_a > 0 or kepler.r_p > 0:
-                    self.kepler = kepler
+                if np.linalg.norm(np.cross(self.r0, self.v0).value) > EPSILON:
+                    kepler = Orbit.from_vectors(Earth, self.r0, self.v0)
+                    if kepler.r_a > 0 and kepler.r_p > 0:
+                        self.kepler = kepler
             if self.kepler is not None:
                 ts %= self.kepler.period
                 r,v = self.kepler.propagate(ts).rv()
@@ -873,6 +938,7 @@ class TrajectorySegment:
                     self.v0, 
                     ts)
                 return r, v, axis_quat.getHpr()*u.deg, w
+        debug("propagate un recognized segment type")
         return None
 
 class Body:
@@ -902,6 +968,7 @@ class Body:
         self.parent = parent
         # self.thrust_max = 0*u.kg*u.m/u.s/u.s
         # self.thrust = [0,0,0]*u.kg*u.m/u.s/u.s
+        self.thrust_max = THRUST_MAX
         self.trajectorySegments = []
         self.position = r0
         self.velocity = v0
@@ -910,13 +977,35 @@ class Body:
         self.target = None
         self.np = None
         self.velocity_np = None
+        self.flag = False
 
         if lockedPosition:
-            seg = TrajectorySegment(self,parent,r0,v0,rr0,rv0,t_start,type=TrajectorySegment.Type.POSITION_LOCKED)
+            seg = TrajectorySegment(body=self,
+                                    attractor=parent,
+                                    r0=r0,
+                                    v0=v0,
+                                    rr0=rr0,
+                                    rv0=rv0,
+                                    t0=t_start,
+                                    type=TrajectorySegment.Type.POSITION_LOCKED)
         elif np.linalg.norm(r0-self.parent.position) < self.parent.size + 1*u.m: # landed on that parent with 1m tolerance
-            seg = TrajectorySegment(self,parent,r0,v0,rr0,rv0,t_start,type=TrajectorySegment.Type.LANDED)
+            seg = TrajectorySegment(body=self,
+                                    attractor=parent,
+                                    r0=r0,
+                                    v0=v0,
+                                    rr0=rr0,
+                                    rv0=rv0,
+                                    t0=t_start,
+                                    type=TrajectorySegment.Type.LANDED)
         else:
-            seg = TrajectorySegment(self,parent,r0,v0,rr0,rv0,t_start,type=TrajectorySegment.Type.BALLISTIC)
+            seg = TrajectorySegment(body=self,
+                                    attractor=parent,
+                                    r0=r0,
+                                    v0=v0,
+                                    rr0=rr0,
+                                    rv0=rv0,
+                                    t0=t_start,
+                                    type=TrajectorySegment.Type.BALLISTIC)
         self.trajectorySegments.append(seg)
  
         # self.orbit = BodyOrbit(self, r0, v0, 
@@ -936,6 +1025,11 @@ class Body:
     def setTarget(self, target):
         self.target = target
 
+    def clearTrajectory(self):
+        for seg in self.trajectorySegments:
+            seg.np.removeNode()
+        self.trajectorySegments = []
+
     def setScale(self,cameraPos):
         if self.np is None:
             return
@@ -947,7 +1041,57 @@ class Body:
         # self.orbit.apoapsis_np.setScale(np.linalg.norm(self.orbit.apoapsis_np.getPos()-cameraPos))
         # self.orbit.periapsis_np.setScale(np.linalg.norm(self.orbit.periapsis_np.getPos()-cameraPos))
 
+    def launch(self, t_start):
+        r,v, rot, w = self.propagate(t_start)
+        thickness = 2
+        color = self.color
+
+        # compute thrust
+        alt = np.linalg.norm(r-self.parent.position)
+        g = self.parent.k/alt**2
+        accel = self.thrust_max/self.mass - g.to(u.m/u.s/u.s)
+        if accel.value <= 0:
+            debug(f"Net thurst accel is {accel:.2f}.  Unable to overcome gravity for lift off")
+            return
+
+        #launch trajectory
+        seg = TrajectorySegment(body=self,
+                                attractor=self.parent,
+                                r0=r,
+                                v0=v,
+                                t0=t_start,
+                                type=TrajectorySegment.Type.LAUNCH)
+        self.trajectorySegments[-1].t1 = t_start*1
+        self.trajectorySegments[-1].r1 = r
+        self.trajectorySegments[-1].v1 = v
+
+        seg.computePeriodOrDuration() 
+        r1,v1, rot, w = seg.propagate(seg.t0 + seg.period)
+        seg.r1 = r1
+        seg.v1 = v1
+        seg.t1 = t_start + seg.period
+
+        # add ballistic trajectory at the end of the luanch period
+        seg2 = TrajectorySegment(body=self,
+                                attractor=self.parent,
+                                r0=r1,
+                                v0=v1,
+                                t0=seg.t1,
+                                type=TrajectorySegment.Type.BALLISTIC)
+
+        self.clearTrajectory()
+        self.trajectorySegments.append(seg)
+        self.trajectorySegments.append(seg2)
+        
+        self .createTrajectoryGeometry(self.render, thickness, color)
+
     def propagate(self, t=0*u.s):
+
+        if self.flag:
+            debug("----------------------------------------------")
+            for seg in self.trajectorySegments:
+                debug(f"{self.name} t={t.value:.2e}  seg:{seg.t0.value:.2e} {seg.t1.value:.2e} {seg.type}")
+
         for seg in self.trajectorySegments:
             res = seg.propagate(t)
             if res is not None:
@@ -1029,8 +1173,12 @@ class Body:
         # self.landed = self.attractor.R.to(u.m).value + 1 > np.linalg.norm(self.position.to(u.m).value)
 
     def getHUDInfo(self):
+        if self.parent is None:
+            alt = 0*u.km
+        else:
+            alt = np.linalg.norm(self.position - self.parent.position) - self.parent.size
         info = f"{self.name}"+\
-            f"  Alt: {formatDistance(np.linalg.norm(self.position))}"+ \
+            f"  Alt: {formatDistance(alt)}"+ \
             f"  Vel: {formatVelocity(np.linalg.norm(self.velocity))}\n"
 #            f"  VelVec: {self.velocity}\n"
     
@@ -1047,8 +1195,6 @@ class Body:
         self.thrust = thrust
 
     def computeInterceptManeuverFromLaunch(self, t_start, orbit2):
-        # get th
-        MIMIMUM_MANEUVER_ALTITUDE = 20*u.km
         self.orbit.r_launch = self.position
         self.orbit.v_launch = self.velocity
 
@@ -1121,8 +1267,16 @@ class Body:
             debug("orbit causes collision!!!")
     
     def randomize(self, dist, vel, time=0*u.s):
-        self.trajectorySegments[0].randomize(dist, vel, time=time)
-        self.trajectorySegments[0].createGeometry(self.render, color=self.color)
+        self.clearTrajectory()
+        seg = TrajectorySegment(body=self,
+                                attractor=self.parent,
+                                r0=self.position,
+                                v0=self.velocity,
+                                t0=time,
+                                type=TrajectorySegment.Type.BALLISTIC)
+        seg.randomize(dist, vel, time=time)
+        self.trajectorySegments.append(seg)
+        self.createTrajectoryGeometry(self.render, thickness=2, color=self.color)
 
     def createTrajectoryGeometry(self, render, thickness=2, color=LVecBase4f(0,1,0,1)):
         collision = False
@@ -1131,17 +1285,20 @@ class Body:
 
         #add final trajectory segment on planet surface
         if collision:
-            seg = self.trajectorySegments[-1]
-            seg_new = TrajectorySegment(body=self,
-                                    attractor=self.parent,
-                                    r0=seg.r1,
-                                    v0=seg.v1,
-                                    rr0=seg.rr1,
-                                    rv0=seg.rv1,
-                                    t0=seg.t1,
-                                    type=TrajectorySegment.Type.LANDED)
-            self.trajectorySegments.append(seg_new)
-            seg_new.createGeometry(render=render, thickness=thickness, color=color)
+            self.addCollisionTrjaectory(render, thickness=thickness, color=color)
+
+    def addCollisionTrjaectory(self, render, thickness=2, color=LVecBase4f(0,1,0,1)):
+        seg = self.trajectorySegments[-1]
+        seg_new = TrajectorySegment(body=self,
+                                attractor=self.parent,
+                                r0=seg.r1,
+                                v0=seg.v1,
+                                rr0=seg.rr1,
+                                rv0=seg.rv1,
+                                t0=seg.t1,
+                                type=TrajectorySegment.Type.LANDED)
+        self.trajectorySegments.append(seg_new)
+        seg_new.createGeometry(render=render, thickness=thickness, color=color)
 
     def createGeometry(self, render, type=Type.VESSEL, size=0.01*u.km, color=LVecBase4f(1,1,1,1)):
         self.color = color

@@ -22,7 +22,6 @@ import threading
 from astropy.constants import M_earth
 
 FONT_FILE = "Inconsolata-Regular.ttf"
-THRUST_MAX = 10.0*u.kg*u.m/u.s/u.s
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
 EARTH_TILT_DEG = 23.44
@@ -336,6 +335,10 @@ class MyApp(ShowBase):
             self.ship.thrust_max /= 1.1
             if self.ship.thrust_max < 0.1*u.kg*u.m/u.s/u.s:
                 self.ship.thrust_max = 0.1*u.kg*u.m/u.s/u.s
+        if key == 'l':
+            self.ship.launch(self.simulationTime)
+        if key == 'b':
+            self.ship.flag = True
         if key == '=':
             self.ship.thrust_max *= 1.1
         if key == ']':
