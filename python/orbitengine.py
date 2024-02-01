@@ -24,6 +24,8 @@ import os
 import inspect
 import time
 from scipy.integrate import ode
+import json
+import pickle
 
 EARTH_RADIUS = const.R_earth.to(u.km)
 T_ZERO = 0*u.s
@@ -275,7 +277,7 @@ def compute_totaldv(x, t_start, accel_max, orbit1, orbit2, time_weight, info):
     return (dv1+dv2).value + time_weight*t_flight.value
 
 
-def compute_dv(x0, orbit1, orbit2, info):
+def compute_dv(x0, orbit1, orbit2, info, launch=False):
     t_start, t_flight = x0
     t_start *= u.s
     t_flight *= u.s
@@ -288,10 +290,21 @@ def compute_dv(x0, orbit1, orbit2, info):
         raise RuntimeError(f"compute_totaldv labert produced {len(res)} solutions")
 
     v1_sol, v2_sol = res[0]
+
+    # take off vector must be in director of normal vector for take off
+    crash_penalty = 0
+    if launch:
+        normal_vec = r1/np.linalg.norm(r1)  #need to account for parent position        
+        v1_sol_vec = v1_sol/np.linalg.norm(v1_sol)
+        dot = np.dot(v1_sol_vec, normal_vec)
+        if dot < 0.2:
+            # float max creates bad numerical behavior :(
+            crash_penalty = 10
+
     info[0] = [r1, v1, r2, v2, v1_sol, v2_sol]
     dv1 = np.linalg.norm(v1 - v1_sol)
     dv2 = np.linalg.norm(v2 - v2_sol)
-    return  (dv1 + dv2).value
+    return  (dv1 + dv2).value+crash_penalty
 
 
 class OrbitEngine:
@@ -828,8 +841,8 @@ class TrajectorySegment:
                 debug(f"trajectory segment propagate failed: {t} -> {res}")
                 break
             r,v,rot,w = res
-            res = self.checkCollision(r, r_last, render)
-            if res is not None:
+            res2 = self.checkCollision(r, r_last, render)
+            if res2 is not None:
                 i, rc = res
                 vc = v_last*(1-i) + v*i
                 tc = t_last*(1-i) + t*i
@@ -862,8 +875,9 @@ class TrajectorySegment:
     def checkCollision(self, r, r_prev=None, render=None):
         if self.type != TrajectorySegment.Type.BALLISTIC:
             return None
+        return None  # diable check collision
 
-        if self.attractor.size.to(u.m) + 1*u.m > np.linalg.norm(r):
+        if self.attractor.size.to(u.m) - 1*u.m > np.linalg.norm(r):
             self.collision = True
             if r_prev is None:
                 self.setCollisionPoint(render, r.to(u.km).value)
@@ -1125,6 +1139,8 @@ class Body:
         dv2 = np.linalg.norm(v2 - v2_sol)
         debug(f"dv1: {dv1:.2f} dv2: {dv2:.2f} energy: {dv1+dv2:.2f}")
 
+
+
         seg_transfer = TrajectorySegment(body=self,
                                 attractor=self.parent,
                                 r0=r1,
@@ -1341,24 +1357,30 @@ class Body:
     def setThrust(self, thrust):
         self.thrust = thrust
 
-    def porkchop(self, t_start, target, resolution=5, show=False):
+    def lambertSearch(self, t_start, target, launch=False, bounds=[None, None], resolution=5, show=False):
 
-        p1 = self.trajectorySegments[0].period.to(u.s).value
-        p2 = target.trajectorySegments[0].period.to(u.s).value
+        per1 = self.trajectorySegments[0].period
+        per2 = target.trajectorySegments[0].period
+        per_max = 24*u.hour # default max period in case of non-keplerian orbits
+        if per1 is not None and per2 is not None:
+            per_max = np.max([per1.to(u.s).value,per2.to(u.s).value])
+        elif bounds[0] is None and bounds[1] is None:
+            debug(f"Warning: lambertSearch using default max period of {per_max}")
 
-        period = np.max([p1,p2])
-        # Generate some random data for the heat map
-        guess = [t_start.to(u.s).value+period/2, period/2]
-        radius = period/2
+        if bounds[0] is None:
+            bounds[0] = t_start.to(u.s).value + per_max
+        if bounds[1] is None:
+            bounds[1] = per_max
 
         # search for the starting point
-        t_start = np.linspace(guess[0] - radius, guess[0] + radius, resolution)
-        t_flight = np.linspace(guess[1] - radius*.9, guess[1] + radius*.9, resolution)
+        t_start = np.linspace(t_start.to(u.s).value, bounds[0], resolution)
+        t_flight = np.linspace(1800, bounds[1], resolution)
+
         data = np.zeros((len(t_flight), len(t_start)))
         info = [None]
         for i in range(len(t_start)):
             for j in range(len(t_flight)):
-                data[i, j] = compute_dv([t_start[i], t_flight[j]], self, target, info)
+                data[i, j] = compute_dv([t_start[i], t_flight[j]], self, target, info, launch)
         # Find the indices of the minimum value
         min_index = np.unravel_index(np.argmin(data), data.shape)
         min_value = data[min_index]
@@ -1384,24 +1406,47 @@ class Body:
         return guess, min_value
 
     def computeInterceptManeuver2(self, t_start, target):
-        guess, min_value = self.porkchop(t_start, target)
-        debug(f"porkchop guess: {guess} min_value: {min_value}")
 
-        p1 = self.trajectorySegments[0].period.to(u.s).value
-        p2 = target.trajectorySegments[0].period.to(u.s).value
+        solution_file = 'lambert.pkl'
+        if os.path.exists(solution_file):
+            with open(solution_file, 'rb') as f:
+                data = pickle.load(f)
+                t_transfer_start = data['t_delay']
+                t_transfer_duration = data['t_flight']
+                info = data['info']
+        else:
+            guess, min_value = self.lambertSearch(t_start, target, launch=True,resolution=50)
+            debug(f"lambert guess: {guess} min_value: {min_value}")
 
-        per = np.max([p1,p2])
-        bounds = [(t_start.to(u.s).value, t_start.to(u.s).value + 2*per), (1,2*per)]
-        info = [None]
-        res = minimize(compute_dv, guess, args=(self, target, info), bounds=bounds)
-        debug(f"minimize guess: {res.x} min_value: {res.fun}")
+            p1 = self.trajectorySegments[0].period.to(u.s).value
+            p2 = target.trajectorySegments[0].period.to(u.s).value
 
-        t_delay = res.x[0]*u.s
-        t_flight = res.x[1]*u.s
+            per = np.max([p1,p2])
+            bounds = [(t_start.to(u.s).value, t_start.to(u.s).value + 2*per), (1,2*per)]
+
+            info = [None]
+            res = minimize(compute_dv, guess, args=(self, target, info, True), bounds=bounds)
+            debug(f"minimize guess: {res.x} min_value: {res.fun}")
+
+            t_transfer_start = res.x[0]*u.s
+            t_transfer_duration = res.x[1]*u.s
+
+            # save solution to disk
+            with open(solution_file, 'wb') as f:
+                pickle.dump({'t_delay':t_transfer_start, 't_flight':t_transfer_duration, 'info':info}, f)
+
+
         r1, v1, r2, v2, v1_sol, v2_sol = info[0]
 
-        seg = self.trajectorySegments[0]
-        seg.t1 = t_delay
+        dv1 = np.linalg.norm(v1 - v1_sol)
+        dv2 = np.linalg.norm(v2 - v2_sol)
+
+        accel_max = (self.thrust_max/self.mass)
+        t_burn1 = (dv1/accel_max).to(u.s)
+        t_burn2 = (dv2/accel_max).to(u.s)
+
+        seg = self.trajectorySegments[-1]
+        seg.t1 = t_transfer_start
         seg.r1 = r1
         seg.v1 = v1
 
@@ -1409,24 +1454,94 @@ class Body:
                                 attractor=self.parent,
                                 r0=r1,
                                 v0=v1_sol,
-                                t0=seg.t1,
+                                t0=t_transfer_start,
                                 r1=r2,
                                 v1= v2_sol,
-                                t1=t_delay + t_flight,
+                                t1=t_transfer_start + t_transfer_duration,
                                 type=TrajectorySegment.Type.BALLISTIC)
-        
-
+    
         seg_target = TrajectorySegment(body=self,
                                 attractor=self.parent,
                                 r0=r2,
                                 v0=v2,
-                                t0=seg_transfer.t1,
+                                t0=t_transfer_start + t_transfer_duration,
+                                type=TrajectorySegment.Type.BALLISTIC)
+
+
+        # get the burn points
+
+
+        t_burn1_start = t_transfer_start-t_burn1/2
+        t_burn1_stop = t_transfer_start+t_burn1/2
+        accel_burn1 = (v1_sol - v1)/t_burn1
+        r_burn1_start, v_burn1_start, rot, w = seg.propagate(t_burn1_start)
+        r_burn1_stop, v_burn1_stop, rot, w = seg_transfer.propagate(t_burn1_stop)
+
+        t_burn2_start = t_transfer_start+t_transfer_duration-t_burn2/2
+        t_burn2_stop = t_transfer_start+t_transfer_duration+t_burn2/2
+        accel_burn2 = (v2-v2_sol)/t_burn2
+        r_burn2_start, v_burn2_start, rot, w = seg_transfer.propagate(t_burn2_start)
+        r_burn2_stop, v_burn2_stop, rot, w = seg_target.propagate(t_burn2_stop)
+
+
+        #adjust end of current trajectory
+        # idealized trajectories
+        seg.t1 = t_burn1_start
+        seg.r1 = r_burn1_start
+        seg.v1 = v_burn1_start
+        
+        seg_burn1 = TrajectorySegment(body=self,
+                                attractor=self.parent,
+                                r0=r_burn1_start,
+                                v0=v_burn1_start,
+                                t0=t_burn1_start,
+                                r1=r_burn1_stop,
+                                v1=v_burn1_stop,
+                                t1=t_burn1_stop,
+                                accel=accel_burn1,
+                                type=TrajectorySegment.Type.BALLISTIC)
+        
+
+
+        # accel aware trajectories
+        seg_transfer = TrajectorySegment(body=self,
+                                attractor=self.parent,
+                                r0=r_burn1_stop,
+                                v0=v_burn1_stop,
+                                t0=t_burn1_stop,
+                                r1=r_burn2_start,
+                                v1=v_burn2_start,
+                                t1=t_burn2_start,
+                                type=TrajectorySegment.Type.BALLISTIC)
+    
+
+
+        seg_burn2 = TrajectorySegment(body=self,
+                                attractor=self.parent,
+                                r0=r_burn2_start,
+                                v0=v_burn2_start,
+                                t0=t_burn2_start,
+                                r1=r_burn2_stop,
+                                v1=v_burn2_stop,
+                                t1=t_burn2_stop,
+                                accel=accel_burn2,
+                                type=TrajectorySegment.Type.BALLISTIC)
+
+        seg_target = TrajectorySegment(body=self,
+                                attractor=self.parent,
+                                r0=r_burn2_stop,
+                                v0=v_burn2_stop,
+                                t0=t_burn2_stop,
                                 type=TrajectorySegment.Type.BALLISTIC)
  
         self.target = target
-
+        self.trajectorySegments.append(seg_burn1)
         self.trajectorySegments.append(seg_transfer)
+        self.trajectorySegments.append(seg_burn2)
         self.trajectorySegments.append(seg_target)
+
+        for s in self.trajectorySegments:
+            debug(f"{s.t0:.2f} {s.t1:.2f} {s.type}")
         self.createTrajectoryGeometry(self.render, thickness=2, color=self.color)
 
 
