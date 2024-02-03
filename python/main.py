@@ -31,95 +31,6 @@ SHIP_SIZE = 0.01*u.km
 epsilon = np.finfo(float).eps
 sem = threading.Semaphore()
 
-# def spherical_to_cartesian(r, theta, phi):
-#     x = r * np.sin(phi) * np.cos(theta)
-#     y = r * np.sin(phi) * np.sin(theta)
-#     z = r * np.cos(phi)
-#     return x, y, z
-
-# def relativeEnergy(orbit1, orbit2, t):
-#     r1,v1 = orbit1.propagate(t*u.s)
-#     r2,v2 = orbit2.propagate(t*u.s)
-#     dist = np.linalg.norm(r1-r2).to(u.m).value
-#     dv = np.linalg.norm(v1-v2).to(u.m/u.s).value
-#     # account for graviatonal constant?
-#     # mass is the same so it cancels out
-#     return dist+dv*dv/2,(r1,v1,r2,v2)
-
-# # find initial burn that minimizes dist+dv**2.... but hard to balance the two to get a total minimum dv
-# def interceptManeuverOptimization(x, orbit1, orbit2, t_simulation,optimation_history):
-#     vx, vy, vz, t_intercept = x
-#     r_alt, v_alt = orbit1.propagate(t_simulation)
-#     v_alt[0] += vx*u.m/u.s
-#     v_alt[1] += vy*u.m/u.s
-#     v_alt[2] += vz*u.m/u.s
-#     orbit_alt = oe.BodyOrbit(orbit1.body, r_alt, v_alt,time=t_simulation, render=None, segments=0)
-
-
-#     dv = np.linalg.norm([vx,vy,vz])
-#     energy, state = relativeEnergy(orbit_alt, orbit2, t_intercept) + dv*dv/2 #total energy is distance + deltaV^2 + maneuver deltaV^2
-
-#     #compute distance
-#     # r1,v1 = orbit_alt.propagate(t_intercept*u.s)
-#     # r2,v2 = orbit2.propagate(t_intercept*u.s)
-#     # energy = np.linalg.norm(r1-r2).to(u.m).value +dv*dv/2
-
-#     optimation_history.append([x, energy])
-#     return energy
-
-# # find initial burn and final burn to minimize dv
-# def interceptManeuverOptimization2(x, orbit1, orbit2, t_simulation,optimation_history):
-#     vx, vy, vz, t_intercept = x
-
-#     # find the burn time based on dv and max thrust
-#     dv = np.linalg.norm([vx,vy,vz])*u.m/u.s
-#     t_burn = (dv/(THRUST_MAX/orbit1.body.mass)).to(u.s)
-
-#     # halfway through the burn is the effective position of the object in the future on the new orbit
-#     # this is from the cowell propagation simulation
-#     r_alt, v_alt = orbit1.propagate(t_simulation+t_burn/2) 
-#     v_alt[0] += vx*u.m/u.s
-#     v_alt[1] += vy*u.m/u.s
-#     v_alt[2] += vz*u.m/u.s
-#     orbit_alt = oe.BodyOrbit(orbit1.body, r_alt, v_alt,time=t_simulation, render=None, segments=0)
-
-#     dv_initial = np.linalg.norm([vx,vy,vz])
-#     #do cowell propagation to get final position and velocity?
-#     rf, vf = orbit_alt.propagate(t_intercept*u.s)
-#     rt, vt = orbit2.propagate(t_intercept*u.s)
-
-#     dv_final = np.linalg.norm(vf-vt).to(u.m/u.s).value
-#     dist_final = np.linalg.norm(rf-rt).to(u.m).value
-
-#     # weighting the distant heavier seems to help the optimizer to find lower dv solution
-#     # we do need a intercept time constraint to avoid a solution that is too far in the future that is pretty close
-
-#     # low pure energy solution does not seem to yeild a physical intercept
-#     energy = dist_final*dist_final + dv_initial*dv_initial + dv_final*dv_final
-
-#     optimation_history.append([x, energy,rf,vf,rt,vt])
-#     return energy
-
-# def checkInterceptEnergy(x, orbit1, orbit2, intercept_state):
-#     t_intercept = x[0]
-#     energy, state = relativeEnergy(orbit1, orbit2, t_intercept)
-#     intercept_state[0] = state
-#     return energy
-
-# # don't optimize the starting time, just the time of flight
-# def compute_totaldv(x, t_start, orbit_target, time_weight, r1, v1, info):
-#     t_flight = x[0]*u.s
-#     r2, v2 = orbit_target.propagate(t_start + t_flight)
-
-#     res = list(poliastro.iod.izzo.lambert(Earth.k, r1, r2, t_flight, M=0))
-#     if len(res) == 0 or len(res) > 1:
-#         raise RuntimeError(f"compute_totaldv labert produced {len(res)} solutions")
-
-#     v1_sol, v2_sol = res[0]
-#     info[0] = [r2, v2, v1_sol, v2_sol]
-#     total_dv = np.linalg.norm(v1 - v1_sol) + np.linalg.norm(v2 - v2_sol)
-#     return total_dv.value + time_weight*t_flight.value
-
 class MyApp(ShowBase):
     def __init__(self):
         ShowBase.__init__(self)
@@ -155,7 +66,7 @@ class MyApp(ShowBase):
                               type=oe.Body.Type.PLANET,
                               rr0=rr0_earth, 
                               rv0=rv0_earth, 
-                              mass = M_earth.to(u.kg),
+                              mass_dry = M_earth.to(u.kg),
                               lockedPosition=True)
         self.planet.createGeometry(type=oe.Body.Type.PLANET, 
                                    render=self.render,size=oe.EARTH_RADIUS,
@@ -166,23 +77,28 @@ class MyApp(ShowBase):
                             type=oe.Body.Type.VESSEL,
                             parent=self.planet,
                             r0=[1*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
-                            v0=[0,0,0]*u.km/u.s)
+                            v0=[0,0,0]*u.km/u.s,
+                            mass_dry=oe.ROCKET_DRY_MASS,
+                            mass_fuel0=oe.FUEL_MASS
+                            )
         self.ship.createGeometry(render=self.render,
                             type=oe.Body.Type.VESSEL,
                             size=SHIP_SIZE,
                             color=LVecBase4f(0,1,0,1))
         self.orbitEngine.addBody(self.ship)
 
-        self.ship2 = oe.Body(name="Ship2", 
-                            type=oe.Body.Type.VESSEL,
-                            parent=self.planet,
-                            r0=[3*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
-                            v0=[0,4,0]*u.km/u.s)
-        self.ship2.createGeometry(render=self.render,
-                            type=oe.Body.Type.VESSEL,
-                            size=SHIP_SIZE,
-                            color=LVecBase4f(1,0,0,1))
-        self.orbitEngine.addBody(self.ship2)
+        # self.ship2 = oe.Body(name="Ship2", 
+        #                     type=oe.Body.Type.VESSEL,
+        #                     parent=self.planet,
+        #                     r0=[3*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
+        #                     v0=[0,4,0]*u.km/u.s,
+        #                        mass_dry=oe.ROCKET_DRY_MASS,
+        #                        mass_fuel=oe.FUEL_MASS)
+        # self.ship2.createGeometry(render=self.render,
+        #                     type=oe.Body.Type.VESSEL,
+        #                     size=SHIP_SIZE,
+        #                     color=LVecBase4f(1,0,0,1))
+        # self.orbitEngine.addBody(self.ship2)
 
         axis = primatives.createAxis(oe.EARTH_RADIUS.value/2)
         axis_np = NodePath(axis)
