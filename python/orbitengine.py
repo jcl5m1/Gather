@@ -678,14 +678,18 @@ class TrajectorySegment:
 
         # use trajectory samples to estimate position
         if estimate:
-            for i in range(1,len(self.states)):
+            t_end = self.t1
+            if self.period is not None:
+                ts %= self.period
+                t_end = self.t0 + self.period
+            # try to guess the start index to minimize search
+            guess_i = int(self.segments*ts.value/(t_end-self.t0).value)
+            for i in range(guess_i, len(self.states)):
                 t0 = self.states[i-1][0]
                 t1 = self.states[i][0]
-                if self.period is not None:
-                    ts %= self.period                
-                if t1 > ts:                    
+                if t1 > ts:
                     interp = (ts-t0)/(t1-t0)
-#                    print(f"interp {interp:.2f} t0:{t0:.2f} t1:{t1:.2f} ts:{ts:.2f} period:{self.period:.2f}")
+#                    debug(f"ts:{ts:.2f} t1:{t1:.2f} estimate i:{i} guess_i:{guess_i}")
                     state0 = self.states[i-1]
                     state1 = self.states[i]
                     res = []
