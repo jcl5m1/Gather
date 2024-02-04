@@ -7,7 +7,7 @@ from poliastro import iod
 from scipy.optimize import fsolve
 from scipy.spatial.transform import Rotation
 import primatives
-from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode, LQuaternion, Vec3
+from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexReader, GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode, LQuaternion, Vec3
 from enum import Enum
 import math
 from scipy.optimize import minimize
@@ -45,8 +45,8 @@ FUEL_MASS = 100*u.kg
 FUEL_MASS_FLOW_RATE = 0.12*u.kg/u.s
 G0 = (9.81*u.m/u.s**2).to(u.km/u.s**2)
 
-INSERTION_BURN_TIME = 9.8
-INSERTION_INTERPOLATION = 0.21
+INSERTION_BURN_TIME = 5.15
+INSERTION_INTERPOLATION = 0.0
 
 def debug(msg):
     #print call stack
@@ -219,7 +219,7 @@ def func_twobody(t0, u_, k, ad, r0,v0):
          Non Keplerian acceleration (km/s2).
 
     """
-    ax, ay, az = ad(t0, u_, k, r0, v0)
+    ax, ay, az, dm = ad(t0, u_, k, r0, v0)
 
     x, y, z, vx, vy, vz, mass = u_
     r3 = (x**2 + y**2 + z**2)**1.5
@@ -231,7 +231,7 @@ def func_twobody(t0, u_, k, ad, r0,v0):
         -k * x / r3 + ax,
         -k * y / r3 + ay,
         -k * z / r3 + az,
-        -FUEL_MASS_FLOW_RATE.value
+        dm
     ])
 
     return du
@@ -242,9 +242,9 @@ def cowell(k, r0, v0, m0, t, rtol=1e-10, *, ad=None, callback=None, nsteps=1000)
     m = m0.to(u.kg).value
     u0 = np.array([x, y, z, vx, vy, vz, m])
 
-    # Set the non Keplerian acceleration
+    # Set the non Keplerian acceleration to zero by default
     if ad is None:
-        ad = lambda t0, u_, k_: (0, 0, 0)
+        ad = lambda t0, u_, k_, r0, v0: (0, 0, 0, 0)
 
     # Create an ode object
     rtol=1e-10
@@ -326,12 +326,13 @@ class OrbitEngine:
     def addBody(self, body):
         self.bodies.append(body)
 
-    def computeLambert(self):
-        pass
+    def bodyCount(self):
+        return len(self.bodies)
 
-    def update(self, time, dt):
-        for body in self.bodies:
-            body.update(time, dt)
+    def update(self, time, dt, target):
+        for i in range(len(self.bodies)):
+            # for the target compute update precisely, otherwise estimate
+            self.bodies[i].update(time, dt, estimate=target!=i)
 
     def setScale(self, cameraPos):
         for body in self.bodies:
@@ -367,7 +368,8 @@ class TrajectorySegment:
                  rv1=None,
                  t1=T_INFINITY,
                  accel_func=None,
-                 type=Type.POSITION_LOCKED):
+                 type=Type.POSITION_LOCKED,
+                 segments=100):
         self.set(body=body, 
                  attractor=attractor, 
                  r0=r0, 
@@ -383,7 +385,8 @@ class TrajectorySegment:
                  m1=m1,
                  t1=t1,
                  accel_func=accel_func,
-                 type=type)
+                 type=type,
+                 segments=segments)
 
     def set(self, 
                  body=None, 
@@ -401,7 +404,8 @@ class TrajectorySegment:
                  m1=None,
                  t1=T_INFINITY,
                  accel_func=None,
-                 type=Type.POSITION_LOCKED):
+                 type=Type.POSITION_LOCKED,
+                 segments=100):
         self.type = type
         self.body = body
         self.attractor = attractor
@@ -413,6 +417,7 @@ class TrajectorySegment:
         self.rr0=rr0
         self.rv0=rv0
         self.m0 = m0
+        self.segments = segments
 
         # exit state
         if r1 is None:
@@ -444,6 +449,7 @@ class TrajectorySegment:
 
         self.accel_func = accel_func
 
+        self.states = []
         self.np = None
         self.period = None
         self.collision = False
@@ -472,10 +478,12 @@ class TrajectorySegment:
         r = u_[0:3]
         mass = u_[6]
         norm_vec = r/np.linalg.norm(r)
-        thrust = (G0*SPECIFIC_IMPULSE * FUEL_MASS_FLOW_RATE).value
+ 
+        dm = FUEL_MASS_FLOW_RATE.value
         if mass < ROCKET_DRY_MASS.value:
-            thrust = 0
-        return norm_vec*thrust/mass
+            dm = 0
+        thrust = (G0*SPECIFIC_IMPULSE * dm).value
+        return np.concatenate((norm_vec*thrust/mass, [-dm]))
 
     # launch acceleration function
     def acc_fun_insertion(t, u_, k, r0, v0):
@@ -483,7 +491,8 @@ class TrajectorySegment:
         v = u_[3:6]
         mass = u_[6]
         
-        tangent_vec = np.cross(np.cross(r0, v0),r0)
+#        tangent_vec = np.cross(np.cross(r, v),r) # current tanget direction
+        tangent_vec = np.cross(np.cross(r0, v0),r0) #initial tangent vector
         tangent_vec = tangent_vec/np.linalg.norm(tangent_vec)
         
         normal_vec = r/np.linalg.norm(r)
@@ -491,10 +500,11 @@ class TrajectorySegment:
         #point anti normal slightly to kill vertical velocity
         thrust_vec = tangent_vec*(1-i) + normal_vec*i
 
-        thrust = (G0*SPECIFIC_IMPULSE * FUEL_MASS_FLOW_RATE).value
+        dm = FUEL_MASS_FLOW_RATE.value
         if mass < ROCKET_DRY_MASS.value:
-            thrust = 0
-        return thrust_vec*thrust/mass
+            dm = 0
+        thrust = (G0*SPECIFIC_IMPULSE * dm).value
+        return np.concatenate((thrust_vec*thrust/mass, [-dm]))
     
     def computePeriodOrDuration(self):
         # compute properties of trajectory
@@ -523,13 +533,12 @@ class TrajectorySegment:
             alt = np.linalg.norm(self.r0 - self.attractor.position)
             g = self.attractor.k/alt**2
             thrust = G0*SPECIFIC_IMPULSE * FUEL_MASS_FLOW_RATE
-            acc = thrust/self.body.total_mass() - g
+            acc = thrust/self.body.mass - g
             self.period = np.sqrt(2*TRAJECTORY_LAUNCH_MIN_ALTITUDE/acc).to(u.s)
 
     def createGeometry(self, render=None, thickness=2, color=LVecBase4f(0,1,0,1)):                
         self.color = color
         self.thickness = thickness
-        TRAJECTORY_SAMPLES = 100
         TRAJECTORY_NONPERIODIC_TIME_LIMIT = 4*u.hour
         if render is None:
             render = self.body.render
@@ -538,7 +547,7 @@ class TrajectorySegment:
             return
         
         elif self.type == TrajectorySegment.Type.LANDED:
-            steps = TRAJECTORY_SAMPLES
+            steps = self.segments
             t_stop = self.t1 
             if self.t0+self.period < t_stop:
                 t_stop = self.t0 + self.period
@@ -554,15 +563,16 @@ class TrajectorySegment:
             else:
                 if self.t0+self.period < t_stop:
                     t_stop = self.t0+self.period
-            steps = TRAJECTORY_SAMPLES
+            steps = self.segments
             times = np.linspace(self.t0, t_stop, steps)
 
         elif self.type == TrajectorySegment.Type.LAUNCH:
             t_stop = self.t1
-            steps = TRAJECTORY_SAMPLES
+            steps = self.segments
             times = np.linspace(self.t0, t_stop, steps)
 
         positions = []
+        self.states = []
         t_last = self.t0
         v_last = self.v0
         r_last = self.r0
@@ -584,9 +594,11 @@ class TrajectorySegment:
                 self.t1 = tc
                 self.m1 = mc
                 positions.append(rc)
+                self.states.append([tc-self.t0, rc, vc, rot, w, mc])  #rot and w not used yet
                 break
             
             positions.append(r.value)
+            self.states.append([t-self.t0, r, v, rot, w, m])
             r_last = r
             v_last = v
             t_last = t
@@ -609,20 +621,25 @@ class TrajectorySegment:
     def checkCollision(self, r, r_prev=None, render=None):
         if self.type != TrajectorySegment.Type.BALLISTIC:
             return None
+        
+        r_mag = np.linalg.norm(r).to(u.m)
+        attractor_size = self.attractor.size.to(u.m)
 
-        if self.attractor.size.to(u.m) - 1*u.m > np.linalg.norm(r):
+        if r_mag < attractor_size - 1*u.m:
             self.collision = True
-            if r_prev is None:
+            if r_prev is None or np.linalg.norm(r_prev).to(u.m) < attractor_size-1*u.m:
+                r *= attractor_size/r_mag
                 self.setCollisionPoint(render, r.to(u.km).value)
-                return None
+                return 0, r.to(u.km).value
             else:
                 intersections = line_sphere_intersection(r_prev.to(u.km).value, 
                                                         r.to(u.km).value, 
                                                         self.attractor.position.to(u.km).value, 
                                                         self.attractor.size.to(u.km).value)
                 if len(intersections) == 0:
-                    debug(f"no intersection")
-                    return None
+                    debug(f"no intersection - r:{r_mag} r:{np.linalg.norm(r_prev).to(u.m)} attractor:{self.attractor.size.to(u.m)}")
+                    r *= attractor_size/r_mag
+                    intersections = [0, r.to(u.km).value]
                 self.setCollisionPoint(render, intersections[0][1])
             return intersections[0]
         return None
@@ -645,7 +662,7 @@ class TrajectorySegment:
         self.v0 = v
         return r, v
 
-    def propagate(self, t=0*u.s):
+    def propagate(self, t=0*u.s, estimate=False):
 
         if t < self.t0:
             return None
@@ -655,7 +672,34 @@ class TrajectorySegment:
         if self.t0 == self.t1:
             return self.r0, self.v0, self.rr0, self.rv0, self.m0
 
+
         ts = t.to(u.s)-self.t0
+
+
+        # use trajectory samples to estimate position
+        if estimate:
+            for i in range(1,len(self.states)):
+                t0 = self.states[i-1][0]
+                t1 = self.states[i][0]
+                if self.period is not None:
+                    ts %= self.period                
+                if t1 > ts:                    
+                    interp = (ts-t0)/(t1-t0)
+#                    print(f"interp {interp:.2f} t0:{t0:.2f} t1:{t1:.2f} ts:{ts:.2f} period:{self.period:.2f}")
+                    state0 = self.states[i-1]
+                    state1 = self.states[i]
+                    res = []
+                    for e in range(1,len(state0)):
+                        if e == 4:
+                            # angular velocity is special stucture
+                            w = [state0[e][0]*(1-interp) + state1[e][0]*interp, 
+                                 state0[e][1]*(1-interp) + state1[e][1]*interp, 
+                                 state0[e][2]*(1-interp) + state1[e][2]*interp]
+                            res.append(w)
+                        else:
+                            res.append(state0[e]*(1-interp) + state1[e]*interp)
+                    return res
+
 
         #propagate rotation
         axis_quat = LQuaternion()
@@ -700,7 +744,7 @@ class TrajectorySegment:
                 k=self.attractor.k,
                 r0=self.r0,
                 v0=self.v0, 
-                m0=self.body.total_mass(),
+                m0=self.m0,
                 t=ts, 
                 ad=self.accel_func)
             return r, v, axis_quat.getHpr()*u.deg, w, m
@@ -735,7 +779,7 @@ class TrajectorySegment:
                         k=self.attractor.k,
                         r0=self.r0,
                         v0=self.v0, 
-                        m0=self.body.total_mass(),
+                        m0=self.m0,
                         t=ts, 
                         ad=self.accel_func)
                     return r, v, axis_quat.getHpr()*u.deg, w, m
@@ -744,12 +788,18 @@ class TrajectorySegment:
                     k=self.attractor.k,
                     r0=self.r0,
                     v0=self.v0, 
-                    m0=self.body.total_mass(),
+                    m0=self.m0,
                     t=ts, 
                     ad=self.accel_func)
                 return r, v, axis_quat.getHpr()*u.deg, w, m
         debug("propagate un recognized segment type")
         return None
+    
+    def clear(self):
+        if self.np is not None:
+            self.np.removeNode()
+        if self.collision_np is not None:
+            self.collision_np.removeNode()
 
 class Body:
     class Type(Enum):
@@ -789,7 +839,8 @@ class Body:
         self.mass_fuel0 = mass_fuel0
         self.fuel_mass_flow_rate = FUEL_MASS_FLOW_RATE
         self.mass_dry = mass_dry
-        self.mass = self.total_mass()
+        self.mass_cargo = 0*u.kg
+        self.mass = self.total_initial_mass()
 
         if lockedPosition:
             seg = TrajectorySegment(body=self,
@@ -809,7 +860,7 @@ class Body:
                                     rr0=rr0,
                                     rv0=rv0,
                                     t0=t_start,
-                                    m0=self.total_mass(),
+                                    m0=self.mass,
                                     type=TrajectorySegment.Type.LANDED)
         else:
             seg = TrajectorySegment(body=self,
@@ -819,19 +870,19 @@ class Body:
                                     rr0=rr0,
                                     rv0=rv0,
                                     t0=t_start,
-                                    m0=self.total_mass(),
+                                    m0=self.mass,
                                     type=TrajectorySegment.Type.BALLISTIC)
         self.trajectorySegments.append(seg)
 
-    def total_mass(self):
-        return self.mass_dry + self.mass_fuel0
+    def total_initial_mass(self):
+        return self.mass_dry + self.mass_fuel0 + self.mass_cargo
 
     def setTarget(self, target):
         self.target = target
 
     def clearTrajectory(self):
         for seg in self.trajectorySegments:
-            seg.np.removeNode()
+            seg.clear()
         self.trajectorySegments = []
 
     def setScale(self,cameraPos):
@@ -851,7 +902,7 @@ class Body:
         # alt = np.linalg.norm(normal_vec)
         # normal_vec = normal_vec/alt
         thrust = G0*SPECIFIC_IMPULSE * FUEL_MASS_FLOW_RATE        
-        accel = thrust/self.total_mass()
+        accel = thrust/self.mass
         if accel <= G0:
             debug(f"Net thurst accel is {accel.to(u.m/u.s**2):.3f}.  Lift off: FAILED")
             return
@@ -867,7 +918,8 @@ class Body:
                                 m0=m,
                                 t1=t_launch_turn,
                                 accel_func=TrajectorySegment.acc_fun_launch,
-                                type=TrajectorySegment.Type.LAUNCH)
+                                type=TrajectorySegment.Type.LAUNCH,
+                                segments=10)
 
 
         r1,v1, rot, w, m1 = seg_launch.propagate(t_launch_turn)
@@ -886,7 +938,8 @@ class Body:
                                 t0=seg_launch.t1,
                                 t1=t_insertion_stop,
                                 accel_func=TrajectorySegment.acc_fun_insertion,
-                                type=TrajectorySegment.Type.BALLISTIC)
+                                type=TrajectorySegment.Type.BALLISTIC,
+                                segments=25)
         
         r2, v2, rot, w, m2 = seg_insertion.propagate(t_insertion_stop)
         seg_insertion.r1 = r2
@@ -903,14 +956,6 @@ class Body:
                                 t0=t_insertion_stop,
                                 type=TrajectorySegment.Type.BALLISTIC)
 
-        # seg_ballistic = TrajectorySegment(body=self,
-        #                         attractor=self.parent,
-        #                         r0=r1,
-        #                         v0=v1,
-        #                         t0=seg_launch.t1,
-        #                         m0=m1,
-        #                         type=TrajectorySegment.Type.BALLISTIC)
-
 
         self.clearTrajectory()
         self.trajectorySegments.append(seg_launch)
@@ -919,53 +964,30 @@ class Body:
         
         self.createTrajectoryGeometry(self.render, thickness, color)
 
-    def propagate(self, t=0*u.s):
+    def propagate(self, t=0*u.s, estimate=False):
 
         if self.flag:
             debug("----------------------------------------------")
             for seg in self.trajectorySegments:
-                debug(f"{self.name} t={t.value:.2e}  seg:{seg.t0.value:.2e} {seg.t1.value:.2e} {seg.type}")
+                debug(f"{self.name} t={t.value:.2f} segment t0:{seg.t0.value:.2f} t1:{seg.t1.value:.2f} m0:{seg.m0.value:.2f} m1:{seg.m1.value:.2f} {seg.type}")
 
         for seg in self.trajectorySegments:
-            res = seg.propagate(t)
+            res = seg.propagate(t, estimate=estimate)
             if res is not None:
                 self.lastSegment = seg
                 return res
-        # if self.lockedPosition:
-        #     #get axis of rotation
-        #     axis_quat = LQuaternion()
-        #     axis_quat.setHpr(Vec3(*self.rr0.value))
 
-        #     axis_vec = Vec3(0,0,1)
-        #     axis_vec = axis_quat.xform(axis_vec)
+    def update(self, time, dt, estimate=False):
 
-        #     rotation_quat = LQuaternion()
-        #     rotation_angle = self.rv0*t.to(u.s)
-        #     rotation_quat.setFromAxisAngle(rotation_angle[0].value, axis_vec)
-        #     axis_quat *= rotation_quat
-        #     self.rotation = axis_quat.getHpr()*u.deg
-        #     return self.position, self.velocity, rotation_quat
-
-        # # if self.landed:
-        # #     return self.position, self.velocity
-
-        # # return self.orbit.propagate(t)
-        # return self.position, self.velocity
-
-    def update(self, time, dt):
-
-        # if np.linalg.norm(self.thrust.value) >= epsilon:
-        #     # if self.landed: # take off
-        #     #     self.orbit.set(self.attractor,self.position, self.velocity, time, segments=0)
-        #     pos, vel = self.orbit.propagate(time-dt)
-        #     self.deltaV = self.thrust*dt/self.mass
-        #     vel = vel + self.deltaV
-        #     self.orbit.set(self.attractor,pos, vel, time)
-        # else:
-
-        res = self.propagate(time)        
+        # use trajectory np data to estimate position for fast rendering
+        res = self.propagate(time, estimate=estimate)
         if res is None:
             return
+        
+        # hide the completed segments
+        for seg in self.trajectorySegments:
+            if seg.t1 < time:
+                seg.np.hide()
 
         self.position, self.velocity, self.rotation, w, self.mass = res
         if self.np is None:
@@ -982,30 +1004,6 @@ class Body:
         self.velocity_np.reparentTo(self.render)
 
         self.lastTime = time
-        # if self.lockedPosition:
-        #     # only update rotation
-        #     self.rotation = self.rotation + self.rotation_velocity*dt
-        #     return
-
-        # if not self.landed: # flying
-        #     pos, vel = self.orbit.propagate(time)
-        #     self.position = pos.to(u.km)
-        #     self.velocity = vel.to(u.m/u.s)
-        # elif not self.landedPrev:  # just landed
-        #     pos, vel = self.orbit.propagate(time)
-        #     #normlize pos to radius of attractor
-        #     pos = self.attractor.R*pos/np.linalg.norm(pos)
-        #     #velocity should match the surface rotation of attractor
-        #     vel = [0,0,0]*u.m/u.s
-        #     self.orbit.set(self.attractor,pos, vel, time, segments=0)
-        #     self.position = pos.to(u.km)
-        #     self.velocity = vel.to(u.m/u.s)
-
-        # self.np.setPos(LVecBase3f(*self.position.value))
-        # self.landedPrev = self.landed
-
-        # #1 meter tolerance for landing
-        # self.landed = self.attractor.R.to(u.m).value + 1 > np.linalg.norm(self.position.to(u.m).value)
 
     def getHUDInfo(self):
         if self.parent is None:
@@ -1121,7 +1119,7 @@ class Body:
         dv2 = np.linalg.norm(v2 - v2_sol)
 
         thrust = G0*SPECIFIC_IMPULSE * FUEL_MASS_FLOW_RATE
-        accel_max = thrust/self.total_mass()
+        accel_max = thrust/self.mass
         t_burn1 = (dv1/accel_max).to(u.s)
         t_burn2 = (dv2/accel_max).to(u.s)
 
@@ -1235,7 +1233,7 @@ class Body:
         acc_vector = acc/np.linalg.norm(acc)
         thrust = G0*SPECIFIC_IMPULSE * FUEL_MASS_FLOW_RATE        
         self.thrust = acc_vector*thrust
-        acc = self.thrust/self.total_mass()
+        acc = self.thrust/self.mass
         t_launch = np.sqrt(2*(MIMIMUM_MANEUVER_ALTITUDE/np.linalg.norm(acc)).to(u.s**2))
 
         v = self.orbit.v_launch + acc*t_launch
@@ -1261,7 +1259,7 @@ class Body:
         ts_start = time.time()
         info = [None]
         thrust = G0*SPECIFIC_IMPULSE * FUEL_MASS_FLOW_RATE
-        accel_max = thrust/self.total_mass()
+        accel_max = thrust/self.mass
 
         # find trajectory assuming instant velocity change
         options = {'maxiter':35}
@@ -1299,19 +1297,27 @@ class Body:
         if self.orbit.collision:
             debug("orbit causes collision!!!")
     
-    def randomize(self, dist, vel, time=0*u.s):
+    def randomize(self, dist, vel, time=0*u.s, type=TrajectorySegment.Type.BALLISTIC, createGeometry=True):
         self.clearTrajectory()
         seg = TrajectorySegment(body=self,
                                 attractor=self.parent,
                                 r0=self.position,
                                 v0=self.velocity,
                                 t0=time,
-                                type=TrajectorySegment.Type.BALLISTIC)
+                                m0=self.total_initial_mass(),
+                                type=type)
         seg.randomize(dist, vel, time=time)
         self.trajectorySegments.append(seg)
-        self.createTrajectoryGeometry(self.render, thickness=2, color=self.color)
+        if createGeometry:
+            self.createTrajectoryGeometry(self.render, thickness=2, color=self.color)
 
-    def createTrajectoryGeometry(self, render, thickness=2, color=LVecBase4f(0,1,0,1)):
+    def createTrajectoryGeometry(self, render=None, thickness=2, color=None):
+        if render is None:
+            render = self.render
+
+        if color is None:
+            color = self.color
+
         collision = False
         for seg in self.trajectorySegments:
             collision = seg.createGeometry(render=render, thickness=thickness, color=color)
@@ -1320,7 +1326,9 @@ class Body:
         if collision:
             self.addCollisionTrjaectory(render, thickness=thickness, color=color)
 
-    def addCollisionTrjaectory(self, render, thickness=2, color=LVecBase4f(0,1,0,1)):
+    def addCollisionTrjaectory(self, render, thickness=2, color=None):
+        if color is None:
+            color = self.color
         seg = self.trajectorySegments[-1]
         seg_new = TrajectorySegment(body=self,
                                 attractor=self.parent,
@@ -1357,20 +1365,10 @@ class Body:
 
         self.np.reparentTo(render)
 
-
-        self.createTrajectoryGeometry(self.render, thickness=2, color=self.color)
-
-        # earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 1, None)
-        # earth_np = NodePath(earth)
-        # earth_np.reparentTo(self.render)
-        # earth_np.setRenderModeWireframe()
-
-#        self.np.setPos(LVecBase3f(*pos.value))
-
-        #     earth = primatives.createIcosphere(oe.EARTH_RADIUS.value, 5)
-        #     earth_np = NodePath(earth)
-        #     earth_np.reparentTo(self.render)
-        #     earth_np.setRenderModeWireframe()
-
-        # self.np = NodePath(primatives.createCube(size, color=self.color))
-        # self.np.reparentTo(render)
+    def showTrajectory(self, show=True):
+        for seg in self.trajectorySegments:
+            if seg.np is not None:
+                if show:
+                    seg.np.show()
+                else:
+                    seg.np.hide()

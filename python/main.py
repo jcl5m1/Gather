@@ -20,6 +20,7 @@ from direct.gui.OnscreenText import OnscreenText
 from panda3d.core import TextNode
 import threading
 from astropy.constants import M_earth
+import time
 
 FONT_FILE = "Inconsolata-Regular.ttf"
 WINDOW_WIDTH = 1280
@@ -30,6 +31,9 @@ SHIP_SIZE = 0.01*u.km
 
 epsilon = np.finfo(float).eps
 sem = threading.Semaphore()
+
+def random_color():
+    return LVecBase4f(np.random.rand(),np.random.rand(),np.random.rand(),1)
 
 class MyApp(ShowBase):
     def __init__(self):
@@ -85,6 +89,7 @@ class MyApp(ShowBase):
                             type=oe.Body.Type.VESSEL,
                             size=SHIP_SIZE,
                             color=LVecBase4f(0,1,0,1))
+        self.ship.createTrajectoryGeometry(render=self.render)
         self.orbitEngine.addBody(self.ship)
 
         # self.ship2 = oe.Body(name="Ship2", 
@@ -158,79 +163,6 @@ class MyApp(ShowBase):
         self.intercept2_np = None
         self.intercept = None
 
-
-
-#     def findApproximateClosestApproach(self, t_max=0):
-#         # #initial guess
-#         # x0 = [0, 0, 0, 0]
-
-#         # # Define the bounds for the parameters
-#         # bounds = [(0, 3600*24), (-100, 100), (-100, 100), (-100, 100)]
-
-#         MAX_ORBITS = 3 # find reasonable window based on the period of the orbits
-# #        oe.debug(f"{self.ship.orbit.orbit.period}/{self.ship2.orbit.orbit.period}= {self.ship.orbit.orbit.period/self.ship2.orbit.orbit.period}")
-
-#         max_period = max(self.ship.orbit.orbit.period, self.ship2.orbit.orbit.period)
-
-#         if t_max == 0:
-#             t_max = self.ship.orbit.orbit.period*MAX_ORBITS
-#         t = np.linspace(self.simulationTime, self.simulationTime+max_period*MAX_ORBITS, num=100)  # Time range from 0 to 24 hours
-#         energy = []
-#         orbit1 = self.ship.orbit
-#         orbit2 = self.ship2.orbit
-
-#         state = []
-#         for time in t:
-#             e, s = relativeEnergy(orbit1, orbit2, time.value)
-#             energy.append(e)
-#             state.append(s)
-
-#         # find minimum energy time
-#         min_energy = np.min(energy)
-#         min_energy_index = np.argmin(energy)
-#         self.min_energy_intercept_time_guess = t[min_energy_index]
-#         self.graph.clear()
-#         self.graph.plot(energy)
-#         self.graph.vline(min_energy_index, color=LVecBase4f(1,0,0,1))
-
-#         self.updateIntercept(*state[min_energy_index])
-        
-
-    # def incrementallyFindClosestApproach(self):
-    #     global optimation_history
-    #     x0 = [self.min_energy_intercept_time_guess.value]
-    #     # Define the bounds for the parameters
-    #     bounds = [(self.simulationTime.to(u.s).value, None)]
-
-    #     intercept_state = [0]
-    #     result = minimize(checkInterceptEnergy, x0, args=(self.ship.orbit, self.ship2.orbit, intercept_state), bounds=bounds,
-    #                       tol=1e-1, options={'maxiter':5})
-
-    #     minimized_energy = result.fun
-    #     self.min_energy_intercept_time_guess = result.x[0]*u.s
-    #     if self.min_energy_intercept_time_guess < self.simulationTime:
-    #         self.min_energy_intercept_time_guess = self.simulationTime
-        
-    #     self.updateIntercept(*intercept_state[0])
-
-
-    # def updateIntercept(self, r1, v1, r2, v2):
-    #     # mark closest approach
-    #     if self.intercept_np is None or self.intercept_np.is_empty():
-    #         self.intercept = primatives.createCube(0.002,color=self.ship.color)
-    #         self.intercept_np = NodePath(self.intercept)
-    #         self.intercept_np.reparentTo(self.render)
-    #     self.intercept_np.setPos(LVecBase3f(*r1.to(u.km).value))
-
-    #     if self.intercept2_np is None or self.intercept2_np.is_empty():
-    #         self.intercept2 = primatives.createCube(0.002,color=self.ship2.color)
-    #         self.intercept2_np = NodePath(self.intercept2)
-    #         self.intercept2_np.reparentTo(self.render)
-    #     self.intercept2_np.setPos(LVecBase3f(*r2.to(u.km).value))
-
-    #     #store the intercept data for HUD
-    #     self.intercept = [np.linalg.norm(r1-r2), np.linalg.norm(v1-v2)]
-
     def handleKeyDown(self, key):
 
         self.keyState[key] = True
@@ -245,17 +177,16 @@ class MyApp(ShowBase):
             self.timeMultiplier /= 10
             if self.timeMultiplier < 0.001:
                 self.timeMultiplier = 0.001
-        if key == 'm':
-            self.ship.computeInterceptManeuver2(self.simulationTime, self.ship2)
+        # if key == 'm':
+        #     self.ship.computeInterceptManeuver2(self.simulationTime, self.ship2)
         if key == '-':
             self.ship.thrust_max /= 1.1
             if self.ship.thrust_max < 0.1*u.kg*u.m/u.s/u.s:
                 self.ship.thrust_max = 0.1*u.kg*u.m/u.s/u.s
         if key == 'l':
-            #self.ship.launch2(self.simulationTime, self.ship2)
             self.ship.launch(self.simulationTime)
         if key == 'b':
-            self.ship2.flag = True
+            self.ship.flag = True
         if key == '=':
             self.ship.thrust_max *= 1.1
         if key == ']':
@@ -263,17 +194,31 @@ class MyApp(ShowBase):
         if key == '[':
             self.changeCameraTarget(-1)
         if key == 'x':
-            self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime)
-        
-    # def clearManeuverVisualization(self):
-    #     # clear out the other intermediate visualizations
-    #     if self.intercept_np is not None:
-    #         if not self.intercept_np.is_empty():
-    #             self.intercept_np.removeNode()
-    #     if self.intercept2_np is not None:
-    #         if not self.intercept2_np.is_empty():
-    #             self.intercept2_np.removeNode()
-    #     self.ship.orbit.clearManeuverVisualizations()
+            self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime, type=oe.TrajectorySegment.Type.LANDED)
+        if key == 'n':
+            oe.debug("adding ship")
+            thread = threading.Thread(target=self.addRandomShip)
+            thread.start()
+
+    def addRandomShip(self):
+        new_ship = oe.Body(name=f"Ship-{self.orbitEngine.bodyCount()}",
+                            type=oe.Body.Type.VESSEL,
+                            parent=self.planet,
+                            mass_dry=oe.ROCKET_DRY_MASS,
+                            mass_fuel0=oe.FUEL_MASS
+                            )
+        new_ship.createGeometry(render=self.render,
+                                type=oe.Body.Type.VESSEL,
+                                size=SHIP_SIZE,
+                                color=random_color())
+        new_ship.randomize(1*oe.EARTH_RADIUS, 
+                           0*u.km/u.s, 
+                           self.simulationTime, 
+                           type=oe.TrajectorySegment.Type.LANDED,
+                           createGeometry=False)
+        new_ship.launch(self.simulationTime)
+        self.orbitEngine.addBody(new_ship)
+
 
     def changeCameraTarget(self,step=1):
         self.cameraTarget = (self.cameraTarget+step)%len(self.orbitEngine.bodies)
@@ -361,56 +306,8 @@ class MyApp(ShowBase):
             self.hitpoint_np.setPos(self.hitpointPos)
             self.hitpoint_np.show()
 
-        # thrust_vector = np.array([0.,0.,0.])
-        # if self.keyState.get('w', True):
-        #     thrust_vector += np.array([0,1.,0])
-        # if self.keyState.get('s', True):
-        #     thrust_vector -= np.array([0,1.,0])
-        # if self.keyState.get('a', True):
-        #     thrust_vector -= np.array([1.,0,0])
-        # if self.keyState.get('d', True):
-        #     thrust_vector += np.array([1.,0,0])
-        # if self.keyState.get('q', True):
-        #     thrust_vector -= np.array([0,0,1.])
-        # if self.keyState.get('e', True):
-        #     thrust_vector += np.array([0,0,1.])
-
-        # #target retrograde
-        # target_prograde = self.ship2.position-self.ship.position
-        # target_velocity = self.ship.velocity-self.ship2.velocity
-        # target_prograde_mag = np.linalg.norm(target_prograde)
-        # target_velocity_mag = np.linalg.norm(target_velocity)
-        # ortho_velocity = 0 * u.m/u.s
-        # if target_prograde_mag.value > epsilon and target_velocity_mag.value > epsilon:
-        #     target_prograde_vector = np.squeeze(target_prograde/target_prograde_mag)
-        #     target_velocity_vector = np.squeeze(target_velocity/target_velocity_mag)
-        #     orthogonal_velocity_vector = target_velocity_vector - np.dot(target_velocity_vector, target_prograde_vector)*target_prograde_vector
-        #     orthogonal_velocity_vector = orthogonal_velocity_vector/np.linalg.norm(orthogonal_velocity_vector)
-        #     ortho_velocity = np.linalg.norm(target_velocity*np.dot(target_velocity_vector, orthogonal_velocity_vector))
-
-        #     # cancel non-target prograde velocity
-        #     if self.keyState.get('t', True):
-        #         thrust_vector -= orthogonal_velocity_vector
-
-        #     # retro-target velocity
-        #     if self.keyState.get('r', True):                
-        #         thrust_vector -= target_velocity_vector
-        #     #target prograde
-        #     if self.keyState.get('f', True):
-        #         thrust_vector += target_prograde_vector
-
-        # if np.linalg.norm(thrust_vector) > epsilon:
-        #     thrust_vector = thrust_vector/np.linalg.norm(thrust_vector)
-        #     # thrust is applied compute updated intercept
-        #     if self.intercept is None:
-        #         self.findApproximateClosestApproach()
-        #     self.incrementallyFindClosestApproach()
-
-        # thrust = self.ship.thrust_max*thrust_vector
-#        self.ship.setThrust(thrust) 
-
         self.orbitEngine.setScale(self.camera.getPos()*u.km)
-        self.orbitEngine.update(self.simulationTime, dt)
+        self.orbitEngine.update(self.simulationTime, dt, self.cameraTarget)
 
         if self.intercept_np is not None and not self.intercept_np.is_empty():
              self.intercept_np.setScale(np.linalg.norm(self.intercept_np.getPos()-self.camera.getPos()))
@@ -421,7 +318,8 @@ class MyApp(ShowBase):
         self.hudText.setPos(-0.95*aspect_ratio, 0.95)
         text = f"Time: {oe.formatTime(self.simulationTime)}"
         text += " (paused)\n" if self.paused else f" (x{self.timeMultiplier:.0e})\n"
-        text += self.orbitEngine.getHUDInfo()+"\n"
+        text += self.orbitEngine.bodies[self.cameraTarget].getHUDInfo()+"\n"
+#        text += self.orbitEngine.getHUDInfo()+"\n"
 
         self.hudText.setText(text)
 
@@ -436,10 +334,6 @@ class MyApp(ShowBase):
         return Task.cont
 
     def cameraControl(self, task):
-        # if not self.mouseWatcherNode.hasMouse():
-        #     return
-        #self.cameraRot[1] += 0.002
-
         if self.mouseButtonState[2]:
             if not self.mouseButtonStateLast[2]:
                 self.mousePosStart = LPoint2f(self.mouseWatcherNode.getMouse())
@@ -451,6 +345,9 @@ class MyApp(ShowBase):
                 self.cameraRot[0] += delta[1]
                 self.cameraRot[1] -= delta[0]
 
+        # slow autorotation
+        #self.cameraRot[1] += 0.005
+
         x = self.cameraDist.value * math.sin(self.cameraRot[0]) * math.cos(self.cameraRot[1])
         y = self.cameraDist.value * math.sin(self.cameraRot[0]) * math.sin(self.cameraRot[1])
         z = self.cameraDist.value * math.cos(self.cameraRot[0])
@@ -461,16 +358,9 @@ class MyApp(ShowBase):
             self.cameraDistMin = oe.EARTH_RADIUS*1.1
         else:
             self.cameraDistMin = 10*u.m
-        # elif self.cameraTarget == 1:
-        #     self.cameraDistMin = 10*u.m
-        #     target_pos = self.ship.position.value
-        #     self.camera.setPos(x+target_pos[0],y+target_pos[1],z+target_pos[2])
-        #     self.camera.lookAt(*target_pos)
-        # elif self.cameraTarget == 2:
-        #     self.cameraDistMin = 10*u.m
-        #     target_pos = self.ship2.position.value
-        #     self.camera.setPos(x+target_pos[0],y+target_pos[1],z+target_pos[2])
-        #     self.camera.lookAt(*target_pos)
+
+        for i in range(len(self.orbitEngine.bodies)):
+            self.orbitEngine.bodies[i].showTrajectory(i==self.cameraTarget)
 
         target_pos = target.position.value
         self.camera.setPos(x+target_pos[0],y+target_pos[1],z+target_pos[2])
