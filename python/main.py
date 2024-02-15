@@ -1,6 +1,5 @@
 from math import pi, sin, cos
 from astropy import units as u
-
 from direct.showbase.ShowBase import ShowBase
 from direct.task import Task
 from panda3d.core import Point3, LVecBase3f, LVecBase4f
@@ -12,7 +11,11 @@ from panda3d.core import WindowProperties
 import primatives
 import numpy as np
 from scipy.optimize import minimize
-import orbitengine as oe
+import orbitengine.engine as oe
+from orbitengine.engine import OrbitEngine, debug
+from orbitengine.body import Body
+from orbitengine.trajectorysegment import TrajectorySegment
+
 import numpy as np
 from poliastro.bodies import Earth
 import poliastro
@@ -63,44 +66,44 @@ class MyApp(ShowBase):
         self.cameraTarget = 0
         self.paused = False
 
-        self.orbitEngine = oe.OrbitEngine(self.render)
+        self.orbitEngine = OrbitEngine(self.render)
         rr0_earth = [0, EARTH_TILT_DEG, 0]*u.deg
         rv0_earth = [360/u.day.to(u.s), 0, 0]*u.deg/u.s
-        self.planet = oe.Body(name="Earth", 
-                              type=oe.Body.Type.PLANET,
+        self.planet = Body(name="Earth", 
+                              type=Body.Type.PLANET,
                               rr0=rr0_earth, 
                               rv0=rv0_earth, 
                               mass_dry = M_earth.to(u.kg),
                               lockedPosition=True)
-        self.planet.createGeometry(type=oe.Body.Type.PLANET, 
+        self.planet.createGeometry(type=Body.Type.PLANET, 
                                    render=self.render,size=oe.EARTH_RADIUS,
                                    color=LVecBase4f(.3,.3,.3,1))
         self.orbitEngine.addBody(self.planet)
 
-        self.ship = oe.Body(name="Ship", 
-                            type=oe.Body.Type.VESSEL,
+        self.ship = Body(name="Ship", 
+                            type=Body.Type.VESSEL,
                             parent=self.planet,
                             r0=[1*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
                             v0=[0,0,0]*u.km/u.s,
                             mass_dry=oe.ROCKET_DRY_MASS,
-                            mass_fuel0=oe.FUEL_MASS
+                            mass_fuel0=oe.REACTION_MASS
                             )
         self.ship.createGeometry(render=self.render,
-                            type=oe.Body.Type.VESSEL,
+                            type=Body.Type.VESSEL,
                             size=SHIP_SIZE,
                             color=LVecBase4f(0,1,0,1))
         self.ship.createTrajectoryGeometry(render=self.render)
         self.orbitEngine.addBody(self.ship)
 
-        # self.ship2 = oe.Body(name="Ship2", 
-        #                     type=oe.Body.Type.VESSEL,
+        # self.ship2 = Body(name="Ship2", 
+        #                     type=Body.Type.VESSEL,
         #                     parent=self.planet,
         #                     r0=[3*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
         #                     v0=[0,4,0]*u.km/u.s,
         #                        mass_dry=oe.ROCKET_DRY_MASS,
         #                        mass_fuel=oe.FUEL_MASS)
         # self.ship2.createGeometry(render=self.render,
-        #                     type=oe.Body.Type.VESSEL,
+        #                     type=Body.Type.VESSEL,
         #                     size=SHIP_SIZE,
         #                     color=LVecBase4f(1,0,0,1))
         # self.orbitEngine.addBody(self.ship2)
@@ -194,27 +197,27 @@ class MyApp(ShowBase):
         if key == '[':
             self.changeCameraTarget(-1)
         if key == 'x':
-            self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime, type=oe.TrajectorySegment.Type.LANDED)
+            self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime, type=TrajectorySegment.Type.LANDED)
         if key == 'n':
             oe.debug("adding ship")
             thread = threading.Thread(target=self.addRandomShip)
             thread.start()
 
     def addRandomShip(self):
-        new_ship = oe.Body(name=f"Ship-{self.orbitEngine.bodyCount()}",
-                            type=oe.Body.Type.VESSEL,
+        new_ship = Body(name=f"Ship-{self.orbitEngine.bodyCount()}",
+                            type=Body.Type.VESSEL,
                             parent=self.planet,
                             mass_dry=oe.ROCKET_DRY_MASS,
-                            mass_fuel0=oe.FUEL_MASS
+                            mass_fuel0=oe.REACTION_MASS
                             )
         new_ship.createGeometry(render=self.render,
-                                type=oe.Body.Type.VESSEL,
+                                type=Body.Type.VESSEL,
                                 size=SHIP_SIZE,
                                 color=random_color())
         new_ship.randomize(1*oe.EARTH_RADIUS, 
                            0*u.km/u.s, 
                            self.simulationTime, 
-                           type=oe.TrajectorySegment.Type.LANDED,
+                           type=TrajectorySegment.Type.LANDED,
                            createGeometry=False)
         new_ship.launch(self.simulationTime)
         self.orbitEngine.addBody(new_ship)
@@ -368,6 +371,11 @@ class MyApp(ShowBase):
 
         self.mouseButtonStateLast = self.mouseButtonState.copy()
         return Task.cont
+
+#print(dir(oe))
+#print(oe.engine.EARTH_RADIUS)
+
+#oe.plot_rocket_lift()
 
 app = MyApp()
 app.run()
