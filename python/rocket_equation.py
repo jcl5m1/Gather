@@ -49,9 +49,8 @@ SPEPCIFIC_IMPULSES = {
     "Hydrogen+LOX": 450*u.s,  # s
     "Kerosene+LOX": 320*u.s,  # s
     "Methane+LOX": 380*u.s,  # s
-    "Ammonium Perchlorate": 242*u.s,  # s
-    "HTPB": 242*u.s,  # s
     "MetalizedHydrogen+LOX": 1700*u.s,  # s
+    "AP_HTPB": 242*u.s,  # s
 }
 
 material_density = {
@@ -64,7 +63,7 @@ material_density = {
 # Input values
 reaction_mass = np.linspace(0, 10000000, 100)*u.kg  # reaction mass
 engine_percentage = .2 # of the dry mass
-payload_mass = np.linspace(0.00001, 100000, 11)*u.kg
+payload_masses = np.linspace(0.00001, 100000, 11)*u.kg
 falcon9_dry_mass = 25600*u.kg  # Initial mass of the rocket
 falcon9_wet_mass = 544000*u.kg
 falcon9_reaction_material = "Kerosene+LOX"
@@ -89,37 +88,33 @@ capacities = reaction_mass / REACTION_DENSITIES[reaction_material]
 
 
 print(f"Reaction Material: {reaction_material}")
-print(f"Reaction Desnity: {REACTION_DENSITIES[reaction_material]:.2f}")
-# for rm, capacity in zip(reaction_mass, capacities):
-#     print(f"Reaction Mass: {rm:.2f}, Capacity: {capacity:.2f}")
-
-# Calculate the mass of the tank at each capacity
-# rocket_masses = {}
-# for material, density in material_density.items():
-#     rocket_masses[material] = tank_mass(density, tank_thickness_est, capacities)*(1+engine_percentage)
-#     print(f"Rocket Dry Mass: {rocket_masses[material][-1]:.2f} using {material}")
+print(f"Reaction Density: {REACTION_DENSITIES[reaction_material]:.2f}")
 
 rocket_mass = tank_mass(material_density[tank_material], tank_thickness_est, capacities)/(1-engine_percentage)
 
-#plot the tank mass over capacity
-# Plot mass vs capacity for each material
 plt.figure(figsize=(10, 6))
-
-for payload in payload_mass:
-    dv = delta_v(SPEPCIFIC_IMPULSES[reaction_material], rocket_mass+reaction_mass+payload, rocket_mass+payload)
-    plt.plot(reaction_mass, dv, label=f"{payload:.0f}")
+for payload_mass in payload_masses:
+    dv = delta_v(SPEPCIFIC_IMPULSES[reaction_material], rocket_mass+reaction_mass+payload_mass, rocket_mass+payload_mass)
+    plt.plot(reaction_mass, dv, label=f"{payload_mass:.0f}")
 
 # for material, mass in rocket_masses.items():
 #     plt.plot(reaction_mass, mass, label=material)
 plt.xlabel("Reaction Mass (kg)")
 plt.ylabel("Delta V (m/s)")
-plt.title(f"Delta V vs Reaction Material:{reaction_material} in Tank: {tank_material}")
+plt.title(f"Delta V using {reaction_material} in Tank: {tank_material}")
 
 # draw horizontal line at 7800
 plt.axhline(y=7800, color='r', linestyle=':', label="LEO")
 plt.axhline(y=7800+3000, color='r', linestyle='-.', label="GTO")
 plt.axhline(y=7800+4000, color='r', linestyle='--', label="Lunar")
 plt.axhline(y=7800+6500, color='r', linestyle='solid', label="Mars")
+
+# vertical line at 550000 kg for Falcon 9
+plt.axvline(x=550000, color='g', linestyle=':', label="Falcon 9")
+plt.axvline(x=2880000, color='g', linestyle='-.', label="SLS")
+plt.axvline(x=4600000, color='g', linestyle='--', label="Starship+Booster")
+plt.axvline(x=9000000, color='g', linestyle='solid', label="SeaDragon")
+
 plt.grid(True)
 plt.legend()
 plt.show()
