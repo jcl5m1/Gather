@@ -95,18 +95,19 @@ class MyApp(ShowBase):
         self.ship.createTrajectoryGeometry(render=self.render)
         self.orbitEngine.addBody(self.ship)
 
-        # self.ship2 = Body(name="Ship2", 
-        #                     type=Body.Type.VESSEL,
-        #                     parent=self.planet,
-        #                     r0=[3*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
-        #                     v0=[0,4,0]*u.km/u.s,
-        #                        mass_dry=oe.ROCKET_DRY_MASS,
-        #                        mass_fuel=oe.FUEL_MASS)
-        # self.ship2.createGeometry(render=self.render,
-        #                     type=Body.Type.VESSEL,
-        #                     size=SHIP_SIZE,
-        #                     color=LVecBase4f(1,0,0,1))
-        # self.orbitEngine.addBody(self.ship2)
+        self.ship2 = Body(name="Ship2", 
+                            type=Body.Type.VESSEL,
+                            parent=self.planet,
+                            r0=[6442.10116578,   86.01334177,   37.29261384]*u.km, 
+                            v0=[-0.11445355,  7.21530347,  3.12954238]*u.km/u.s,
+                               mass_dry=oe.ROCKET_DRY_MASS,
+                               mass_fuel0=oe.REACTION_MASS)
+        self.ship2.createGeometry(render=self.render,
+                            type=Body.Type.VESSEL,
+                            size=SHIP_SIZE,
+                            color=LVecBase4f(1,0,0,1))  
+        self.ship2.createTrajectoryGeometry(render=self.render)      
+        self.orbitEngine.addBody(self.ship2)
 
         axis = primatives.createAxis(oe.EARTH_RADIUS.value/2)
         axis_np = NodePath(axis)

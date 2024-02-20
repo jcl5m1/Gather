@@ -47,6 +47,9 @@ REACTION_DENSITIES['MetalizedHydrogen+LOX'] = (REACTION_DENSITIES['MetalizedHydr
 REACTION_DENSITIES['AP+HTPB'] = (REACTION_DENSITIES['Ammonium Perchlorate']*0.7 + REACTION_DENSITIES['HTPB']*0.3)
 
 
+for rd in REACTION_DENSITIES:
+    print(f"{rd}: {REACTION_DENSITIES[rd]:.2f}")
+
 print(f"Hydrogen: {REACTION_DENSITIES['Hydrogen']:.2f}")
 print(f"Oxygen: {REACTION_DENSITIES['Oxygen']:.2f}")
 print(f"Hydrogen+LOX: {REACTION_DENSITIES['Hydrogen+LOX']:.2f}")
@@ -91,15 +94,15 @@ reaction_material = "Hydrogen+LOX"
 #reaction_material = "Kerosene+LOX"
 #reaction_material = "Methane+LOX"
 #reaction_material = "MetalizedHydrogen+LOX"
-reaction_material = "Hydrogen+NTP"
+#reaction_material = "Hydrogen+NTP"
 tank_material = "Aluminum"
-tank_material = "CarbonComposite"
+#tank_material = "CarbonComposite"
 
 reaction_masses = np.linspace(100000, 100000000, 500)*u.kg  # reaction mass
-reaction_masses = np.linspace(10000, 10000000, 500)*u.kg  # reaction mass
+reaction_masses = np.linspace(10000, 100000000, 500)*u.kg  # reaction mass
 #reaction_masses = np.logspace(5, 8, 100)*u.kg  # reaction mass
 
-payload_masses = np.linspace(1, 100000, 51)*u.kg
+payload_masses = np.linspace(1, 50000, 51)*u.kg
 capacities = reaction_masses / REACTION_DENSITIES[reaction_material]
 
 # plot image of delta v given the reaction mass and payload mass

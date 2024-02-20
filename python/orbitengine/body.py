@@ -30,6 +30,16 @@ import orbitengine.engine as oe
 from orbitengine.engine import debug
 from orbitengine.trajectorysegment import TrajectorySegment
 
+class State:
+    r = oe.R_ZERO
+    v = oe.V_ZERO
+    m = 1*u.kg
+    rr = oe.ROT_R_ZERO
+    rv = oe.ROT_V_ZERO
+    t = 0*u.s
+    temp = oe.TEMP_ZERO
+
+
 class Body:
     class Type(Enum):
         PLANET = 0
@@ -45,6 +55,7 @@ class Body:
                  t_start=oe.T_ZERO, 
                  mass_dry=1*u.kg,
                  mass_fuel0=0*u.kg,
+                 T0=oe.TEMP_ZERO,
                  parent=None, 
                  lockedPosition=False,
                  fixedScale=False):
@@ -70,6 +81,7 @@ class Body:
         self.mass_dry = mass_dry
         self.mass_cargo = 0*u.kg
         self.mass = self.total_initial_mass()
+        self.tempurature = T0
 
         if lockedPosition:
             seg = TrajectorySegment(body=self,
@@ -122,7 +134,7 @@ class Body:
         self.np.setScale(np.linalg.norm(self.position-cameraPos).to(u.km).value)
 
     def launch(self, t_start):
-        r,v, rot, w, m = self.propagate(t_start)
+        r,v, rot, w, m, temp = self.propagate(t_start)
         thickness = 2
         color = self.color
 
@@ -145,16 +157,18 @@ class Body:
                                 v0=v,
                                 t0=t_start,
                                 m0=m,
+                                T0=temp,
                                 t1=t_launch_turn,
-                                accel_func=TrajectorySegment.acc_fun_launch,
+                                accel_func=TrajectorySegment.acc_func_launch,
                                 type=TrajectorySegment.Type.LAUNCH,
                                 segments=10)
 
 
-        r1,v1, rot, w, m1 = seg_launch.propagate(t_launch_turn)
+        r1,v1, rot, w, m1, temp1 = seg_launch.propagate(t_launch_turn)
         seg_launch.r1 = r1
         seg_launch.v1 = v1
         seg_launch.m1 = m1
+        seg_launch.T1 = temp1
         seg_launch.t1 = t_launch_turn
 
         # add orbit insertion trajectory
@@ -164,16 +178,18 @@ class Body:
                                 r0=r1,
                                 v0=v1,
                                 m0=m1,
+                                T0=temp1,
                                 t0=seg_launch.t1,
                                 t1=t_insertion_stop,
-                                accel_func=TrajectorySegment.acc_fun_insertion,
+                                accel_func=TrajectorySegment.acc_func_orbit_insertion,
                                 type=TrajectorySegment.Type.BALLISTIC,
                                 segments=25)
         
-        r2, v2, rot, w, m2 = seg_insertion.propagate(t_insertion_stop)
+        r2, v2, rot, w, m2, temp2 = seg_insertion.propagate(t_insertion_stop)
         seg_insertion.r1 = r2
         seg_insertion.v1 = v2
         seg_insertion.m1 = m2
+        seg_insertion.T1 = temp2
         seg_insertion.t1 = t_insertion_stop
 
         # add ballistic trajectory at the end of the luanch period
@@ -182,16 +198,21 @@ class Body:
                                 r0=r2,
                                 v0=v2,
                                 m0=m2,
+                                T0=temp2,
                                 t0=t_insertion_stop,
                                 type=TrajectorySegment.Type.BALLISTIC)
-
 
         self.clearTrajectory()
         self.trajectorySegments.append(seg_launch)
         self.trajectorySegments.append(seg_insertion)
         self.trajectorySegments.append(seg_ballistic)
-        
+        self.printTrajectories()
         self.createTrajectoryGeometry(self.render, thickness, color)
+
+    def printTrajectories(self):
+        for seg in self.trajectorySegments:
+            print(seg)
+
 
     def propagate(self, t=0*u.s, estimate=False):
 
@@ -218,7 +239,7 @@ class Body:
             if seg.t1 < time:
                 seg.np.hide()
 
-        self.position, self.velocity, self.rotation, w, self.mass = res
+        self.position, self.velocity, self.rotation, w, self.mass, self.tempurature = res
         if self.np is None:
             return
         self.np.setPos(LVecBase3f(*self.position.to(u.km).value))
@@ -246,6 +267,7 @@ class Body:
         
         if self.type == Body.Type.VESSEL:
             text += f"  Fuel: {self.mass - self.mass_dry:.2f}"
+            text += f"  Temp: {self.tempurature:.2f}"
         text += '\n'
 
         if self.lastSegment is not None:
@@ -262,6 +284,10 @@ class Body:
 
     def setThrust(self, thrust):
         self.thrust = thrust
+
+
+
+
 
     def lambertSearch(self, t_start, target, launch=False, bounds=[None, None], resolution=5, show=False):
 

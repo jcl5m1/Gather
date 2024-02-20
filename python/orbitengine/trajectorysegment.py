@@ -45,10 +45,12 @@ class TrajectorySegment:
                  rr0=oe.ROT_R_ZERO,
                  rv0=oe.ROT_V_ZERO,
                  m0=1*u.kg,
+                 T0=oe.TEMP_ZERO,
                  t0=oe.T_ZERO, 
                  r1=None, 
                  v1=None, 
                  m1=None,
+                 T1=None,
                  rr1=None,
                  rv1=None,
                  t1=oe.T_INFINITY,
@@ -62,12 +64,14 @@ class TrajectorySegment:
                  rr0=rr0, 
                  rv0=rv0, 
                  m0=m0,
+                 T0=T0,
                  t0=t0, 
                  r1=r1, 
                  v1=v1, 
                  rr1=rr1,
                  rv1=rv1, 
                  m1=m1,
+                 T1=T1,
                  t1=t1,
                  accel_func=accel_func,
                  type=type,
@@ -81,12 +85,14 @@ class TrajectorySegment:
                  rr0=oe.ROT_R_ZERO,
                  rv0=oe.ROT_V_ZERO,
                  m0=1*u.kg,
+                 T0=oe.TEMP_ZERO,
                  t0=oe.T_ZERO, 
                  r1=None, 
                  v1=None, 
                  rr1=None,
                  rv1=None,
                  m1=None,
+                 T1=None,
                  t1=oe.T_INFINITY,
                  accel_func=None,
                  type=Type.POSITION_LOCKED,
@@ -98,6 +104,7 @@ class TrajectorySegment:
         # entry state
         self.r0 = r0
         self.v0 = v0
+        self.T0 = T0
         self.t0 = t0*1 #break reference
         self.rr0=rr0
         self.rv0=rv0
@@ -129,6 +136,11 @@ class TrajectorySegment:
             self.m1 = m0
         else:
             self.m1 = m1
+
+        if T1 is None:
+            self.T1 = T0
+        else:
+            self.T1 = T1
             
         self.t1 = t1*1
 
@@ -158,38 +170,47 @@ class TrajectorySegment:
 
         self.computePeriodOrDuration()
 
+    def __str__(self):
+        return f"Type: {self.type}\n  {self.t0:.02f} -> {self.r0} {self.v0} {self.m0}\n  {self.t1} -> {self.r1} {self.v1} {self.m1}"
+
     # launch acceleration function
-    def acc_fun_launch(t, u_, k, r0, v0):
+    def acc_func_launch(t, u_, k, r0, v0, control=None):
         r = u_[0:3]
         mass = u_[6]
+        
         norm_vec = r/np.linalg.norm(r)
  
         dm = oe.REACTION_MASS_FLOW_RATE.value
         if mass < oe.ROCKET_DRY_MASS.value:
             dm = 0
         thrust = (oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * dm).value
-        return np.concatenate((norm_vec*thrust/mass, [-dm]))
 
-    # launch acceleration function
-    def acc_fun_insertion(t, u_, k, r0, v0):
-        r = u_[0:3]
-        v = u_[3:6]
-        mass = u_[6]
-        
-#        tangent_vec = np.cross(np.cross(r, v),r) # current tanget direction
+        dT = 1
+        #dv/dt normal to surface for current positon, and dm/dt
+        return np.concatenate((norm_vec*thrust/mass, [-dm],[dT]))
+
+    # orbit insertion acceleration function
+    def acc_func_orbit_insertion(t, u_, k, r0, v0, control=None):
+        # r = u_[0:3]
+        # v = u_[3:6]
+        mass = u_[6] 
+
         tangent_vec = np.cross(np.cross(r0, v0),r0) #initial tangent vector
         tangent_vec = tangent_vec/np.linalg.norm(tangent_vec)
         
-        normal_vec = r/np.linalg.norm(r)
-        i = oe.INSERTION_INTERPOLATION
+#        normal_vec = r/np.linalg.norm(r)
         #point anti normal slightly to kill vertical velocity
-        thrust_vec = tangent_vec*(1-i) + normal_vec*i
+        thrust_vec = tangent_vec
 
         dm = oe.REACTION_MASS_FLOW_RATE.value
         if mass < oe.ROCKET_DRY_MASS.value:
             dm = 0
         thrust = (oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * dm).value
-        return np.concatenate((thrust_vec*thrust/mass, [-dm]))
+
+        dT = 1
+
+        #dv/dt tanget to planet surface for current positon and dm/dt
+        return np.concatenate((thrust_vec*thrust/mass, [-dm],[dT]))
     
     def computePeriodOrDuration(self):
         # compute properties of trajectory
@@ -262,32 +283,36 @@ class TrajectorySegment:
         v_last = self.v0
         r_last = self.r0
         m_last = self.m0
+        T_last = self.T0
         for t in times:
             res = self.propagate(t)
             if res is None:
                 debug(f"trajectory segment propagate failed: {t} -> {res}")
                 break
-            r,v,rot,w,m = res
+            r,v,rot,w,m, temp = res
             collision_res = self.checkCollision(r, r_last, render)
             if collision_res is not None:
                 i, rc = collision_res
                 vc = v_last*(1-i) + v*i
                 tc = t_last*(1-i) + t*i
                 mc = m_last*(1-i) + m*i
+                Tc = T_last*(1-i) + temp*i
                 self.r1 = rc*u.km
                 self.v1 = vc
                 self.t1 = tc
                 self.m1 = mc
+                self.T1 = Tc
                 positions.append(rc)
-                self.states.append([tc-self.t0, rc, vc, rot, w, mc])  #rot and w not used yet
+                self.states.append([tc-self.t0, rc, vc, rot, w, mc, Tc])  #rot and w not used yet
                 break
             
             positions.append(r.value)
-            self.states.append([t-self.t0, r, v, rot, w, m])
+            self.states.append([t-self.t0, r, v, rot, w, m, temp])
             r_last = r
             v_last = v
             t_last = t
             m_last = m
+            T_last = temp
 
         if self.np is not None:
             self.np.removeNode()
@@ -355,11 +380,9 @@ class TrajectorySegment:
             return None
         
         if self.t0 == self.t1:
-            return self.r0, self.v0, self.rr0, self.rv0, self.m0
-
+            return self.r0, self.v0, self.rr0, self.rv0, self.m0, self.T0  # incorrection, need HPR, w format
 
         ts = t.to(u.s)-self.t0
-
 
         # use trajectory samples to estimate position
         if estimate:
@@ -404,14 +427,15 @@ class TrajectorySegment:
             ts %= self.period
             rotation_quat.setFromAxisAngle((w[0]*ts).value, w[1])
             axis_quat *= rotation_quat
-            return self.r0, self.v0, axis_quat.getHpr()*u.deg, w, self.m0
+            return self.r0, self.v0, axis_quat.getHpr()*u.deg, w, self.m0, self.T0
 
         if self.type == TrajectorySegment.Type.LANDED:
+            ts_raw = ts*1
             ts %= self.period
             rotation_quat.setFromAxisAngle((w[0]*ts).value, w[1])
             axis_quat *= rotation_quat
             #adjust position an velocity for rotation based on rotation of the parent
-            pr, pv, p_rot, pw, pm = self.body.parent.propagate(ts)
+            pr, pv, p_rot, pw, pm, ptemp = self.body.parent.propagate(ts)
             
             p_rot_angle = pw[0]*pw[2]
             p_quat = LQuaternion()
@@ -425,18 +449,20 @@ class TrajectorySegment:
             w2_axis = np.array([*pw[1]])
             w2_mag = pw[0].to(u.rad/u.s)
             v = np.cross(w2_axis*w2_mag, r).value*u.km/u.s #for conversion to km/s?
-            return r, v, axis_quat.getHpr()*u.deg, p_quat, self.m0
+            Tnew = oe.TEMP_EARTH + (self.T0 - oe.TEMP_EARTH)*np.exp(-ts_raw.value*oe.TEMP_RADIANT_CONSTANT)
+            return r, v, axis_quat.getHpr()*u.deg, p_quat, self.m0, Tnew
 
         if self.type == TrajectorySegment.Type.LAUNCH:
 
-            r,v,m = oe.cowell(
+            r,v,m,temp = oe.cowell(
                 k=self.attractor.k,
                 r0=self.r0,
                 v0=self.v0, 
                 m0=self.m0,
+                T0=self.T0,
                 t=ts, 
-                ad=self.accel_func)
-            return r, v, axis_quat.getHpr()*u.deg, w, m
+                acc_func=self.accel_func)
+            return r, v, axis_quat.getHpr()*u.deg, w, m, temp
 
             # # vec is normal to the planet
             # vec = self.r0 - self.body.parent.position
@@ -458,29 +484,34 @@ class TrajectorySegment:
 
         if self.type == TrajectorySegment.Type.BALLISTIC:
             if self.kepler is not None:
+                ts_raw = ts*1
                 ts %= self.kepler.period
                 try:
                     r,v = self.kepler.propagate(ts).rv()
-                    return r, v, axis_quat.getHpr()*u.deg, w, self.m0
+                    #estimate temperature
+                    Tnew = oe.TEMP_SPACE + (self.T0 - oe.TEMP_SPACE)*np.exp(-ts_raw.value*oe.TEMP_RADIANT_CONSTANT)
+                    return r, v, axis_quat.getHpr()*u.deg, w, self.m0, Tnew
                 except RuntimeError as e:
                     debug(f"{e}  -----------------------------")
-                    r,v, m = oe.cowell(
+                    r,v,m,temp = oe.cowell(
                         k=self.attractor.k,
                         r0=self.r0,
                         v0=self.v0, 
                         m0=self.m0,
+                        T0=self.T0,
                         t=ts, 
-                        ad=self.accel_func)
-                    return r, v, axis_quat.getHpr()*u.deg, w, m
+                        acc_func=self.accel_func)
+                    return r, v, axis_quat.getHpr()*u.deg, w, m, temp
             else:
-                r,v,m = oe.cowell(
+                r,v,m, temp = oe.cowell(
                     k=self.attractor.k,
                     r0=self.r0,
                     v0=self.v0, 
                     m0=self.m0,
+                    T0=self.T0,
                     t=ts, 
-                    ad=self.accel_func)
-                return r, v, axis_quat.getHpr()*u.deg, w, m
+                    acc_func=self.accel_func)
+                return r, v, axis_quat.getHpr()*u.deg, w, m, temp
         debug("propagate un recognized segment type")
         return None
     

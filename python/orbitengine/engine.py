@@ -36,12 +36,18 @@ R_ZERO = [0,0,0]*u.km
 V_ZERO = [0,0,0]*u.km/u.s
 ROT_R_ZERO = [0,0,0]*u.rad
 ROT_V_ZERO = [0,0,0]*u.rad/u.s
+TEMP_ZERO = 293.15*u.Kelvin #default tempurate is 20 deg Celsius 
 EPSILON = np.finfo(float).eps
 PLANET_ICOSHPERE_LEVEL = 4
 THRUST_MAX = 10.0*u.kg*u.m/u.s/u.s
 MIMIMUM_MANEUVER_ALTITUDE = 20*u.km
 TRAJECTORY_LAUNCH_MIN_ALTITUDE = EARTH_RADIUS/10
 ROCKET_DRY_MASS = 10*u.kg
+
+# need to account for solar loading and internal heat generation
+TEMP_RADIANT_CONSTANT = 0.000001
+TEMP_SPACE = 0*u.Kelvin 
+TEMP_EARTH = 293.15*u.Kelvin 
 
 class DotDict(dict):
     def __getattr__(self, attr):
@@ -64,7 +70,6 @@ EARTH_G0 = (9.81*u.m/u.s**2).to(u.km/u.s**2)
 
 LAUNCH_TURN_TIME = 3
 INSERTION_BURN_TIME = 2.82
-INSERTION_INTERPOLATION = 0.0
 
 def debug(msg):
     #print call stack
@@ -220,7 +225,7 @@ def line_sphere_intersection(P1, P2, C, r):
 
 
 
-def func_twobody(t0, u_, k, ad, r0,v0):   
+def func_twobody(t0, u_, k, acc_func, r0,v0, control):   
     """Differential equation for the initial value two body problem.
 
     This function follows Cowell's formulation from poliastro
@@ -231,16 +236,21 @@ def func_twobody(t0, u_, k, ad, r0,v0):
         Time.
     u_ : ~numpy.ndarray
         Six component state vector [x, y, z, vx, vy, vz] (km, km/s).
+        plus mass and temperature
     k : float
         Standard gravitational parameter.
-    ad : function(t0, u, k)
+    acc_func : function(t0, u, k)
          Non Keplerian acceleration (km/s2).
-
+    control :
+        parameters to control the acceleration such as thrust vector
     """
-    ax, ay, az, dm = ad(t0, u_, k, r0, v0)
+    ax, ay, az, dm, dT = acc_func(t0, u_, k, r0, v0, control)
 
-    x, y, z, vx, vy, vz, mass = u_
+    x, y, z, vx, vy, vz, mass, temp = u_
     r3 = (x**2 + y**2 + z**2)**1.5
+
+    # need to suppport this for elliptical orbits as well
+#    dT += -TEMP_RADIANT_CONSTANT*(temp-TEMP_SPACE) #cooling to space temp
 
     du = np.array([
         vx,
@@ -249,30 +259,34 @@ def func_twobody(t0, u_, k, ad, r0,v0):
         -k * x / r3 + ax,
         -k * y / r3 + ay,
         -k * z / r3 + az,
-        dm
+        dm,
+        dT
     ])
 
     return du
 
-def cowell(k, r0, v0, m0, t, rtol=1e-10, *, ad=None, callback=None, nsteps=1000):
+def cowell(k, r0, v0, m0, T0, t, control=None, rtol=1e-10, *, acc_func=None, callback=None, nsteps=1000):
     x, y, z = r0.to(u.km).value
     vx, vy, vz = v0.to(u.km/u.s).value
     m = m0.to(u.kg).value
-    u0 = np.array([x, y, z, vx, vy, vz, m])
+    T = T0.to(u.Kelvin).value
+    u0 = np.array([x, y, z, vx, vy, vz, m, T])
 
     # Set the non Keplerian acceleration to zero by default
-    if ad is None:
-        ad = lambda t0, u_, k_, r0, v0: (0, 0, 0, 0)
+    if acc_func is None:
+        acc_func = lambda t0, u_, k_, r0, v0, control: (0, 0, 0, 0, 0)
 
     # Create an ode object
     rtol=1e-10
     nsteps=1000
     solver = ode(func_twobody).set_integrator('lsoda', method='bdf',rtol=rtol, nsteps=nsteps)  # Use VODE with BDF method
     solver.set_initial_value(u0)  # Set initial value at t=0
-    solver.set_f_params(k.to(u.km**3/u.s**2).value, ad, r0, v0)  # Pass parameter k to the ODE function
+    solver.set_f_params(k.to(u.km**3/u.s**2).value, acc_func, r0, v0, control)  # Pass parameter k to the ODE function
+
     # Integrate the ODE at specific time points
     sol1 = solver.integrate(t.to(u.s).value)
-    return sol1[0:3]*u.km, sol1[3:6]*u.km/u.s, sol1[6]*u.kg
+
+    return sol1[0:3]*u.km, sol1[3:6]*u.km/u.s, sol1[6]*u.kg, sol1[7]*u.Kelvin
 
 # optimize lambert accounting for max_acceleration
 def compute_totaldv(x, t_start, accel_max, orbit1, orbit2, time_weight, info):
