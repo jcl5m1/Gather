@@ -185,7 +185,7 @@ class TrajectorySegment:
             dm = 0
         thrust = (oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * dm).value
 
-        dT = 1
+        dT = oe.TEMP_THRUST_DT
         #dv/dt normal to surface for current positon, and dm/dt
         return np.concatenate((norm_vec*thrust/mass, [-dm],[dT]))
 
@@ -201,17 +201,33 @@ class TrajectorySegment:
 #        normal_vec = r/np.linalg.norm(r)
         #point anti normal slightly to kill vertical velocity
         thrust_vec = tangent_vec
+ #       print(f"thrust_vec:{thrust_vec} {oe.cartesian_to_spherical(*thrust_vec)}")
 
         dm = oe.REACTION_MASS_FLOW_RATE.value
         if mass < oe.ROCKET_DRY_MASS.value:
             dm = 0
         thrust = (oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * dm).value
 
-        dT = 1
+        dT = oe.TEMP_THRUST_DT
 
         #dv/dt tanget to planet surface for current positon and dm/dt
         return np.concatenate((thrust_vec*thrust/mass, [-dm],[dT]))
-    
+
+    # thrust vectored acceleration function
+    def acc_func_thrust_vectored(t, u_, k, r0, v0, control=None):
+        mass = u_[6] 
+        thrust_vec = control.thrust_vec
+#        thrust_vec = np.array(oe.spherical_to_cartesian(1, control.theta, control.phi))
+#        print(f"thrust_vec:{thrust_vec} {control.theta} {control.phi}")
+        dm = oe.REACTION_MASS_FLOW_RATE.value
+        if mass < oe.ROCKET_DRY_MASS.value:
+            dm = 0
+        thrust = (oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * dm).value
+
+        dT = oe.TEMP_THRUST_DT
+        return np.concatenate((thrust_vec*thrust/mass, [-dm],[dT]))
+
+
     def computePeriodOrDuration(self):
         # compute properties of trajectory
         if self.type == TrajectorySegment.Type.POSITION_LOCKED:

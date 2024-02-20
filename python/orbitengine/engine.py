@@ -36,7 +36,7 @@ R_ZERO = [0,0,0]*u.km
 V_ZERO = [0,0,0]*u.km/u.s
 ROT_R_ZERO = [0,0,0]*u.rad
 ROT_V_ZERO = [0,0,0]*u.rad/u.s
-TEMP_ZERO = 293.15*u.Kelvin #default tempurate is 20 deg Celsius 
+TEMP_ZERO = 0*u.Kelvin
 EPSILON = np.finfo(float).eps
 PLANET_ICOSHPERE_LEVEL = 4
 THRUST_MAX = 10.0*u.kg*u.m/u.s/u.s
@@ -44,10 +44,19 @@ MIMIMUM_MANEUVER_ALTITUDE = 20*u.km
 TRAJECTORY_LAUNCH_MIN_ALTITUDE = EARTH_RADIUS/10
 ROCKET_DRY_MASS = 10*u.kg
 
+REACTION_MASS = 300*u.kg
+REACTION_MASS_FLOW_RATE = 0.8*u.kg/u.s
+EARTH_G0 = (9.81*u.m/u.s**2).to(u.km/u.s**2)
+
+LAUNCH_TURN_TIME = 3
+INSERTION_BURN_TIME = 2.82
+
+
 # need to account for solar loading and internal heat generation
 TEMP_RADIANT_CONSTANT = 0.000001
 TEMP_SPACE = 0*u.Kelvin 
 TEMP_EARTH = 293.15*u.Kelvin 
+TEMP_THRUST_DT = 1 #u.Kelvin/u.s  # really a f(engine efficiency and ship mass)
 
 class DotDict(dict):
     def __getattr__(self, attr):
@@ -59,17 +68,12 @@ class DotDict(dict):
 SPECIFIC_IMPULSE_TYPE = DotDict({
     "Solid": 300*u.s,
     "Liquid": 450*u.s,
+    "NTR": 900*u.s,
     "Ion": 3000*u.s,
     "Nuclear": 10000*u.s,
     "Antimatter": 2500000*u.s # beam core
 })
 
-REACTION_MASS = 300*u.kg
-REACTION_MASS_FLOW_RATE = 0.8*u.kg/u.s
-EARTH_G0 = (9.81*u.m/u.s**2).to(u.km/u.s**2)
-
-LAUNCH_TURN_TIME = 3
-INSERTION_BURN_TIME = 2.82
 
 def debug(msg):
     #print call stack
@@ -190,6 +194,12 @@ def spherical_to_cartesian(r, theta, phi):
     y = r * np.sin(theta) * np.sin(phi)
     z = r * np.cos(theta)
     return x, y, z
+
+def cartesian_to_spherical(x, y, z):
+    r = np.sqrt(x**2 + y**2 + z**2)
+    theta = np.arccos(z / r)
+    phi = np.arctan2(y, x)
+    return r, theta, phi
 
 def line_sphere_intersection(P1, P2, C, r):
     # Compute the directional vector of the line

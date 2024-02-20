@@ -73,6 +73,7 @@ class MyApp(ShowBase):
                               type=Body.Type.PLANET,
                               rr0=rr0_earth, 
                               rv0=rv0_earth, 
+                              T0=oe.TEMP_EARTH,
                               mass_dry = M_earth.to(u.kg),
                               lockedPosition=True)
         self.planet.createGeometry(type=Body.Type.PLANET, 
@@ -85,6 +86,7 @@ class MyApp(ShowBase):
                             parent=self.planet,
                             r0=[1*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
                             v0=[0,0,0]*u.km/u.s,
+                            T0=oe.TEMP_EARTH,
                             mass_dry=oe.ROCKET_DRY_MASS,
                             mass_fuel0=oe.REACTION_MASS
                             )
