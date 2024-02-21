@@ -29,7 +29,7 @@ import pickle
 import numpy as np
 import numpy as np
 
-EARTH_RADIUS = const.R_earth.to(u.km)
+EARTH_RADIUS_KM = const.R_earth.to(u.km)
 T_ZERO = 0*u.s
 T_INFINITY = sys.float_info.max*u.s
 R_ZERO = [0,0,0]*u.km
@@ -41,7 +41,7 @@ EPSILON = np.finfo(float).eps
 PLANET_ICOSHPERE_LEVEL = 4
 THRUST_MAX = 10.0*u.kg*u.m/u.s/u.s
 MIMIMUM_MANEUVER_ALTITUDE = 20*u.km
-TRAJECTORY_LAUNCH_MIN_ALTITUDE = EARTH_RADIUS/10
+TRAJECTORY_LAUNCH_MIN_ALTITUDE = EARTH_RADIUS_KM/10
 ROCKET_DRY_MASS = 10*u.kg
 
 REACTION_MASS = 300*u.kg
@@ -56,7 +56,7 @@ INSERTION_BURN_TIME = 2.82
 TEMP_RADIANT_CONSTANT = 0.000001
 TEMP_SPACE = 0*u.Kelvin 
 TEMP_EARTH = 293.15*u.Kelvin 
-TEMP_THRUST_DT = 1 #u.Kelvin/u.s  # really a f(engine efficiency and ship mass)
+TEMP_THRUST_DT = 1*u.Kelvin/u.s  # really a f(engine efficiency and ship mass)
 
 class DotDict(dict):
     def __getattr__(self, attr):
@@ -235,7 +235,7 @@ def line_sphere_intersection(P1, P2, C, r):
 
 
 
-def func_twobody(t0, u_, k, acc_func, r0,v0, control):   
+def func_twobody(t0, u_, k, acc_func, r0,v0, acc_params):   
     """Differential equation for the initial value two body problem.
 
     This function follows Cowell's formulation from poliastro
@@ -254,7 +254,7 @@ def func_twobody(t0, u_, k, acc_func, r0,v0, control):
     control :
         parameters to control the acceleration such as thrust vector
     """
-    ax, ay, az, dm, dT = acc_func(t0, u_, k, r0, v0, control)
+    ax, ay, az, dm, dT = acc_func(t0, u_, k, r0, v0, acc_params)
 
     x, y, z, vx, vy, vz, mass, temp = u_
     r3 = (x**2 + y**2 + z**2)**1.5
@@ -275,7 +275,7 @@ def func_twobody(t0, u_, k, acc_func, r0,v0, control):
 
     return du
 
-def cowell(k, r0, v0, m0, T0, t, control=None, rtol=1e-10, *, acc_func=None, callback=None, nsteps=1000):
+def cowell(k, r0, v0, m0, T0, t,  rtol=1e-10, *, acc_func=None, acc_params=None, callback=None, nsteps=1000):
     x, y, z = r0.to(u.km).value
     vx, vy, vz = v0.to(u.km/u.s).value
     m = m0.to(u.kg).value
@@ -284,14 +284,14 @@ def cowell(k, r0, v0, m0, T0, t, control=None, rtol=1e-10, *, acc_func=None, cal
 
     # Set the non Keplerian acceleration to zero by default
     if acc_func is None:
-        acc_func = lambda t0, u_, k_, r0, v0, control: (0, 0, 0, 0, 0)
+        acc_func = lambda t0, u_, k_, r0, v0, params: (0, 0, 0, 0, 0)
 
     # Create an ode object
     rtol=1e-10
     nsteps=1000
     solver = ode(func_twobody).set_integrator('lsoda', method='bdf',rtol=rtol, nsteps=nsteps)  # Use VODE with BDF method
     solver.set_initial_value(u0)  # Set initial value at t=0
-    solver.set_f_params(k.to(u.km**3/u.s**2).value, acc_func, r0, v0, control)  # Pass parameter k to the ODE function
+    solver.set_f_params(k.to(u.km**3/u.s**2).value, acc_func, r0, v0, acc_params)  # Pass parameter k to the ODE function
 
     # Integrate the ODE at specific time points
     sol1 = solver.integrate(t.to(u.s).value)
@@ -393,6 +393,18 @@ def plot_rocket_lift():
     plt.grid(True)
     plt.show()
 
+def eccentricity(v, r, k):
+    e = ((v.dot(v) - k / (np.linalg.norm(r))) * r - r.dot(v) * v) / k
+    ecc = np.linalg.norm(e)
+    return ecc
+
+
+class AccParams:
+    thrust_vec = np.array([0,0,0])
+    reaction_isp = SPECIFIC_IMPULSE_TYPE.Liquid.value
+    reaction_flow_rate = REACTION_MASS_FLOW_RATE.value
+    mass_dry = ROCKET_DRY_MASS.value
+    reaction_dT = TEMP_THRUST_DT.value
 
 
 class OrbitEngine:

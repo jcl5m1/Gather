@@ -12,6 +12,8 @@ from enum import Enum
 import math
 from scipy.optimize import minimize
 import scipy.constants
+from scipy.spatial.transform import Rotation as R
+
 
 from poliastro.bodies import Earth, Mars, Sun  # Or your desired bodies
 from poliastro.maneuver import Maneuver
@@ -30,17 +32,48 @@ import orbitengine.engine as oe
 from orbitengine.engine import debug
 from orbitengine.trajectorysegment import TrajectorySegment
 
-class State:
-    r = oe.R_ZERO
-    v = oe.V_ZERO
-    m = 1*u.kg
-    rr = oe.ROT_R_ZERO
-    rv = oe.ROT_V_ZERO
-    t = 0*u.s
-    temp = oe.TEMP_ZERO
-
-
 class Body:
+
+    class State:
+        def __init__(self, timestamp=0*u.s, r=oe.R_ZERO, v=oe.V_ZERO, m=0*u.kg, T=0*u.Kelvin):
+            # expected units: t[s], r[km], v[km/s], m[kg], temp[K]
+            self.timestamp = timestamp.to(u.s)
+            self.position = r.to(u.km)
+            self.velocity = v.to(u.km/u.s)
+            self.mass = m.to(u.kg)
+            self.tempurature = T.to(u.Kelvin)
+
+        def __str__(self):
+            return "Timestamp: " + str(self.timestamp) + "\n" + \
+                "Position: " + str(self.position) + "\n" + \
+                "Velocity: " + str(self.velocity) + "\n" + \
+                "Mass: " + str(self.mass) + "\n" + \
+                "Tempurature: " + str(self.tempurature) + "\n"            
+
+        def ecc(self, k):
+            return oe.eccentricity(self.velocity.value, self.position.value, k.value)
+        
+        def to_list(self):
+            return [self.position, self.velocity, self.mass, self.tempurature]
+        
+        def prograde_vector(self):
+            return self.velocity / np.linalg.norm(self.velocity)
+            
+        def normal_vector(self):
+            angular_momentum = np.cross(self.position, self.prograde_vector())
+            return angular_momentum / np.linalg.norm(angular_momentum)
+        
+        def attractor_vector(self):
+            return self.position / np.linalg.norm(self.position)
+            
+        def tangent_vector(self):
+            return np.cross(self.normal_vector(), self.attractor_vector())
+        
+        def max_accel(self, isp, flow):
+            max_accel = (oe.EARTH_G0*isp*flow)/self.mass
+            return max_accel
+
+
     class Type(Enum):
         PLANET = 0
         VESSEL = 1
@@ -134,32 +167,36 @@ class Body:
         self.np.setScale(np.linalg.norm(self.position-cameraPos).to(u.km).value)
 
     def launch(self, t_start):
-        r,v, rot, w, m, temp = self.propagate(t_start)
+        r0,v0, rot, w, m0, temp0 = self.propagate(t_start)
         thickness = 2
         color = self.color
 
-        # compute thrust
-        # normal_vec = r-self.parent.position
-        # alt = np.linalg.norm(normal_vec)
-        # normal_vec = normal_vec/alt
-        thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.REACTION_MASS_FLOW_RATE        
-        accel = thrust/self.mass
+        launch_burn_time, turn_angle, circularize_burn_time = [305.06579646,0.47570277,69.23180496]
+
+        normal_vec = r0/np.linalg.norm(r0)
+        launch_params = oe.AccParams()
+        launch_params.thrust_vec = normal_vec
+
+        # check list off capability
+        thrust = oe.EARTH_G0*launch_params.reaction_isp *u.s* launch_params.reaction_flow_rate*u.kg/u.s
+        accel = thrust/m0
         if accel <= oe.EARTH_G0:
             debug(f"Net thurst accel is {accel.to(u.m/u.s**2):.3f}.  Lift off: FAILED")
             return
         debug(f"Net thurst accel is {accel.to(u.m/u.s**2):.3f}.  Lift off: SUCCESS")
- 
+
         #launch trajectory
-        t_launch_turn = t_start + oe.LAUNCH_TURN_TIME*u.min
+        t_launch_turn = t_start + launch_burn_time*u.s
         seg_launch = TrajectorySegment(body=self,
                                 attractor=self.parent,
-                                r0=r,
-                                v0=v,
+                                r0=r0,
+                                v0=v0,
                                 t0=t_start,
-                                m0=m,
-                                T0=temp,
+                                m0=m0,
+                                T0=temp0,
                                 t1=t_launch_turn,
-                                accel_func=TrajectorySegment.acc_func_launch,
+                                accel_func=TrajectorySegment.acc_func_thrust_vectored,
+                                accel_params=launch_params,
                                 type=TrajectorySegment.Type.LAUNCH,
                                 segments=10)
 
@@ -171,8 +208,20 @@ class Body:
         seg_launch.T1 = temp1
         seg_launch.t1 = t_launch_turn
 
+        prograde_vec = v0 / np.linalg.norm(v0)
+        h = np.cross(r0, prograde_vec) # orbit normal vector
+        h = h / np.linalg.norm(h)
+
+        #rotate the prograde vector by the angle about the orbit normal vector
+        r0 = R.from_rotvec(turn_angle*h)
+        circularize_thrust_vec = r0.apply(prograde_vec)
+
+        circularize_params = oe.AccParams()
+        circularize_params.thrust_vec = circularize_thrust_vec
+
+
         # add orbit insertion trajectory
-        t_insertion_stop = t_launch_turn + oe.INSERTION_BURN_TIME*u.min
+        t_insertion_stop = t_launch_turn + circularize_burn_time*u.s
         seg_insertion = TrajectorySegment(body=self,
                                 attractor=self.parent,
                                 r0=r1,
@@ -181,7 +230,8 @@ class Body:
                                 T0=temp1,
                                 t0=seg_launch.t1,
                                 t1=t_insertion_stop,
-                                accel_func=TrajectorySegment.acc_func_orbit_insertion,
+                                accel_func=TrajectorySegment.acc_func_thrust_vectored,
+                                accel_params=circularize_params,
                                 type=TrajectorySegment.Type.BALLISTIC,
                                 segments=25)
         

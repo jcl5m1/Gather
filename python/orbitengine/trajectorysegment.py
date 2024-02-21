@@ -55,6 +55,7 @@ class TrajectorySegment:
                  rv1=None,
                  t1=oe.T_INFINITY,
                  accel_func=None,
+                 accel_params=None,
                  type=Type.POSITION_LOCKED,
                  segments=100):
         self.set(body=body, 
@@ -74,6 +75,7 @@ class TrajectorySegment:
                  T1=T1,
                  t1=t1,
                  accel_func=accel_func,
+                 accel_params=accel_params,
                  type=type,
                  segments=segments)
 
@@ -95,6 +97,7 @@ class TrajectorySegment:
                  T1=None,
                  t1=oe.T_INFINITY,
                  accel_func=None,
+                 accel_params=None,
                  type=Type.POSITION_LOCKED,
                  segments=100):
         self.type = type
@@ -145,6 +148,7 @@ class TrajectorySegment:
         self.t1 = t1*1
 
         self.accel_func = accel_func
+        self.accel_params = accel_params
 
         self.states = []
         self.np = None
@@ -185,7 +189,7 @@ class TrajectorySegment:
             dm = 0
         thrust = (oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * dm).value
 
-        dT = oe.TEMP_THRUST_DT
+        dT = oe.TEMP_THRUST_DT.value
         #dv/dt normal to surface for current positon, and dm/dt
         return np.concatenate((norm_vec*thrust/mass, [-dm],[dT]))
 
@@ -208,23 +212,25 @@ class TrajectorySegment:
             dm = 0
         thrust = (oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * dm).value
 
-        dT = oe.TEMP_THRUST_DT
+        dT = oe.TEMP_THRUST_DT.value
 
         #dv/dt tanget to planet surface for current positon and dm/dt
         return np.concatenate((thrust_vec*thrust/mass, [-dm],[dT]))
 
     # thrust vectored acceleration function
-    def acc_func_thrust_vectored(t, u_, k, r0, v0, control=None):
+    def acc_func_thrust_vectored(t, u_, k, r0, v0, params=None):
         mass = u_[6] 
-        thrust_vec = control.thrust_vec
+        thrust_vec = params.thrust_vec
 #        thrust_vec = np.array(oe.spherical_to_cartesian(1, control.theta, control.phi))
 #        print(f"thrust_vec:{thrust_vec} {control.theta} {control.phi}")
-        dm = oe.REACTION_MASS_FLOW_RATE.value
-        if mass < oe.ROCKET_DRY_MASS.value:
-            dm = 0
-        thrust = (oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * dm).value
 
-        dT = oe.TEMP_THRUST_DT
+        dm = params.reaction_flow_rate
+        isp = params.reaction_isp
+        if mass < params.mass_dry:
+            dm = 0
+        thrust = (oe.EARTH_G0*isp * dm).value
+
+        dT = params.reaction_dT
         return np.concatenate((thrust_vec*thrust/mass, [-dm],[dT]))
 
 
@@ -477,7 +483,8 @@ class TrajectorySegment:
                 m0=self.m0,
                 T0=self.T0,
                 t=ts, 
-                acc_func=self.accel_func)
+                acc_func=self.accel_func,
+                acc_params=self.accel_params)
             return r, v, axis_quat.getHpr()*u.deg, w, m, temp
 
             # # vec is normal to the planet
@@ -516,7 +523,8 @@ class TrajectorySegment:
                         m0=self.m0,
                         T0=self.T0,
                         t=ts, 
-                        acc_func=self.accel_func)
+                        acc_func=self.accel_func,
+                        acc_params=self.accel_params)
                     return r, v, axis_quat.getHpr()*u.deg, w, m, temp
             else:
                 r,v,m, temp = oe.cowell(
@@ -526,7 +534,8 @@ class TrajectorySegment:
                     m0=self.m0,
                     T0=self.T0,
                     t=ts, 
-                    acc_func=self.accel_func)
+                    acc_func=self.accel_func,
+                    acc_params=self.accel_params)
                 return r, v, axis_quat.getHpr()*u.deg, w, m, temp
         debug("propagate un recognized segment type")
         return None

@@ -57,8 +57,8 @@ class MyApp(ShowBase):
         self.win.requestProperties(props)
         aspect_ratio = WINDOW_WIDTH/WINDOW_HEIGHT
 
-        self.cameraDist = oe.EARTH_RADIUS*10
-        self.cameraDistMin = oe.EARTH_RADIUS*2
+        self.cameraDist = oe.EARTH_RADIUS_KM*10
+        self.cameraDistMin = oe.EARTH_RADIUS_KM*2
         self.cameraRot = [1,.7,0]
         self.cameraWheelSensitivity = 0.95
         self.mouseButtonState = [False, False, False]
@@ -77,14 +77,14 @@ class MyApp(ShowBase):
                               mass_dry = M_earth.to(u.kg),
                               lockedPosition=True)
         self.planet.createGeometry(type=Body.Type.PLANET, 
-                                   render=self.render,size=oe.EARTH_RADIUS,
+                                   render=self.render,size=oe.EARTH_RADIUS_KM,
                                    color=LVecBase4f(.3,.3,.3,1))
         self.orbitEngine.addBody(self.planet)
 
         self.ship = Body(name="Ship", 
                             type=Body.Type.VESSEL,
                             parent=self.planet,
-                            r0=[1*oe.EARTH_RADIUS.to(u.km).value, 0, 0]*u.km, 
+                            r0=[1*oe.EARTH_RADIUS_KM.to(u.km).value, 0, 0]*u.km, 
                             v0=[0,0,0]*u.km/u.s,
                             T0=oe.TEMP_EARTH,
                             mass_dry=oe.ROCKET_DRY_MASS,
@@ -111,13 +111,13 @@ class MyApp(ShowBase):
         self.ship2.createTrajectoryGeometry(render=self.render)      
         self.orbitEngine.addBody(self.ship2)
 
-        axis = primatives.createAxis(oe.EARTH_RADIUS.value/2)
+        axis = primatives.createAxis(oe.EARTH_RADIUS_KM.value/2)
         axis_np = NodePath(axis)
         axis_np.reparentTo(self.render)
         
         graph_size = (0.4,0.10*aspect_ratio)
 
-        hitpoint = primatives.createCube(oe.EARTH_RADIUS.value*0.025,color=LVecBase4f(1,0,0,1))
+        hitpoint = primatives.createCube(oe.EARTH_RADIUS_KM.value*0.025,color=LVecBase4f(1,0,0,1))
         self.hitpoint_np = NodePath(hitpoint)
         self.hitpoint_np.reparentTo(self.render)
         self.hitpointPos = None
@@ -200,7 +200,7 @@ class MyApp(ShowBase):
         if key == '[':
             self.changeCameraTarget(-1)
         if key == 'x':
-            self.ship.randomize(1*oe.EARTH_RADIUS, 0*u.km/u.s, self.simulationTime, type=TrajectorySegment.Type.LANDED)
+            self.ship.randomize(1*oe.EARTH_RADIUS_KM, 0*u.km/u.s, self.simulationTime, type=TrajectorySegment.Type.LANDED)
         if key == 'n':
             oe.debug("adding ship")
             thread = threading.Thread(target=self.addRandomShip)
@@ -217,7 +217,7 @@ class MyApp(ShowBase):
                                 type=Body.Type.VESSEL,
                                 size=SHIP_SIZE,
                                 color=random_color())
-        new_ship.randomize(1*oe.EARTH_RADIUS, 
+        new_ship.randomize(1*oe.EARTH_RADIUS_KM, 
                            0*u.km/u.s, 
                            self.simulationTime, 
                            type=TrajectorySegment.Type.LANDED,
@@ -361,7 +361,7 @@ class MyApp(ShowBase):
         target = self.orbitEngine.bodies[self.cameraTarget]
 
         if self.cameraTarget == 0:
-            self.cameraDistMin = oe.EARTH_RADIUS*1.1
+            self.cameraDistMin = oe.EARTH_RADIUS_KM*1.1
         else:
             self.cameraDistMin = 10*u.m
 
