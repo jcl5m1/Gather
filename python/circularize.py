@@ -31,7 +31,6 @@ def post_planar_maneuver(angle, t, r0, v0, m0, T0, k):
         m0=m0,
         T0=T0,
         t=t*u.s,
-        acc_func=ts.TrajectorySegment.acc_func_thrust_vectored,
         acc_params=params)
 
 def post_planar_maneuver_ecc(x, r0, v0, m0, T0, k):
@@ -55,7 +54,6 @@ def post_launch_maneuver(t_launch, angle, t_circularize, r0, v0, m0, T0, k):
         m0=m0,
         T0=T0,
         t=t_launch*u.s,
-        acc_func=ts.TrajectorySegment.acc_func_thrust_vectored,
         acc_params=launch_params)
 
     prograde_vec = v0 / np.linalg.norm(v0)
@@ -76,7 +74,6 @@ def post_launch_maneuver(t_launch, angle, t_circularize, r0, v0, m0, T0, k):
         m0=m1,
         T0=T1,
         t=t_circularize*u.s,
-        acc_func=ts.TrajectorySegment.acc_func_thrust_vectored,
         acc_params=circularize_params)
     
     return r2,v2,m2,T2
@@ -101,12 +98,12 @@ r0 = np.array([oe.EARTH_RADIUS_KM.value, 0, 0])*u.km
 v0 = np.array([0, oe.EARTH_RADIUS_KM.value*2*np.pi/(24*3600) , 0])*u.km/u.s
 
 k = Earth.k.to(u.km**3/u.s**2)
-m0 = 310*u.kg # rocket + fuel
+m0 = 350*u.kg # rocket + fuel
 T0 = oe.TEMP_EARTH
 isp = oe.SPECIFIC_IMPULSE_TYPE.Liquid
 flow = oe.REACTION_MASS_FLOW_RATE
 
-target_alt = 500*u.km
+target_alt = 400*u.km
 state0 = Body.State(0*u.s, r0, v0, m0, T0)
 
 print(state0)

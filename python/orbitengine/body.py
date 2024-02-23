@@ -195,7 +195,6 @@ class Body:
                                 m0=m0,
                                 T0=temp0,
                                 t1=t_launch_turn,
-                                accel_func=TrajectorySegment.acc_func_thrust_vectored,
                                 accel_params=launch_params,
                                 type=TrajectorySegment.Type.LAUNCH,
                                 segments=10)
@@ -230,7 +229,6 @@ class Body:
                                 T0=temp1,
                                 t0=seg_launch.t1,
                                 t1=t_insertion_stop,
-                                accel_func=TrajectorySegment.acc_func_thrust_vectored,
                                 accel_params=circularize_params,
                                 type=TrajectorySegment.Type.BALLISTIC,
                                 segments=25)

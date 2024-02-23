@@ -27,7 +27,8 @@ from scipy.integrate import ode
 import json
 import pickle
 import numpy as np
-import numpy as np
+from scipy.special import expit
+
 
 EARTH_RADIUS_KM = const.R_earth.to(u.km)
 T_ZERO = 0*u.s
@@ -235,7 +236,7 @@ def line_sphere_intersection(P1, P2, C, r):
 
 
 
-def func_twobody(t0, u_, k, acc_func, r0,v0, acc_params):   
+def func_twobody(t0, u_, k, acc_params):   
     """Differential equation for the initial value two body problem.
 
     This function follows Cowell's formulation from poliastro
@@ -254,7 +255,7 @@ def func_twobody(t0, u_, k, acc_func, r0,v0, acc_params):
     control :
         parameters to control the acceleration such as thrust vector
     """
-    ax, ay, az, dm, dT = acc_func(t0, u_, k, r0, v0, acc_params)
+    ax, ay, az, dm, dT = acc_params.func(t0, u_, k)
 
     x, y, z, vx, vy, vz, mass, temp = u_
     r3 = (x**2 + y**2 + z**2)**1.5
@@ -275,7 +276,10 @@ def func_twobody(t0, u_, k, acc_func, r0,v0, acc_params):
 
     return du
 
-def cowell(k, r0, v0, m0, T0, t,  rtol=1e-10, *, acc_func=None, acc_params=None, callback=None, nsteps=1000):
+
+
+
+def cowell(k, r0, v0, m0, T0, t,  rtol=1e-10, *, acc_params=None, callback=None, nsteps=1000):
     x, y, z = r0.to(u.km).value
     vx, vy, vz = v0.to(u.km/u.s).value
     m = m0.to(u.kg).value
@@ -283,15 +287,16 @@ def cowell(k, r0, v0, m0, T0, t,  rtol=1e-10, *, acc_func=None, acc_params=None,
     u0 = np.array([x, y, z, vx, vy, vz, m, T])
 
     # Set the non Keplerian acceleration to zero by default
-    if acc_func is None:
-        acc_func = lambda t0, u_, k_, r0, v0, params: (0, 0, 0, 0, 0)
+    if acc_params is None:
+        acc_params = AccParams()
+        acc_params.func = lambda t0, u_, k: (0, 0, 0, 0, 0)
 
     # Create an ode object
-    rtol=1e-10
+    rtol=1e-8
     nsteps=1000
     solver = ode(func_twobody).set_integrator('lsoda', method='bdf',rtol=rtol, nsteps=nsteps)  # Use VODE with BDF method
     solver.set_initial_value(u0)  # Set initial value at t=0
-    solver.set_f_params(k.to(u.km**3/u.s**2).value, acc_func, r0, v0, acc_params)  # Pass parameter k to the ODE function
+    solver.set_f_params(k.to(u.km**3/u.s**2).value, acc_params)  # Pass parameter k to the ODE function
 
     # Integrate the ODE at specific time points
     sol1 = solver.integrate(t.to(u.s).value)
@@ -400,11 +405,31 @@ def eccentricity(v, r, k):
 
 
 class AccParams:
-    thrust_vec = np.array([0,0,0])
-    reaction_isp = SPECIFIC_IMPULSE_TYPE.Liquid.value
-    reaction_flow_rate = REACTION_MASS_FLOW_RATE.value
-    mass_dry = ROCKET_DRY_MASS.value
-    reaction_dT = TEMP_THRUST_DT.value
+    def __init__(self):
+        self.func = self.thrust_vectored # acceleration function used in odeint
+        self.thrust_vec = np.array([0,0,0])
+        self.reaction_isp = SPECIFIC_IMPULSE_TYPE.Liquid.value
+        self.reaction_flow_rate = REACTION_MASS_FLOW_RATE.value
+        self.mass_dry = ROCKET_DRY_MASS.value
+        self.reaction_dT = TEMP_THRUST_DT.value
+
+    # thrust vectored acceleration function
+    def thrust_vectored(self, t, u_, k):
+        mass = u_[6] 
+        thrust_vec = self.thrust_vec
+
+        dm = self.reaction_flow_rate
+        isp = self.reaction_isp
+
+        # differentiable sigmoid function that stops thrust when fuel is gone
+#        dm *= expit(10*(mass-self.mass_dry))  
+        if mass < self.mass_dry:
+            dm = 0
+
+        thrust = (EARTH_G0*isp * dm).value
+
+        dT = self.reaction_dT
+        return np.concatenate((thrust_vec*thrust/mass, [-dm],[dT]))
 
 
 class OrbitEngine:
