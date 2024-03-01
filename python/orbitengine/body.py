@@ -35,7 +35,7 @@ from orbitengine.trajectorysegment import TrajectorySegment
 class Body:
 
     class State:
-        def __init__(self, timestamp=0*u.s, r=oe.R_ZERO, v=oe.V_ZERO, m=0*u.kg, T=0*u.Kelvin):
+        def __init__(self, r=oe.R_ZERO, v=oe.V_ZERO, m=0*u.kg, T=0*u.Kelvin, timestamp=0*u.s):
             # expected units: t[s], r[km], v[km/s], m[kg], temp[K]
             self.timestamp = timestamp.to(u.s)
             self.position = r.to(u.km)
@@ -53,6 +53,9 @@ class Body:
         def ecc(self, k):
             return oe.eccentricity(self.velocity.value, self.position.value, k.value)
         
+        def value(self):
+            return [self.position.value, self.velocity.value, self.mass.value, self.tempurature.value]
+
         def to_list(self):
             return [self.position, self.velocity, self.mass, self.tempurature]
         
@@ -72,6 +75,18 @@ class Body:
         def max_accel(self, isp, flow):
             max_accel = (oe.EARTH_G0*isp*flow)/self.mass
             return max_accel
+        
+        def cowell(self, k, t, acc_params=None):
+            r,v,m,T = oe.cowell(
+                k=k,
+                r0=self.position,
+                v0=self.velocity, 
+                m0=self.mass,
+                T0=self.tempurature,
+                t=t,
+                acc_params=acc_params)
+
+            return Body.State(r,v,m,T,t)
 
 
     class Type(Enum):
@@ -332,9 +347,6 @@ class Body:
 
     def setThrust(self, thrust):
         self.thrust = thrust
-
-
-
 
 
     def lambertSearch(self, t_start, target, launch=False, bounds=[None, None], resolution=5, show=False):

@@ -89,22 +89,145 @@ def post_launch_maneuver_score(x, r0, v0, m0, T0, k, target_alt):
 #    print(ecc, altitude)
     return ecc*ecc + alt_err*alt_err
 
+
+def post_launch_intercept_maneuver(launch_delay, 
+                                   launch_burn_duration, 
+                                   intercept_burn_theta,  
+                                   intercept_burn_phi, 
+                                   intercept_delay, 
+                                   intercept_burn_duration, 
+                                   state0,
+                                   k):
+
+    # propogate by delay time
+    state1 = state0.cowell(k, launch_delay*u.s)
+
+    # compute post launch burn, normal to surface at time of launch
+    normal_vec = state1.position/np.linalg.norm(state1.position)
+    launch_params = oe.AccParams(thrust_vec=normal_vec)
+
+    state2 = state1.cowell(k, launch_burn_duration*u.s, acc_params=launch_params)
+    
+    #popagate by intercept delay
+    state3 = state2.cowell(k, intercept_delay*u.s)
+
+    # propogate by intercept burn     
+    thrust_vec = oe.spherical_to_cartesian(1, intercept_burn_theta, intercept_burn_phi)
+    intercept_params = oe.AccParams(thrust_vec=np.array(thrust_vec))
+
+    state4 = state3.cowell(k, intercept_burn_duration*u.s, acc_params=intercept_params)
+    
+    return state4
+
+
+def post_launch_intercept_score(x, state0, k, target_state0):
+    # thrust angle is deviation from prograde vector in the orbit normal plane
+    launch_delay, launch_burn_duration, intercept_burn_theta, intercept_burn_phi, intercept_delay, intercept_burn_duration = x
+    t_total = launch_delay + launch_burn_duration + intercept_delay + intercept_burn_duration
+    state_final = post_launch_intercept_maneuver(launch_delay, launch_burn_duration, intercept_burn_theta, intercept_burn_phi, intercept_delay, intercept_burn_duration, state0, k)
+
+    # proprogate target by same time
+    target_state_final = target_state0.cowell(k, t_total*u.s)
+
+    # compute dr and dv to target
+    dr = np.linalg.norm(target_state_final.position - state_final.position).value
+    dv = np.linalg.norm(target_state_final.velocity - state_final.velocity).value
+    return dr*dr + dv*dv
+
+
+def post_launch_alt_score(x, state0, k, alt):
+    # thrust angle is deviation from prograde vector in the orbit normal plane
+    launch_burn_duration, intercept_burn_theta, intercept_burn_phi, intercept_delay, intercept_burn_duration = x
+    launch_delay = 0
+    t_total = launch_delay + launch_burn_duration + intercept_delay + intercept_burn_duration
+    state_final = post_launch_intercept_maneuver(launch_delay, launch_burn_duration, intercept_burn_theta, intercept_burn_phi, intercept_delay, intercept_burn_duration, state0, k)
+
+    ecc = state_final.ecc(k)
+    alt_err = (np.linalg.norm(state_final.position)-oe.EARTH_RADIUS_KM-alt).value    
+    return ecc*ecc + alt_err*alt_err
+
 #post launch
 # r0 = np.array([6442.10116578,   86.01334177,   37.29261384] )*u.km
 # v0 = np.array([1.00248566, 0.43470921, 0.18847591])*u.km/u.s
 
-#on ground
+k = Earth.k.to(u.km**3/u.s**2)
+
+# rocket on ground
 r0 = np.array([oe.EARTH_RADIUS_KM.value, 0, 0])*u.km
 v0 = np.array([0, oe.EARTH_RADIUS_KM.value*2*np.pi/(24*3600) , 0])*u.km/u.s
-
-k = Earth.k.to(u.km**3/u.s**2)
 m0 = 350*u.kg # rocket + fuel
 T0 = oe.TEMP_EARTH
 isp = oe.SPECIFIC_IMPULSE_TYPE.Liquid
 flow = oe.REACTION_MASS_FLOW_RATE
+state0 = Body.State( r0, v0, m0, T0,0*u.s)
+
+# compute a target in circular orbit
+r_target = np.array([2*oe.EARTH_RADIUS_KM.value, 0, 0])*u.km
+v_target = np.array([0, 5.59 , 0])*u.km/u.s
+target_state0 = Body.State(r_target, v_target)
+
+# res = minimize(lambda v,r,k: oe.eccentricity(v,r,k)**2, v_target, args=(r_target.value, k.value))
+# v_target = res.x*u.km/u.s
+# print(v_target)
+#ecc = oe.eccentricity(v_target.value, r_target.value, k.value)
+
+
+
+# create a guess launch intercept maneuver
+launch_delay = 10*u.s
+launch_burn_duration = 420*u.s
+intercept_burn_theta = 1.6
+intercept_burn_phi = 0.3
+intercept_delay = 90*u.s
+intercept_burn_duration = 150*u.s
+
+x0 = [launch_delay.value, launch_burn_duration.value, intercept_burn_theta, intercept_burn_phi, intercept_delay.value, intercept_burn_duration.value]
+print('guess:',x0)
+
+# print(x0)
+# print(*state0.to_list())
+res = post_launch_intercept_maneuver(*x0, state0, k)
+print(res)
+print(res.ecc(k))
+
+
+
+
+score = post_launch_intercept_score(x0, state0, k, target_state0) 
+print("Guess Score:",score) 
+
+
+
+times = np.linspace(0, 300, 100)
+positions = []
+target_positions = []
+for t in times:
+    state = state0.cowell(k, t*u.s)
+    positions.append(np.linalg.norm(state.position).value)
+    target_state = target_state0.cowell(k, t*u.s)
+    target_positions.append(np.linalg.norm(target_state.position).value)
+
+# #extract positions fo
+# positions = np.linalg.norm(states.position, axis=1)
+
+import matplotlib.pyplot as plt
+plt.plot(times, positions)
+plt.plot(times, target_positions)
+plt.show()
+
+
+# res = minimize(post_launch_intercept_score, x0, args=(state0, k, target_state0))
+# print("Post X:",res.x)
+# print("Post Optimized Score: ",res.fun)
+
+exit()
+
+# create a guess maneuver
+
+
+
 
 target_alt = 400*u.km
-state0 = Body.State(0*u.s, r0, v0, m0, T0)
 
 print(state0)
 #print("Pre Ecc:", eccentricity(v0.value, r0.value, k.value))
@@ -140,7 +263,7 @@ print("Post Optimized Score: ",res.fun)
 
 
 res = post_launch_maneuver(*res.x, *state0.to_list(), k) 
-state2 = Body.State(0*u.s, *res)
+state2 = Body.State(*res,0*u.s)
 print('Post Optimized Alt:',np.linalg.norm(state2.position)-oe.EARTH_RADIUS_KM)
 print('Post Optimized Ecc:',state2.ecc(k))
 print('Post Optimized Mass:',state2.mass)

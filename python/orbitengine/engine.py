@@ -29,7 +29,6 @@ import pickle
 import numpy as np
 from scipy.special import expit
 
-
 EARTH_RADIUS_KM = const.R_earth.to(u.km)
 T_ZERO = 0*u.s
 T_INFINITY = sys.float_info.max*u.s
@@ -276,8 +275,9 @@ def func_twobody(t0, u_, k, acc_params):
 
     return du
 
-
-
+# def cowell2(k, state, t, acc_params=None):
+#     res = cowell(k, state.position, state.velocity, state.mass, state.tempurature, t, acc_params=acc_params)
+#     return Body.State(*res)
 
 def cowell(k, r0, v0, m0, T0, t,  rtol=1e-10, *, acc_params=None, callback=None, nsteps=1000):
     x, y, z = r0.to(u.km).value
@@ -372,6 +372,9 @@ def net_liftoff_accleration(isp, mass, flow_rate):
     return accel - EARTH_G0
 
 
+
+
+
 def plot_rocket_lift():
     steps = 100
     mass = np.linspace(100000*u.kg, 600000*u.kg, steps)
@@ -403,15 +406,19 @@ def eccentricity(v, r, k):
     ecc = np.linalg.norm(e)
     return ecc
 
-
 class AccParams:
-    def __init__(self):
-        self.func = self.thrust_vectored # acceleration function used in odeint
-        self.thrust_vec = np.array([0,0,0])
-        self.reaction_isp = SPECIFIC_IMPULSE_TYPE.Liquid.value
-        self.reaction_flow_rate = REACTION_MASS_FLOW_RATE.value
-        self.mass_dry = ROCKET_DRY_MASS.value
-        self.reaction_dT = TEMP_THRUST_DT.value
+    def __init__(self, thrust_vec=np.array([0,0,0]), func=None, 
+                 reaction_isp=SPECIFIC_IMPULSE_TYPE.Liquid,
+                 reaction_flow_rate=REACTION_MASS_FLOW_RATE,
+                 mass_dry=ROCKET_DRY_MASS,
+                 reaction_dT=TEMP_THRUST_DT):
+        if func is None:
+            self.func = self.thrust_vectored # acceleration function used in odeint
+        self.thrust_vec = thrust_vec
+        self.reaction_isp = reaction_isp.value
+        self.reaction_flow_rate = reaction_flow_rate.value
+        self.mass_dry = mass_dry.value
+        self.reaction_dT = reaction_dT.value
 
     # thrust vectored acceleration function
     def thrust_vectored(self, t, u_, k):

@@ -179,10 +179,10 @@ class TrajectorySegment:
         # compute properties of trajectory
         if self.type == TrajectorySegment.Type.POSITION_LOCKED:
             if self.rv0[0].value > oe.EPSILON:
-                self.period = self.t0 + (360*u.deg/self.rv0[0]).to(u.s)
+                self.period = self.t0 + (360*u.deg/self.rv0[0]).to(u.s)  #should be orbit period, not rotation period
 
         elif self.type == TrajectorySegment.Type.LANDED:
-            self.period = self.attractor.trajectorySegments[0].period
+            self.period = self.attractor.trajectorySegments[0].period # should really be rotational period, not orbit period
 
         elif self.type == TrajectorySegment.Type.BALLISTIC:
             # Compute the magnitudes of the initial position and velocity vectors
