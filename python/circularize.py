@@ -9,7 +9,7 @@ import orbitengine.trajectorysegment as ts
 from orbitengine.body import Body
 import time
 from scipy.spatial.transform import Rotation as R
-
+import matplotlib.pyplot as plt
 
 def post_planar_maneuver(angle, t, r0, v0, m0, T0, k):
     prograde_vec = v0 / np.linalg.norm(v0)
@@ -146,6 +146,95 @@ def post_launch_alt_score(x, state0, k, alt):
     alt_err = (np.linalg.norm(state_final.position)-oe.EARTH_RADIUS_KM-alt).value    
     return ecc*ecc + alt_err*alt_err
 
+
+def maneuver_dist(x, state, r1, v1, k):
+    t_burn_start, t_burn_duration, thrust_theta, thrust_phi = x
+
+    # compute the post burn state
+    param = oe.AccParams()
+    param.thrust_vec = np.array(oe.spherical_to_cartesian(1, thrust_theta, thrust_phi))
+    state_preburn = state.cowell(k, t_burn_start*u.s)
+    state_postburn = state_preburn.cowell(k, t_burn_duration*u.s, acc_params=param)
+
+    # compute the target post burn state
+    state_intersect.velocity = v1
+    target_postburn = state_intersect.cowell(k, t_burn_start*u.s + t_burn_duration*u.s)
+
+    # compute the distance between the two states
+    dr = state_postburn.position - target_postburn.position
+    dv = state_postburn.velocity - target_postburn.velocity
+    
+    dv_mag = np.linalg.norm(dv).value
+    dr_mag = np.linalg.norm(dr).value
+
+    return dv_mag*dv_mag + dr_mag*dr_mag
+
+from poliastro import iod
+
+def compute_dv(x0, state, state_target, k):
+    t_start, t_flight = x0
+    t_start *= u.s
+    t_flight *= u.s
+
+
+    state1 = state.cowell(k, t_start)
+    state1_target = state_target.cowell(k, t_start + t_flight)
+
+    res = list(iod.izzo.lambert(Earth.k, state1.position, state1_target.position, t_flight, M=0))
+    if len(res) == 0 or len(res) > 1:
+        raise RuntimeError(f"compute_totaldv labert produced {len(res)} solutions")
+
+    v1_sol, v2_sol = res[0]
+
+    # take off vector must be in director of normal vector for take off
+    dv1 = np.linalg.norm(state1.velocity - v1_sol)
+    dv2 = np.linalg.norm(state1_target.velocity - v2_sol)
+    return  (dv1 + dv2)
+
+def lambertSearch(state, state_target,k, bounds=[None, None], resolution=5, show=False):
+
+    t_start = 100*u.s
+    t_stop = 1000*u.s
+
+    if bounds[0] is None:
+        bounds[0] = 12*3600
+    if bounds[1] is None:
+        bounds[1] = 500
+
+    # search for the starting point
+    t_start = np.linspace(t_start.to(u.s).value, bounds[0], resolution)
+    t_flight = np.linspace(200, bounds[1], resolution)
+
+    data = np.zeros((len(t_flight), len(t_start)))
+    for i in range(len(t_start)):
+        for j in range(len(t_flight)):
+            data[i, j] = compute_dv([t_start[i], t_flight[j]], state, state_target, k).value
+    # Find the indices of the minimum value
+    min_index = np.unravel_index(np.argmin(data), data.shape)
+    min_value = data[min_index]
+    guess = [t_start[min_index[0]], t_flight[min_index[1]]]
+
+    if show:
+        # Create the heat map
+        plt.imshow(data, cmap='plasma', origin='lower', extent=[t_start.min(), t_start.max(), t_flight.min(), t_flight.max()])
+        plt.colorbar(label='Value')
+        #auto aspect ratio
+        plt.gca().set_aspect('auto', adjustable='box')
+        # Draw a dot on the minimum value
+        plt.plot(t_start[min_index[1]], t_flight[min_index[0]], 'ro')
+
+        # Uncomment the line below to add a colorbar
+        # plt.colorbar(label='Value')
+
+        plt.ylabel('t_flight')
+        plt.xlabel('t_delay')
+        plt.title('Energy')
+        
+
+        # Show the plot
+        plt.show()
+
+    return guess, min_value
 #post launch
 # r0 = np.array([6442.10116578,   86.01334177,   37.29261384] )*u.km
 # v0 = np.array([1.00248566, 0.43470921, 0.18847591])*u.km/u.s
@@ -165,6 +254,39 @@ state0 = Body.State( r0, v0, m0, T0,0*u.s)
 r_target = np.array([2*oe.EARTH_RADIUS_KM.value, 0, 0])*u.km
 v_target = np.array([0, 5.59 , 0])*u.km/u.s
 target_state0 = Body.State(r_target, v_target)
+
+t_intercept = 500*u.s
+state_intersect = state0.cowell(k, t_intercept)
+dv = v_target - state_intersect.velocity
+_, thrust_theta, thrust_phi = oe.cartesian_to_spherical(*dv)
+
+
+state_target = state_intersect.cowell(k, 100*u.s)
+
+print(state_target.position)
+
+times = np.linspace(10, 1000, 100)*u.s
+dv = []
+for t in times:
+    res = list(iod.izzo.lambert(Earth.k, r0, state_target.position, t, M=0))
+    v0_sol, v1_sol = res[0]
+    dv1 = np.linalg.norm(v0_sol - state0.velocity).value
+    dv2 = np.linalg.norm(v1_sol - state_target.velocity).value
+
+    dv.append(dv1+dv2)
+
+plt.plot(times, dv)
+plt.show
+
+#lambertSearch(state0, target_state0, k, resolution=50, show=True)
+
+# x0 = [100, 200, thrust_theta.value, thrust_phi.value]  
+# bounds = [(1, 1000), (1, 1000), (0, 2*np.pi), (0, np.pi)] 
+# print(maneuver_dist(x0, state0, state_intersect.position, v_target, k))
+# res = minimize(maneuver_dist, x0, args=(state0, state_intersect.position, v_target, k), bounds=bounds)
+# print(res.fun, res.x)
+exit()
+
 
 # res = minimize(lambda v,r,k: oe.eccentricity(v,r,k)**2, v_target, args=(r_target.value, k.value))
 # v_target = res.x*u.km/u.s
