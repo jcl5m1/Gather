@@ -36,6 +36,7 @@ R_ZERO = [0,0,0]*u.km
 V_ZERO = [0,0,0]*u.km/u.s
 ROT_R_ZERO = [0,0,0]*u.rad
 ROT_V_ZERO = [0,0,0]*u.rad/u.s
+ZERO_ANGLE_VECTOR = np.array([1,0,0])
 TEMP_ZERO = 0*u.Kelvin
 EPSILON = np.finfo(float).eps
 PLANET_ICOSHPERE_LEVEL = 4

@@ -158,7 +158,7 @@ def maneuver_dist(x, state, r1, v1, k):
 
     # compute the target post burn state
     state_intersect.velocity = v1
-    target_postburn = state_intersect.cowell(k, t_burn_start*u.s + t_burn_duration*u.s)
+    target_postburn = state_intersect.propagate_cowell(k, t_burn_start*u.s + t_burn_duration*u.s)
 
     # compute the distance between the two states
     dr = state_postburn.position - target_postburn.position
@@ -171,245 +171,241 @@ def maneuver_dist(x, state, r1, v1, k):
 
 from poliastro import iod
 
-def compute_dv(x0, state, state_target, k):
-    t_start, t_flight = x0
-    t_start *= u.s
-    t_flight *= u.s
+# def compute_dv(x0, state, state_target, k):
+#     t_start, t_flight = x0
+#     t_start *= u.s
+#     t_flight *= u.s
 
 
-    state1 = state.cowell(k, t_start)
-    state1_target = state_target.cowell(k, t_start + t_flight)
+#     state1 = state.cowell(k, t_start)
+#     state1_target = state_target.cowell(k, t_start + t_flight)
 
-    res = list(iod.izzo.lambert(Earth.k, state1.position, state1_target.position, t_flight, M=0))
-    if len(res) == 0 or len(res) > 1:
-        raise RuntimeError(f"compute_totaldv labert produced {len(res)} solutions")
+#     res = list(iod.izzo.lambert(Earth.k, state1.position, state1_target.position, t_flight, M=0))
+#     if len(res) == 0 or len(res) > 1:
+#         raise RuntimeError(f"compute_totaldv labert produced {len(res)} solutions")
 
-    v1_sol, v2_sol = res[0]
+#     v1_sol, v2_sol = res[0]
 
-    # take off vector must be in director of normal vector for take off
-    dv1 = np.linalg.norm(state1.velocity - v1_sol)
-    dv2 = np.linalg.norm(state1_target.velocity - v2_sol)
-    return  (dv1 + dv2)
+#     # take off vector must be in director of normal vector for take off
+#     dv1 = np.linalg.norm(state1.velocity - v1_sol)
+#     dv2 = np.linalg.norm(state1_target.velocity - v2_sol)
+#     return  (dv1 + dv2)
 
-def lambertSearch(state, state_target,k, bounds=[None, None], resolution=5, show=False):
+# def lambertSearch(state, state_target,k, bounds=[None, None], resolution=5, show=False):
 
-    t_start = 100*u.s
-    t_stop = 1000*u.s
+#     t_start = 100*u.s
+#     t_stop = 1000*u.s
 
-    if bounds[0] is None:
-        bounds[0] = 12*3600
-    if bounds[1] is None:
-        bounds[1] = 500
+#     if bounds[0] is None:
+#         bounds[0] = 12*3600
+#     if bounds[1] is None:
+#         bounds[1] = 500
 
-    # search for the starting point
-    t_start = np.linspace(t_start.to(u.s).value, bounds[0], resolution)
-    t_flight = np.linspace(200, bounds[1], resolution)
+#     # search for the starting point
+#     t_start = np.linspace(t_start.to(u.s).value, bounds[0], resolution)
+#     t_flight = np.linspace(200, bounds[1], resolution)
 
-    data = np.zeros((len(t_flight), len(t_start)))
-    for i in range(len(t_start)):
-        for j in range(len(t_flight)):
-            data[i, j] = compute_dv([t_start[i], t_flight[j]], state, state_target, k).value
-    # Find the indices of the minimum value
-    min_index = np.unravel_index(np.argmin(data), data.shape)
-    min_value = data[min_index]
-    guess = [t_start[min_index[0]], t_flight[min_index[1]]]
+#     data = np.zeros((len(t_flight), len(t_start)))
+#     for i in range(len(t_start)):
+#         for j in range(len(t_flight)):
+#             data[i, j] = compute_dv([t_start[i], t_flight[j]], state, state_target, k).value
+#     # Find the indices of the minimum value
+#     min_index = np.unravel_index(np.argmin(data), data.shape)
+#     min_value = data[min_index]
+#     guess = [t_start[min_index[0]], t_flight[min_index[1]]]
 
-    if show:
-        # Create the heat map
-        plt.imshow(data, cmap='plasma', origin='lower', extent=[t_start.min(), t_start.max(), t_flight.min(), t_flight.max()])
-        plt.colorbar(label='Value')
-        #auto aspect ratio
-        plt.gca().set_aspect('auto', adjustable='box')
-        # Draw a dot on the minimum value
-        plt.plot(t_start[min_index[1]], t_flight[min_index[0]], 'ro')
+#     if show:
+#         # Create the heat map
+#         plt.imshow(data, cmap='plasma', origin='lower', extent=[t_start.min(), t_start.max(), t_flight.min(), t_flight.max()])
+#         plt.colorbar(label='Value')
+#         #auto aspect ratio
+#         plt.gca().set_aspect('auto', adjustable='box')
+#         # Draw a dot on the minimum value
+#         plt.plot(t_start[min_index[1]], t_flight[min_index[0]], 'ro')
 
-        # Uncomment the line below to add a colorbar
-        # plt.colorbar(label='Value')
+#         # Uncomment the line below to add a colorbar
+#         # plt.colorbar(label='Value')
 
-        plt.ylabel('t_flight')
-        plt.xlabel('t_delay')
-        plt.title('Energy')
+#         plt.ylabel('t_flight')
+#         plt.xlabel('t_delay')
+#         plt.title('Energy')
         
 
-        # Show the plot
-        plt.show()
+#         # Show the plot
+#         plt.show()
 
-    return guess, min_value
-#post launch
-# r0 = np.array([6442.10116578,   86.01334177,   37.29261384] )*u.km
-# v0 = np.array([1.00248566, 0.43470921, 0.18847591])*u.km/u.s
+#     return guess, min_value
+
+
+def lambert_dv(x, state0, state0_target, k, t_wieght=0.0001):
+    t, tof = x
+    t *= u.s
+    tof *= u.s
+    state1 = state0.cowell(k, t)
+
+    target1 = state0_target.cowell(k, t+tof)
+    res = list(iod.izzo.lambert(Earth.k, state1.position, target1.position, tof, M=0))
+    if len(res) == 0 or len(res) > 1:
+        print(f"lambert produced {len(res)} solutions")
+    v0_sol, v1_sol = res[0]
+    dv1 = np.linalg.norm(v0_sol - state1.velocity).value
+    dv2 = np.linalg.norm(v1_sol - target1.velocity).value
+    dt = (t+tof).value*t_wieght
+
+    return dv1*dv1+dv2*dv2+dt*dt
+
+
+def lambert_dv_launch(x, state0, state0_target, k, planet_axis_angle, t_wieght=0.0001):
+    t, tof = x
+    t *= u.s
+    tof *= u.s
+
+    rot_mag = np.linalg.norm(planet_axis_angle)
+    R.from_rotvec(planet_axis_angle*t)
+    #apply to state0.position
+    r1 = R.apply(state0.position)
+    v1 = np.cross(planet_axis_angle,state0.position)
+    v1 = rot_mag/np.linalg.norm(v1)
+    v1 = R.apply(v1)
+    
+    state1 = Body.State(r1, v1)
+
+    target1 = state0_target.cowell(k, t+tof)
+    res = list(iod.izzo.lambert(Earth.k, state1.position, target1.position, tof, M=0))
+    if len(res) == 0 or len(res) > 1:
+        print(f"lambert produced {len(res)} solutions")
+    v0_sol, v1_sol = res[0]
+    dv1 = np.linalg.norm(v0_sol - state1.velocity).value
+    dv2 = np.linalg.norm(v1_sol - target1.velocity).value
+    dt = (t+tof).value*t_wieght
+
+    return dv1*dv1+dv2*dv2+dt*dt
+
+
 
 k = Earth.k.to(u.km**3/u.s**2)
+earth_axis_angle = [0,0,2*np.pi/(24*3600)]*u.rad/u.s
 
 # rocket on ground
 r0 = np.array([oe.EARTH_RADIUS_KM.value, 0, 0])*u.km
-v0 = np.array([0, oe.EARTH_RADIUS_KM.value*2*np.pi/(24*3600) , 0])*u.km/u.s
+v0 = np.array([0, 7.90538864 , 0])*u.km/u.s  # near circular orbit
+# res = minimize(oe.eccentricity, v0.value, args=(r0.value, k.value))
+# print(res.x)
+ground_velocity = oe.EARTH_RADIUS_KM*2*np.pi/(24*3600*u.s)
+
 m0 = 350*u.kg # rocket + fuel
 T0 = oe.TEMP_EARTH
 isp = oe.SPECIFIC_IMPULSE_TYPE.Liquid
 flow = oe.REACTION_MASS_FLOW_RATE
 state0 = Body.State( r0, v0, m0, T0,0*u.s)
+per_source = state0.period(k)
+
+t = 0
+rot_mag = np.linalg.norm(earth_axis_angle)
+R.from_rotvec(earth_axis_angle*t)
+#apply to state0.position
+r1 = R.apply(state0.position.value)
+v1 = np.cross(earth_axis_angle,state0.position).value
+v1 = rot_mag/np.linalg.norm(v1)
+v1 = R.apply(v1.value)
+state1 = Body.State(r1, v1)
+print(state1)
+
+
+# print(state0.ecc(k))
+# print(state0.period(k))
+# print(state0.position)
+# print(state0.cowell(k, 5069.3*u.s).position)
+
 
 # compute a target in circular orbit
-r_target = np.array([2*oe.EARTH_RADIUS_KM.value, 0, 0])*u.km
-v_target = np.array([0, 5.59 , 0])*u.km/u.s
-target_state0 = Body.State(r_target, v_target)
-
-t_intercept = 500*u.s
-state_intersect = state0.cowell(k, t_intercept)
-dv = v_target - state_intersect.velocity
-_, thrust_theta, thrust_phi = oe.cartesian_to_spherical(*dv)
+r_target = np.array([0,2*oe.EARTH_RADIUS_KM.value,  0])*u.km
+v_target = np.array([-5.59,0 , 0])*u.km/u.s
+state0_target = Body.State(r_target, v_target)
+per_target = state0_target.period(k)
 
 
-state_target = state_intersect.cowell(k, 100*u.s)
-
-print(state_target.position)
-
-times = np.linspace(10, 1000, 100)*u.s
-dv = []
-for t in times:
-    res = list(iod.izzo.lambert(Earth.k, r0, state_target.position, t, M=0))
-    v0_sol, v1_sol = res[0]
-    dv1 = np.linalg.norm(v0_sol - state0.velocity).value
-    dv2 = np.linalg.norm(v1_sol - state_target.velocity).value
-
-    dv.append(dv1+dv2)
-
-plt.plot(times, dv)
-plt.show
-
-#lambertSearch(state0, target_state0, k, resolution=50, show=True)
-
-# x0 = [100, 200, thrust_theta.value, thrust_phi.value]  
-# bounds = [(1, 1000), (1, 1000), (0, 2*np.pi), (0, np.pi)] 
-# print(maneuver_dist(x0, state0, state_intersect.position, v_target, k))
-# res = minimize(maneuver_dist, x0, args=(state0, state_intersect.position, v_target, k), bounds=bounds)
-# print(res.fun, res.x)
-exit()
+max_time = 10000*u.s
+if not np.isnan(per_source) and not np.isnan(per_target):
+    if per_source > per_target:
+        max_time = per_source
+    else:
+        max_time = per_target
 
 
-# res = minimize(lambda v,r,k: oe.eccentricity(v,r,k)**2, v_target, args=(r_target.value, k.value))
-# v_target = res.x*u.km/u.s
-# print(v_target)
-#ecc = oe.eccentricity(v_target.value, r_target.value, k.value)
+# t_intercept = 500*u.s
+# state_intersect = state0.cowell(k, t_intercept)
+# dv = v_target - state_intersect.velocity
+# _, thrust_theta, thrust_phi = oe.cartesian_to_spherical(*dv)
 
-
-
-# create a guess launch intercept maneuver
-launch_delay = 10*u.s
-launch_burn_duration = 420*u.s
-intercept_burn_theta = 1.6
-intercept_burn_phi = 0.3
-intercept_delay = 90*u.s
-intercept_burn_duration = 150*u.s
-
-x0 = [launch_delay.value, launch_burn_duration.value, intercept_burn_theta, intercept_burn_phi, intercept_delay.value, intercept_burn_duration.value]
-print('guess:',x0)
-
-# print(x0)
-# print(*state0.to_list())
-res = post_launch_intercept_maneuver(*x0, state0, k)
-print(res)
-print(res.ecc(k))
-
-
-
-
-score = post_launch_intercept_score(x0, state0, k, target_state0) 
-print("Guess Score:",score) 
-
-
-
-times = np.linspace(0, 300, 100)
+#use priods to define search bounds
+travel_max = max_time.value
+delay_max = max_time.value
+time_weight = 0.0005
+resolution = 20
+travel_times = np.linspace(1000, travel_max, resolution)*u.s
+delay_times = np.linspace(100, delay_max, resolution)*u.s
+dv = np.zeros((len(delay_times), len(travel_times)))
 positions = []
-target_positions = []
-for t in times:
-    state = state0.cowell(k, t*u.s)
-    positions.append(np.linalg.norm(state.position).value)
-    target_state = target_state0.cowell(k, t*u.s)
-    target_positions.append(np.linalg.norm(target_state.position).value)
+positions_target = []
+positions_intercept = []
 
-# #extract positions fo
-# positions = np.linalg.norm(states.position, axis=1)
+position_times = np.linspace(10, travel_max+delay_max, 200)*u.s
 
-import matplotlib.pyplot as plt
-plt.plot(times, positions)
-plt.plot(times, target_positions)
+
+
+for pos_idx in range(len(position_times)):
+    t = position_times[pos_idx]
+    state1 = state0.propagate_cowell(k, t)
+    target1 = state0_target.propagate_cowell(k, t)
+    positions.append(state1.position)
+    positions_target.append(target1.position)
+
+for delay_idx in range(len(delay_times)):
+    for tof_idx in range(len(travel_times)):
+        res = lambert_dv([delay_times[delay_idx].value, 
+                          travel_times[tof_idx].value], 
+                          state0, state0_target, 
+                          k, 
+                          t_wieght=time_weight, 
+                          set_velocity=ground_velocity)
+        dv[tof_idx,delay_idx] = np.log(res)
+
+fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+
+# Plot 1: DV as image
+axs[0].imshow(dv, cmap='plasma', origin='lower', extent=[delay_times.min().value, delay_times.max().value,travel_times.min().value, travel_times.max().value])
+
+axs[0].set_ylabel('tof')
+axs[0].set_xlabel('delay')
+axs[0].set_title('Lambert DV')
+axs[0].grid(True)
+axs[0].set_aspect('auto', adjustable='box')
+
+# plot the minimum dv
+min_indices = np.unravel_index(np.argmin(dv), dv.shape)
+
+delay_min_dv = delay_times[min_indices[1]]
+travel_min_dv = travel_times[min_indices[0]]
+axs[0].plot(delay_min_dv, travel_min_dv,  'ro')
+
+x0 = [delay_min_dv.value,travel_min_dv.value]
+bounds = [[0, delay_max], [0, travel_max]]
+res = minimize(lambert_dv, x0, args=(state0, state0_target, k,time_weight,ground_velocity), bounds=bounds)
+axs[0].plot(res.x[0], res.x[1],  'go')
+
+# Plot 2: Line scatter plot
+axs[1].plot([p[0].value for p in positions], [p[1].value for p in positions], label='Rocket')
+axs[1].plot([p[0].value for p in positions_target], [p[1].value for p in positions_target], label='Target')
+
+res = list(iod.izzo.lambert(Earth.k, state0.propagate_cowell(k, delay_min_dv).position, state0_target.propagate_cowell(k, delay_min_dv+travel_min_dv).position, travel_min_dv, M=0))
+state_intersect = Body.State(state0.propagate_cowell(k, delay_min_dv).position, res[0][0])
+for t in np.linspace(0, travel_min_dv, 100):
+    positions_intercept.append(state_intersect.propagate_cowell(k,t).position)
+
+axs[1].plot([p[0].value for p in positions_intercept], [p[1].value for p in positions_intercept], label='Intercept')
+circle = plt.Circle((0, 0), oe.EARTH_RADIUS_KM.value, color='b', fill=False, linestyle='dotted')
+axs[1].add_artist(circle)
+axs[1].set_aspect('equal', adjustable='box')
+
 plt.show()
-
-
-# res = minimize(post_launch_intercept_score, x0, args=(state0, k, target_state0))
-# print("Post X:",res.x)
-# print("Post Optimized Score: ",res.fun)
-
-exit()
-
-# create a guess maneuver
-
-
-
-
-target_alt = 400*u.km
-
-print(state0)
-#print("Pre Ecc:", eccentricity(v0.value, r0.value, k.value))
-#print("Pre Ecc:", state0.ecc(k))
-
-# print("Guess Angle:",guess_angle)
-prograde_vec = state0.prograde_vector()
-tangent_vec = state0.tangent_vector()
-guess_angle = np.arccos(np.dot(prograde_vec, tangent_vec))
-guess_velocity = np.sqrt(k/np.linalg.norm(r0)) #circular orbit velocity
-guess_dv = guess_velocity*np.dot(tangent_vec,prograde_vec) # how much dv is still needed
-max_accel = state0.max_accel(isp, flow)
-guess_t_circularize = guess_dv/max_accel
-
-guess_t_launch = 200*u.s
-guess_t_circularize = 200*u.s
-x0 = [guess_t_launch.value, guess_angle.value, guess_t_circularize.value] # angle, time
-
-#x0 = [305.06579646,   0.47570277,  69.23180498]
-print('guess:',x0)
-r,v,m,temp = post_launch_maneuver(*x0, *state0.to_list(), k) 
-print('Pre Optimized Alt:',np.linalg.norm(r)-oe.EARTH_RADIUS_KM)
-print('Pre Optimized Ecc:',oe.eccentricity(v.value, r.value, k.value))
-
-score = post_launch_maneuver_score(x0, *state0.to_list(), k, target_alt)
-print("Guess Score:",score)
-ts_start = time.time()
-res = minimize(post_launch_maneuver_score, x0, args=(*state0.to_list(), k, target_alt))
-ts_end = time.time()
-print("Time to optimize:",ts_end-ts_start)
-print("Post X:",res.x)
-print("Post Optimized Score: ",res.fun)
-
-
-res = post_launch_maneuver(*res.x, *state0.to_list(), k) 
-state2 = Body.State(*res,0*u.s)
-print('Post Optimized Alt:',np.linalg.norm(state2.position)-oe.EARTH_RADIUS_KM)
-print('Post Optimized Ecc:',state2.ecc(k))
-print('Post Optimized Mass:',state2.mass)
-
-
-# r,v,m,temp = post_planar_maneuver(*res.x, *state0.to_list(), k)
-# print("Post Optimized Vel: ",np.linalg.norm(v))
-# print("Post Optimized Alt: ",np.linalg.norm(r)-oe.EARTH_RADIUS_KM)
-# print("Post Optimized Mass:",m)
-# print("Post Optimized Temp:",temp)
-
-
-# x0 = [guess_angle.value, guess_dt.value] # angle, time
-# ecc = post_planar_maneuver_ecc(x0, *state0.to_list(), k)
-# print(x0)
-# print("Guess Ecc:",ecc)
-# ts_start = time.time()
-# res = minimize(post_planar_maneuver_ecc, x0, args=(*state0.to_list(), k))
-# ts_end = time.time()
-# print("Time to optimize:",ts_end-ts_start)
-# print("Post Optimized Ecc: ",res.fun)
-
-# r,v,m,temp = post_planar_maneuver(*res.x, *state0.to_list(), k)
-# print("Post Optimized Vel: ",np.linalg.norm(v))
-# print("Post Optimized Alt: ",np.linalg.norm(r)-oe.EARTH_RADIUS_KM)
-# print("Post Optimized Mass:",m)
-# print("Post Optimized Temp:",temp)

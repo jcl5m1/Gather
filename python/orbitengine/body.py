@@ -53,12 +53,65 @@ class Body:
         def ecc(self, k):
             return oe.eccentricity(self.velocity.value, self.position.value, k.value)
         
+        def period(self, k):
+            # Compute the specific mechanical energy
+            # epsilon goes positive for hyperbolic orbits
+            epsilon = np.linalg.norm(self.velocity)**2 / 2 - k / np.linalg.norm(self.position)
+
+            # Compute the semi-major axis
+            # a goes negative for hyperbolic orbits
+            a = -k / (2 * epsilon)
+
+
+            # Compute the period
+            T = 2 * np.pi * np.sqrt(a**3 / k)
+
+            return T
+
         def value(self):
             return [self.position.value, self.velocity.value, self.mass.value, self.tempurature.value]
 
         def to_list(self):
             return [self.position, self.velocity, self.mass, self.tempurature]
         
+        def to_dict(self):
+            return {
+                'timestamp': self.timestamp.value,
+                'position': self.position.value.tolist(),
+                'velocity': self.velocity.value.tolist(),
+                'mass': self.mass.value,
+                'temperature': self.tempurature.value
+            }
+
+        @classmethod
+        def from_dict(cls, data):
+            state = cls()
+            state.timestamp = data['timestamp']*u.s
+            state.position = np.array(data['position'])*u.km
+            state.velocity = np.array(data['velocity'])*u.km/u.s
+            state.mass = data['mass']*u.kg
+            state.temperature = data['temperature']*u.Kelvin
+            return state
+
+        @classmethod
+        def from_instance(cls, instance):
+            new_instance = cls()
+            new_instance.position = np.copy(instance.position)
+            new_instance.velocity = np.copy(instance.velocity)
+            new_instance.mass = instance.mass
+            new_instance.tempurature = instance.tempurature
+            new_instance.timestamp = instance.timestamp            
+            return new_instance
+        
+        def lerp(self, state, t):
+            new_state = Body.State()
+            new_state.position = self.position + (state.position - self.position)*t
+            new_state.velocity = self.velocity + (state.velocity - self.velocity)*t
+            new_state.mass = self.mass + (state.mass - self.mass)*t
+            new_state.tempurature = self.tempurature + (state.tempurature - self.tempurature)*t
+            new_state.timestamp = self.timestamp + (state.timestamp - self.timestamp)*t
+            return new_state
+
         def prograde_vector(self):
             return self.velocity / np.linalg.norm(self.velocity)
             
@@ -76,7 +129,7 @@ class Body:
             max_accel = (oe.EARTH_G0*isp*flow)/self.mass
             return max_accel
         
-        def cowell(self, k, t, acc_params=None):
+        def propagate_cowell(self, k, t, acc_params=None):
             r,v,m,T = oe.cowell(
                 k=k,
                 r0=self.position,
@@ -86,7 +139,14 @@ class Body:
                 t=t,
                 acc_params=acc_params)
 
-            return Body.State(r,v,m,T,t)
+            return Body.State(r,v,m,T, self.timestamp + t)
+
+        def propagate_landed(self, t, parent_axis_angle):
+            rot = R.from_rotvec(parent_axis_angle*t)
+            r1 = rot.apply(self.position)*u.km
+            v1 = np.cross(parent_axis_angle,self.position)/u.rad
+            v1 = rot.apply(v1)*u.km/u.s
+            return Body.State(r1, v1, self.mass, self.tempurature, self.timestamp + t)
 
 
     class Type(Enum):
