@@ -35,13 +35,14 @@ from orbitengine.trajectorysegment import TrajectorySegment
 class Body:
 
     class State:
-        def __init__(self, r=oe.R_ZERO, v=oe.V_ZERO, m=0*u.kg, T=0*u.Kelvin, timestamp=0*u.s):
+        def __init__(self, r=oe.R_ZERO, v=oe.V_ZERO, m=0*u.kg, T=0*u.Kelvin, timestamp=0*u.s, parent_axis_angle=None):
             # expected units: t[s], r[km], v[km/s], m[kg], temp[K]
             self.timestamp = timestamp.to(u.s)
             self.position = r.to(u.km)
             self.velocity = v.to(u.km/u.s)
             self.mass = m.to(u.kg)
             self.tempurature = T.to(u.Kelvin)
+            self.parent_axis_angle = parent_axis_angle
 
         def __str__(self):
             return "Timestamp: " + str(self.timestamp) + "\n" + \
@@ -128,7 +129,13 @@ class Body:
         def max_accel(self, isp, flow):
             max_accel = (oe.EARTH_G0*isp*flow)/self.mass
             return max_accel
-        
+
+        def propagate(self, k, t, acc_params=None):
+            if self.parent_axis_angle is None:
+                return self.propagate_cowell(k, t, acc_params)
+            else:
+                return self.propagate_landed(t, self.parent_axis_angle)
+
         def propagate_cowell(self, k, t, acc_params=None):
             r,v,m,T = oe.cowell(
                 k=k,
@@ -138,7 +145,6 @@ class Body:
                 T0=self.tempurature,
                 t=t,
                 acc_params=acc_params)
-
             return Body.State(r,v,m,T, self.timestamp + t)
 
         def propagate_landed(self, t, parent_axis_angle):

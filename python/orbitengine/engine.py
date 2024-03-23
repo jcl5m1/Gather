@@ -287,6 +287,11 @@ def cowell(k, r0, v0, m0, T0, t,  rtol=1e-10, *, acc_params=None, callback=None,
     T = T0.to(u.Kelvin).value
     u0 = np.array([x, y, z, vx, vy, vz, m, T])
 
+
+    if acc_params is not None:
+        # no reaction mass, skip the thrust calculation
+        if acc_params.mass_dry >= m:
+            acc_params = None
     # Set the non Keplerian acceleration to zero by default
     if acc_params is None:
         acc_params = AccParams()
@@ -429,14 +434,13 @@ class AccParams:
         dm = self.reaction_flow_rate
         isp = self.reaction_isp
 
+        dT = self.reaction_dT
         # differentiable sigmoid function that stops thrust when fuel is gone
 #        dm *= expit(10*(mass-self.mass_dry))  
         if mass < self.mass_dry:
-            dm = 0
+            return (0, 0, 0, 0, 0)
 
         thrust = (EARTH_G0*isp * dm).value
-
-        dT = self.reaction_dT
         return np.concatenate((thrust_vec*thrust/mass, [-dm],[dT]))
 
 
