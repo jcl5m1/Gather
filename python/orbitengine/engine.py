@@ -27,6 +27,9 @@ import time
 from scipy.integrate import odeint, ode
 import numpy as np
 from scipy.special import expit
+import pprint as ppt
+import pickle
+import hashlib
 
 EARTH_RADIUS_KM = const.R_earth.to(u.km)
 T_ZERO = 0*u.s
@@ -78,19 +81,60 @@ SPECIFIC_IMPULSE_TYPE = DotDict({
     "Antimatter": 2500000*u.s # beam core
 })
 
-
 import inspect
 import builtins
+
+# requires object to have input_dict() method
+def obj_input_hash(obj):
+    curr_precision = np.get_printoptions()['precision']
+    np.set_printoptions(precision=2)
+    hash = hashlib.md5(str(obj.input_dict()).encode()).hexdigest()
+    np.set_printoptions(precision=curr_precision)
+    return hash
+
+def obj_input_hash_filename(obj, dir=''):
+    filename = f"{obj.__class__.__name__}_{obj_input_hash(obj)}.pkl"
+    return os.path.join(dir,filename)
+
+# requires object to have input_dict() method
+def obj_cache_load(obj, dir='cache'):
+    filename = obj_input_hash_filename(obj,dir)
+    if os.path.exists(filename):
+        with open(filename, 'rb') as f:
+            obj2 = pickle.load(f)
+            obj.__dict__ = obj2.__dict__
+            print(f"Loaded from {filename}")
+            return True
+    return False
+
+def obj_cache_save(obj, dir='cache'):
+    filename = obj_input_hash_filename(obj,dir)
+    dir_name = os.path.dirname(filename)
+    os.makedirs(dir_name, exist_ok=True)
+    with open(filename, 'wb') as f:
+        print(f"Saved to {filename}")
+        pickle.dump(obj, f)
+
+
 
 def print(*args, **kwargs):
     # Get the previous frame in the stack, otherwise it would be this function
     frame = inspect.currentframe().f_back
     # Get the file name and line number of the previous frame
-    file_name = frame.f_code.co_filename
+    file_name = os.path.basename(frame.f_code.co_filename)
     line_number = frame.f_lineno
     # Call the original print function with the file name and line number
     builtins.print(f"{file_name}:{line_number} ", *args, **kwargs)
 
+def pprint(*args, **kwargs):
+    # Get the previous frame in the stack, otherwise it would be this function
+    frame = inspect.currentframe().f_back
+    # Get the file name and line number of the previous frame
+    file_name = os.path.basename(frame.f_code.co_filename)
+    line_number = frame.f_lineno
+    # Call the original print function with the file name and line number
+    builtins.print(f"{file_name}:{line_number}:")
+    ppt.pprint(*args, **kwargs)
 
 def debug(msg):
     #print call stack

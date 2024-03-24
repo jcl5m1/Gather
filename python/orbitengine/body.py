@@ -43,7 +43,7 @@ class Body:
             self.position = r.to(u.km)
             self.velocity = v.to(u.km/u.s)
             self.mass = m.to(u.kg)
-            self.tempurature = T.to(u.Kelvin)
+            self.temperature = T.to(u.Kelvin)
             self.parent_axis_angle = parent_axis_angle
             self.solver = None
             self.prev_propagate_time = -1*u.s
@@ -53,7 +53,7 @@ class Body:
                 "Position: " + str(self.position) + "\n" + \
                 "Velocity: " + str(self.velocity) + "\n" + \
                 "Mass: " + str(self.mass) + "\n" + \
-                "Tempurature: " + str(self.tempurature) + "\n"            
+                "Temperature: " + str(self.temperature) + "\n"            
 
         def ecc(self, k):
             return oe.eccentricity(self.velocity.value, self.position.value, k.value)
@@ -74,29 +74,20 @@ class Body:
             return T
 
         def value(self):
-            return [self.position.value, self.velocity.value, self.mass.value, self.tempurature.value]
+            return [self.position.value, self.velocity.value, self.mass.value, self.temperature.value]
 
         def to_list(self):
-            return [self.position, self.velocity, self.mass, self.tempurature]
+            return [self.position, self.velocity, self.mass, self.temperature]
         
         def to_dict(self):
             return {
-                'timestamp': self.timestamp.value,
-                'position': self.position.value.tolist(),
-                'velocity': self.velocity.value.tolist(),
-                'mass': self.mass.value,
-                'temperature': self.tempurature.value
+                'timestamp': self.timestamp,
+                'position': self.position,
+                'velocity': self.velocity,
+                'mass': self.mass,
+                'temperature': self.temperature,
+                'parent_axis_angle': self.parent_axis_angle
             }
-
-        @classmethod
-        def from_dict(cls, data):
-            state = cls()
-            state.timestamp = data['timestamp']*u.s
-            state.position = np.array(data['position'])*u.km
-            state.velocity = np.array(data['velocity'])*u.km/u.s
-            state.mass = data['mass']*u.kg
-            state.temperature = data['temperature']*u.Kelvin
-            return state
 
         @classmethod
         def from_instance(cls, instance):
@@ -104,7 +95,7 @@ class Body:
             new_instance.position = np.copy(instance.position)
             new_instance.velocity = np.copy(instance.velocity)
             new_instance.mass = instance.mass
-            new_instance.tempurature = instance.tempurature
+            new_instance.temperature = instance.temperature
             new_instance.timestamp = instance.timestamp            
             return new_instance
         
@@ -113,7 +104,7 @@ class Body:
             return Body.State(self.position, 
                               res.x*u.km/u.s, 
                               self.mass, 
-                              self.tempurature, 
+                              self.temperature, 
                               self.timestamp)
 
         def lerp(self, state, t):
@@ -121,7 +112,7 @@ class Body:
             new_state.position = self.position + (state.position - self.position)*t
             new_state.velocity = self.velocity + (state.velocity - self.velocity)*t
             new_state.mass = self.mass + (state.mass - self.mass)*t
-            new_state.tempurature = self.tempurature + (state.tempurature - self.tempurature)*t
+            new_state.temperature = self.temperature + (state.temperature - self.temperature)*t
             new_state.timestamp = self.timestamp + (state.timestamp - self.timestamp)*t
             return new_state
 
@@ -154,7 +145,7 @@ class Body:
                 x, y, z = self.position.to(u.km).value
                 vx, vy, vz = self.velocity.to(u.km/u.s).value
                 m = self.mass.to(u.kg).value
-                T = self.tempurature.to(u.Kelvin).value
+                T = self.temperature.to(u.Kelvin).value
                 self.u0 = np.array([x, y, z, vx, vy, vz, m, T])
 
                 if acc_params is not None:
@@ -193,7 +184,7 @@ class Body:
                 r0=self.position,
                 v0=self.velocity, 
                 m0=self.mass,
-                T0=self.tempurature,
+                T0=self.temperature,
                 t=t,
                 acc_params=acc_params)
             
@@ -211,7 +202,7 @@ class Body:
                 r1 = rot.apply(self.position)*u.km
                 v1 = np.cross(parent_axis_angle,self.position)/u.rad
                 v1 = rot.apply(v1)*u.km/u.s
-                return Body.State(r1, v1, self.mass, self.tempurature, self.timestamp + t,self.parent_axis_angle)
+                return Body.State(r1, v1, self.mass, self.temperature, self.timestamp + t,self.parent_axis_angle)
             else:
                 states = []
                 for i in range(len(t)):
@@ -259,7 +250,7 @@ class Body:
         self.mass_dry = mass_dry
         self.mass_cargo = 0*u.kg
         self.mass = self.total_initial_mass()
-        self.tempurature = T0
+        self.temperature = T0
 
         if lockedPosition:
             seg = TrajectorySegment(body=self,
@@ -432,7 +423,7 @@ class Body:
             if seg.t1 < time:
                 seg.np.hide()
 
-        self.position, self.velocity, self.rotation, w, self.mass, self.tempurature = res
+        self.position, self.velocity, self.rotation, w, self.mass, self.temperature = res
         if self.np is None:
             return
         self.np.setPos(LVecBase3f(*self.position.to(u.km).value))
@@ -460,7 +451,7 @@ class Body:
         
         if self.type == Body.Type.VESSEL:
             text += f"  Fuel: {self.mass - self.mass_dry:.2f}"
-            text += f"  Temp: {self.tempurature:.2f}"
+            text += f"  Temp: {self.temperature:.2f}"
         text += '\n'
 
         if self.lastSegment is not None:

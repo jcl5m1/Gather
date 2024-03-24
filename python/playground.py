@@ -46,7 +46,7 @@ k = Earth.k.to(u.km**3/u.s**2)
 acc_params = oe.AccParams()
 acc_params.thrust_vec = np.array([1, 0., 0.])
 
-u0 = [*s.position.value, *s.velocity.value, s.mass.value, s.tempurature.value]
+u0 = [*s.position.value, *s.velocity.value, s.mass.value, s.temperature.value]
 # print(u0)
 
 
