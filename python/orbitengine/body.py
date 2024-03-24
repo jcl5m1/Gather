@@ -30,6 +30,8 @@ import json
 import pickle
 import orbitengine.engine as oe
 from orbitengine.engine import debug
+from scipy.integrate import odeint, ode
+
 from orbitengine.trajectorysegment import TrajectorySegment
 
 class Body:
@@ -43,6 +45,8 @@ class Body:
             self.mass = m.to(u.kg)
             self.tempurature = T.to(u.Kelvin)
             self.parent_axis_angle = parent_axis_angle
+            self.solver = None
+            self.prev_propagate_time = -1*u.s
 
         def __str__(self):
             return "Timestamp: " + str(self.timestamp) + "\n" + \
@@ -104,6 +108,14 @@ class Body:
             new_instance.timestamp = instance.timestamp            
             return new_instance
         
+        def circularized(self, k):
+            res = minimize(oe.eccentricity, self.velocity.value, args=(self.position.value, k.value))
+            return Body.State(self.position, 
+                              res.x*u.km/u.s, 
+                              self.mass, 
+                              self.tempurature, 
+                              self.timestamp)
+
         def lerp(self, state, t):
             new_state = Body.State()
             new_state.position = self.position + (state.position - self.position)*t
@@ -131,11 +143,50 @@ class Body:
             return max_accel
 
         def propagate(self, k, t, acc_params=None):
-            if self.parent_axis_angle is None:
-                return self.propagate_cowell(k, t, acc_params)
-            else:
+            if self.parent_axis_angle is not None and acc_params is None:
                 return self.propagate_landed(t, self.parent_axis_angle)
+            else:
+                return self.propagate_cowell2(k, t, acc_params)
 
+        # use persistant solver
+        def propagate_cowell2(self, k, t, acc_params=None):
+            if self.solver is None:
+                x, y, z = self.position.to(u.km).value
+                vx, vy, vz = self.velocity.to(u.km/u.s).value
+                m = self.mass.to(u.kg).value
+                T = self.tempurature.to(u.Kelvin).value
+                self.u0 = np.array([x, y, z, vx, vy, vz, m, T])
+
+                if acc_params is not None:
+                    # no reaction mass, skip the thrust calculation
+                    if acc_params.mass_dry >= self.mass.value:
+                        acc_params = None
+                # Set the non Keplerian acceleration to zero by default
+                if acc_params is None:
+                    acc_params = oe.AccParams()
+
+                # can use dopri5 in re-entrant mode allowing multiple odes 
+                # to be integrated concurrently                 
+                self.solver = ode(oe.twobody).set_integrator('dopri5')
+                self.solver.set_initial_value(self.u0)  # Set initial value at t=0
+                self.solver.set_f_params(k.to(u.km**3/u.s**2).value, acc_params)
+            if len(t.shape) == 0:
+                if t < self.prev_propagate_time:
+                    # can't integrate backwards in t, reset integrator state
+                    self.solver.set_initial_value(self.u0)  
+                sol = self.solver.integrate(t.to(u.s).value)
+                self.prev_propagate_time = t
+                return Body.State(sol[0:3]*u.km, 
+                                  sol[3:6]*u.km/u.s, 
+                                  sol[6]*u.kg, sol[7]*u.Kelvin, self.timestamp + t,
+                                  self.parent_axis_angle)
+            else:
+                states = []
+                for i in range(len(t)):
+                    states.append(self.propagate_cowell2(k,t[i], acc_params))
+                return states
+
+        # stateless call
         def propagate_cowell(self, k, t, acc_params=None):
             r,v,m,T = oe.cowell(
                 k=k,
@@ -145,14 +196,27 @@ class Body:
                 T0=self.tempurature,
                 t=t,
                 acc_params=acc_params)
-            return Body.State(r,v,m,T, self.timestamp + t)
+            
+            if len(t.shape) == 0:
+                return Body.State(r,v,m,T, self.timestamp + t)
+            else:
+                states = []
+                for i in range(len(t)):
+                    states.append(Body.State(r[i],v[i],m[i],T[i], self.timestamp + t[i]))
+                return states
 
         def propagate_landed(self, t, parent_axis_angle):
-            rot = R.from_rotvec(parent_axis_angle*t)
-            r1 = rot.apply(self.position)*u.km
-            v1 = np.cross(parent_axis_angle,self.position)/u.rad
-            v1 = rot.apply(v1)*u.km/u.s
-            return Body.State(r1, v1, self.mass, self.tempurature, self.timestamp + t)
+            if len(t.shape) == 0:
+                rot = R.from_rotvec(parent_axis_angle*t)
+                r1 = rot.apply(self.position)*u.km
+                v1 = np.cross(parent_axis_angle,self.position)/u.rad
+                v1 = rot.apply(v1)*u.km/u.s
+                return Body.State(r1, v1, self.mass, self.tempurature, self.timestamp + t,self.parent_axis_angle)
+            else:
+                states = []
+                for i in range(len(t)):
+                    states.append(self.propagate_landed(t[i], parent_axis_angle))
+                return states
 
 
     class Type(Enum):
@@ -191,7 +255,7 @@ class Body:
         self.lastSegment = None
         self.lastTime = 0*u.s
         self.mass_fuel0 = mass_fuel0
-        self.fuel_mass_flow_rate = oe.REACTION_MASS_FLOW_RATE
+        self.fuel_mass_flow_rate = oe.FALCON9_REACTION_MASS_FLOW_RATE
         self.mass_dry = mass_dry
         self.mass_cargo = 0*u.kg
         self.mass = self.total_initial_mass()
@@ -499,7 +563,7 @@ class Body:
         dv1 = np.linalg.norm(v1 - v1_sol)
         dv2 = np.linalg.norm(v2 - v2_sol)
 
-        thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.REACTION_MASS_FLOW_RATE
+        thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.FALCON9_REACTION_MASS_FLOW_RATE
         accel_max = thrust/self.mass
         t_burn1 = (dv1/accel_max).to(u.s)
         t_burn2 = (dv2/accel_max).to(u.s)
@@ -612,7 +676,7 @@ class Body:
         r_attractor = [0,0,0]*u.km
         acc = (self.orbit.r_launch - r_attractor)
         acc_vector = acc/np.linalg.norm(acc)
-        thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.REACTION_MASS_FLOW_RATE        
+        thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.FALCON9_REACTION_MASS_FLOW_RATE        
         self.thrust = acc_vector*thrust
         acc = self.thrust/self.mass
         t_launch = np.sqrt(2*(oe.MIMIMUM_MANEUVER_ALTITUDE/np.linalg.norm(acc)).to(u.s**2))
@@ -639,7 +703,7 @@ class Body:
         bounds = [(1, None)]
         ts_start = time.time()
         info = [None]
-        thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.REACTION_MASS_FLOW_RATE
+        thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.FALCON9_REACTION_MASS_FLOW_RATE
         accel_max = thrust/self.mass
 
         # find trajectory assuming instant velocity change

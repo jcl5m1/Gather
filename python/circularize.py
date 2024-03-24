@@ -296,7 +296,7 @@ ground_velocity = oe.EARTH_RADIUS_KM*2*np.pi/(24*3600*u.s)
 m0 = 350*u.kg # rocket + fuel
 T0 = oe.TEMP_EARTH
 isp = oe.SPECIFIC_IMPULSE_TYPE.Liquid
-flow = oe.REACTION_MASS_FLOW_RATE
+flow = oe.FALCON9_REACTION_MASS_FLOW_RATE
 state0 = Body.State( r0, v0, m0, T0,0*u.s)
 per_source = state0.period(k)
 

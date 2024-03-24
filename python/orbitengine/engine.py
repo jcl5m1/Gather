@@ -6,12 +6,13 @@ from astropy import constants as const
 from poliastro import iod
 from scipy.optimize import fsolve
 from scipy.spatial.transform import Rotation
-import primatives
 from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexReader, GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode, LQuaternion, Vec3
 from enum import Enum
 import math
 from scipy.optimize import minimize
 import scipy.constants
+import torch
+import torchdiffeq as diffeq
 
 from poliastro.bodies import Earth, Mars, Sun  # Or your desired bodies
 from poliastro.maneuver import Maneuver
@@ -23,9 +24,7 @@ import numpy as np  # For array manipulation
 import os
 import inspect
 import time
-from scipy.integrate import ode
-import json
-import pickle
+from scipy.integrate import odeint, ode
 import numpy as np
 from scipy.special import expit
 
@@ -40,15 +39,19 @@ ZERO_ANGLE_VECTOR = np.array([1,0,0])
 TEMP_ZERO = 0*u.Kelvin
 EPSILON = np.finfo(float).eps
 PLANET_ICOSHPERE_LEVEL = 4
+FALCON9_DRY_MASS = 5000*u.kg
+FALCON9_REACTION_MASS = 95000*u.kg
+FALCON9_REACTION_MASS_FLOW_RATE = 2000*u.kg/u.s
+EARTH_G0 = (9.81*u.m/u.s**2).to(u.km/u.s**2)
+ALTITUDE_LEO = 500*u.km + EARTH_RADIUS_KM
+ALTITUDE_GEO = 35786*u.km + EARTH_RADIUS_KM
+ALTITUDE_LUNAR = 405953.805*u.km + EARTH_RADIUS_KM
+EARTH_K = Earth.k.to(u.km**3/u.s**2)
+EARTH_AXIS_ANGLE = [0,0,2*np.pi/(24*3600)]*u.rad/u.s  # need to correct for earth tilt
+
 THRUST_MAX = 10.0*u.kg*u.m/u.s/u.s
 MIMIMUM_MANEUVER_ALTITUDE = 20*u.km
 TRAJECTORY_LAUNCH_MIN_ALTITUDE = EARTH_RADIUS_KM/10
-ROCKET_DRY_MASS = 10*u.kg
-
-REACTION_MASS = 300*u.kg
-REACTION_MASS_FLOW_RATE = 0.8*u.kg/u.s
-EARTH_G0 = (9.81*u.m/u.s**2).to(u.km/u.s**2)
-
 LAUNCH_TURN_TIME = 3
 INSERTION_BURN_TIME = 2.82
 
@@ -74,6 +77,19 @@ SPECIFIC_IMPULSE_TYPE = DotDict({
     "Nuclear": 10000*u.s,
     "Antimatter": 2500000*u.s # beam core
 })
+
+
+import inspect
+import builtins
+
+def print(*args, **kwargs):
+    # Get the previous frame in the stack, otherwise it would be this function
+    frame = inspect.currentframe().f_back
+    # Get the file name and line number of the previous frame
+    file_name = frame.f_code.co_filename
+    line_number = frame.f_lineno
+    # Call the original print function with the file name and line number
+    builtins.print(f"{file_name}:{line_number} ", *args, **kwargs)
 
 
 def debug(msg):
@@ -235,8 +251,8 @@ def line_sphere_intersection(P1, P2, C, r):
         return intersections
 
 
-
-def func_twobody(t0, u_, k, acc_params):   
+# reverse first two paramters for odeint, wrapping function threw error?
+def twobody_ode(u, t, k, acc_params):
     """Differential equation for the initial value two body problem.
 
     This function follows Cowell's formulation from poliastro
@@ -250,14 +266,13 @@ def func_twobody(t0, u_, k, acc_params):
         plus mass and temperature
     k : float
         Standard gravitational parameter.
-    acc_func : function(t0, u, k)
-         Non Keplerian acceleration (km/s2).
-    control :
-        parameters to control the acceleration such as thrust vector
+    acc_params : 
+        parameters to control the acceleration
     """
-    ax, ay, az, dm, dT = acc_params.func(t0, u_, k)
 
-    x, y, z, vx, vy, vz, mass, temp = u_
+    ax, ay, az, dm, dT = acc_params.func(t, u, k)
+    
+    x, y, z, vx, vy, vz, mass, temp = u
     r3 = (x**2 + y**2 + z**2)**1.5
 
     # need to suppport this for elliptical orbits as well
@@ -276,38 +291,84 @@ def func_twobody(t0, u_, k, acc_params):
 
     return du
 
-# def cowell2(k, state, t, acc_params=None):
-#     res = cowell(k, state.position, state.velocity, state.mass, state.tempurature, t, acc_params=acc_params)
-#     return Body.State(*res)
+def twobody(t, u_, k, acc_params):   
+    """Differential equation for the initial value two body problem.
 
-def cowell(k, r0, v0, m0, T0, t,  rtol=1e-10, *, acc_params=None, callback=None, nsteps=1000):
+    This function follows Cowell's formulation from poliastro
+
+    Parameters
+    ----------
+    t0 : float
+        Time.
+    u_ : ~numpy.ndarray
+        Six component state vector [x, y, z, vx, vy, vz] (km, km/s).
+        plus mass and temperature
+    k : float
+        Standard gravitational parameter.
+    acc_func : function(t0, u, k)
+         Non Keplerian acceleration (km/s2).
+    control :
+        parameters to control the acceleration such as thrust vector
+    """
+    ax, ay, az, dm, dT = acc_params.func(t, u_, k)
+
+    x, y, z, vx, vy, vz, mass, temp = u_
+    r3 = (x**2 + y**2 + z**2)**1.5
+
+    # need to suppport this for elliptical orbits as well
+#    dT += -TEMP_RADIANT_CONSTANT*(temp-TEMP_SPACE) #cooling to space temp
+
+    du = torch.tensor([
+        vx,
+        vy,
+        vz,
+        -k * x / r3 + ax,
+        -k * y / r3 + ay,
+        -k * z / r3 + az,
+        dm,
+        dT
+    ])
+
+    return du
+
+
+def cowell(k, r0, v0, m0, T0, t,  rtol=1e-10, *, acc_params=None, callback=None, nsteps=1000, use_torchdiffeq=False):
     x, y, z = r0.to(u.km).value
     vx, vy, vz = v0.to(u.km/u.s).value
     m = m0.to(u.kg).value
     T = T0.to(u.Kelvin).value
     u0 = np.array([x, y, z, vx, vy, vz, m, T])
 
-
     if acc_params is not None:
         # no reaction mass, skip the thrust calculation
         if acc_params.mass_dry >= m:
             acc_params = None
+
     # Set the non Keplerian acceleration to zero by default
     if acc_params is None:
         acc_params = AccParams()
-        acc_params.func = lambda t0, u_, k: (0, 0, 0, 0, 0)
-
+    
     # Create an ode object
-    rtol=1e-8
-    nsteps=1000
-    solver = ode(func_twobody).set_integrator('lsoda', method='bdf',rtol=rtol, nsteps=nsteps)  # Use VODE with BDF method
-    solver.set_initial_value(u0)  # Set initial value at t=0
-    solver.set_f_params(k.to(u.km**3/u.s**2).value, acc_params)  # Pass parameter k to the ODE function
+    if use_torchdiffeq:
+        # Solve the ODE
+        solution = diffeq.odeint(lambda y,t: twobody(y,t, k.to(u.km**3/u.s**2).value, acc_params), u0, t_span, method='dopri5')
+    else:
+        if len(t.shape) == 0:
+            # rtol=1e-8
+            # nsteps=1000
+            # solver = ode(twobody).set_integrator('lsoda', method='bdf',rtol=rtol, nsteps=nsteps)  # Use VODE with BDF method
+            # solver.set_initial_value(u0)  # Set initial value at t=0
+            # solver.set_f_params(k.to(u.km**3/u.s**2).value, acc_params)  # Pass parameter k to the ODE function
+            # sol = solver.integrate(t.to(u.s).value)
+            # return sol[0:3]*u.km, sol[3:6]*u.km/u.s, sol[6]*u.kg, sol[7]*u.Kelvin
 
-    # Integrate the ODE at specific time points
-    sol1 = solver.integrate(t.to(u.s).value)
+            solution = odeint(twobody_ode, u0, [0,t.value], args=(k.to(u.km**3/u.s**2).value, acc_params))
+            sol = solution[-1]
+            return sol[0:3]*u.km, sol[3:6]*u.km/u.s, sol[6]*u.kg, sol[7]*u.Kelvin
+        else:
+            solution = odeint(twobody_ode, u0, t.value, args=(k.to(u.km**3/u.s**2).value, acc_params))
+    return solution[:, 0:3]*u.km, solution[:, 3:6]*u.km/u.s, solution[:, 6]*u.kg, solution[:, 7]*u.Kelvin
 
-    return sol1[0:3]*u.km, sol1[3:6]*u.km/u.s, sol1[6]*u.kg, sol1[7]*u.Kelvin
 
 # optimize lambert accounting for max_acceleration
 def compute_totaldv(x, t_start, accel_max, orbit1, orbit2, time_weight, info):
@@ -413,18 +474,24 @@ def eccentricity(v, r, k):
     return ecc
 
 class AccParams:
-    def __init__(self, thrust_vec=np.array([0,0,0]), func=None, 
+    def __init__(self, 
+                 thrust_vec=None, 
                  reaction_isp=SPECIFIC_IMPULSE_TYPE.Liquid,
-                 reaction_flow_rate=REACTION_MASS_FLOW_RATE,
-                 mass_dry=ROCKET_DRY_MASS,
+                 reaction_flow_rate=FALCON9_REACTION_MASS_FLOW_RATE,
+                 mass_dry=FALCON9_DRY_MASS,
                  reaction_dT=TEMP_THRUST_DT):
-        if func is None:
-            self.func = self.thrust_vectored # acceleration function used in odeint
+        if thrust_vec is None:
+            self.func = self.ballistic 
+        else:
+            self.func = self.thrust_vectored
         self.thrust_vec = thrust_vec
         self.reaction_isp = reaction_isp.value
         self.reaction_flow_rate = reaction_flow_rate.value
         self.mass_dry = mass_dry.value
         self.reaction_dT = reaction_dT.value
+
+    def ballistic(self, t, u_, k):
+        return (0, 0, 0, 0, 0)
 
     # thrust vectored acceleration function
     def thrust_vectored(self, t, u_, k):
@@ -435,6 +502,8 @@ class AccParams:
         isp = self.reaction_isp
 
         dT = self.reaction_dT
+
+        # ode solver doesn't like if statement
         # differentiable sigmoid function that stops thrust when fuel is gone
 #        dm *= expit(10*(mass-self.mass_dry))  
         if mass < self.mass_dry:

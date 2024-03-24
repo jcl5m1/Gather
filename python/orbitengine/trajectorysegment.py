@@ -201,7 +201,7 @@ class TrajectorySegment:
             # compute time to reach target altitude
             alt = np.linalg.norm(self.r0 - self.attractor.position)
             g = self.attractor.k/alt**2
-            thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.REACTION_MASS_FLOW_RATE
+            thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.FALCON9_REACTION_MASS_FLOW_RATE
             acc = thrust/self.body.mass - g
             self.period = np.sqrt(2*oe.TRAJECTORY_LAUNCH_MIN_ALTITUDE/acc).to(u.s)
 

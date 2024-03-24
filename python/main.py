@@ -87,8 +87,8 @@ class MyApp(ShowBase):
                             r0=[1*oe.EARTH_RADIUS_KM.to(u.km).value, 0, 0]*u.km, 
                             v0=[0,0,0]*u.km/u.s,
                             T0=oe.TEMP_EARTH,
-                            mass_dry=oe.ROCKET_DRY_MASS,
-                            mass_fuel0=oe.REACTION_MASS
+                            mass_dry=oe.FALCON9_DRY_MASS,
+                            mass_fuel0=oe.FALCON9_REACTION_MASS
                             )
         self.ship.createGeometry(render=self.render,
                             type=Body.Type.VESSEL,
@@ -102,8 +102,8 @@ class MyApp(ShowBase):
                             parent=self.planet,
                             r0=[6442.10116578,   86.01334177,   37.29261384]*u.km, 
                             v0=[-0.11445355,  7.21530347,  3.12954238]*u.km/u.s,
-                               mass_dry=oe.ROCKET_DRY_MASS,
-                               mass_fuel0=oe.REACTION_MASS)
+                               mass_dry=oe.FALCON9_DRY_MASS,
+                               mass_fuel0=oe.FALCON9_REACTION_MASS)
         self.ship2.createGeometry(render=self.render,
                             type=Body.Type.VESSEL,
                             size=SHIP_SIZE,
@@ -210,8 +210,8 @@ class MyApp(ShowBase):
         new_ship = Body(name=f"Ship-{self.orbitEngine.bodyCount()}",
                             type=Body.Type.VESSEL,
                             parent=self.planet,
-                            mass_dry=oe.ROCKET_DRY_MASS,
-                            mass_fuel0=oe.REACTION_MASS
+                            mass_dry=oe.FALCON9_DRY_MASS,
+                            mass_fuel0=oe.FALCON9_REACTION_MASS
                             )
         new_ship.createGeometry(render=self.render,
                                 type=Body.Type.VESSEL,
