@@ -176,7 +176,7 @@ class Body:
             else:
                 return self.propagate_cowell2(k, t, acc_params)
 
-        # use persistant solver
+        # use persistant solver, faster for multiple calls
         def propagate_cowell2(self, k, t, acc_params=None):
             if self._solver is None:
                 x, y, z = self._position.to(u.km).value

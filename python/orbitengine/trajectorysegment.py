@@ -411,7 +411,7 @@ class TrajectorySegment:
             w2_axis = np.array([*pw[1]])
             w2_mag = pw[0].to(u.rad/u.s)
             v = np.cross(w2_axis*w2_mag, r).value*u.km/u.s #for conversion to km/s?
-            Tnew = oe.TEMP_EARTH + (self.T0 - oe.TEMP_EARTH)*np.exp(-ts_raw.value*oe.TEMP_RADIANT_CONSTANT)
+            Tnew = oe.TEMP_EARTH + (self.T0 - oe.TEMP_EARTH)*np.exp(-ts_raw.value*oe.STEFAN_BOLTZMANN_COEF)
             return r, v, axis_quat.getHpr()*u.deg, p_quat, self.m0, Tnew
 
         if self.type == TrajectorySegment.Type.LAUNCH:
@@ -451,7 +451,7 @@ class TrajectorySegment:
                 try:
                     r,v = self.kepler.propagate(ts).rv()
                     #estimate temperature
-                    Tnew = oe.TEMP_SPACE + (self.T0 - oe.TEMP_SPACE)*np.exp(-ts_raw.value*oe.TEMP_RADIANT_CONSTANT)
+                    Tnew = oe.TEMP_SPACE + (self.T0 - oe.TEMP_SPACE)*np.exp(-ts_raw.value*oe.STEFAN_BOLTZMANN_COEF)
                     return r, v, axis_quat.getHpr()*u.deg, w, self.m0, Tnew
                 except RuntimeError as e:
                     oe.print(f"{e}  -----------------------------")

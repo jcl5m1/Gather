@@ -42,17 +42,31 @@ ZERO_ANGLE_VECTOR = np.array([1,0,0])
 TEMP_ZERO = 0*u.Kelvin
 EPSILON = np.finfo(float).eps
 PLANET_ICOSHPERE_LEVEL = 4
+
 FALCON9_DRY_MASS = 5000*u.kg
 FALCON9_REACTION_MASS = 95000*u.kg
 FALCON9_REACTION_MASS_FLOW_RATE = 2000*u.kg/u.s
+FALCON9_REACTION_EFFICIENCY = 0.98
+FALCON9_RADIUS = (1.85*u.m).to(u.km)
+FALCON9_LENGTH = (70*u.m).to(u.km)
+FALCON9_AXIAL_CROSS_SECTION_AREA = np.pi*(FALCON9_RADIUS**2)
+FALCON9_LATERAL_CROSS_SECTION_AREA = 2*FALCON9_RADIUS*FALCON9_LENGTH
+
+# cylinder approximation
+FALCON9_SURFACE_AREA = np.pi*(FALCON9_RADIUS*2*FALCON9_LENGTH) + 2 * FALCON9_AXIAL_CROSS_SECTION_AREA
+FALCON9_SPECIFIC_HEAT = (1000*u.J/u.kg/u.Kelvin).to(u.N*u.km/u.kg/u.Kelvin)  # approx solid aluminum
+FALCON9_EMISSIVITY = 0.4
+FALCON9_AXIAL_DRAG_COEF = 0.3
+FALCON9_LATERAL_DRAG_COEF = 2.5
+
 EARTH_G0 = (9.81*u.m/u.s**2).to(u.km/u.s**2)
 ALTITUDE_LEO = 500*u.km + EARTH_RADIUS_KM
 ALTITUDE_GEO = 35786*u.km + EARTH_RADIUS_KM
 ALTITUDE_LUNAR = 405953.805*u.km + EARTH_RADIUS_KM
 EARTH_K = Earth.k.to(u.km**3/u.s**2)
 EARTH_AXIS_ANGLE = [0,0,2*np.pi/(24*3600)]*u.rad/u.s  # need to correct for earth tilt
-
-THRUST_MAX = 10.0*u.kg*u.m/u.s/u.s
+EARTH_ATMOSPHERE_RHO0 = (1.225*u.kg/u.m**3).to(u.kg/u.km**3)
+EARTH_ATMOSPHERE_SCALE_HEIGHT = 8.5*u.km
 MIMIMUM_MANEUVER_ALTITUDE = 20*u.km
 TRAJECTORY_LAUNCH_MIN_ALTITUDE = EARTH_RADIUS_KM/10
 LAUNCH_TURN_TIME = 3
@@ -60,10 +74,9 @@ INSERTION_BURN_TIME = 2.82
 
 
 # need to account for solar loading and internal heat generation
-TEMP_RADIANT_CONSTANT = 0.000001
+STEFAN_BOLTZMANN_COEF = 5.67e-8
 TEMP_SPACE = 0*u.Kelvin 
-TEMP_EARTH = 293.15*u.Kelvin 
-TEMP_THRUST_DT = 1*u.Kelvin/u.s  # really a f(engine efficiency and ship mass)
+TEMP_EARTH = 293.15*u.Kelvin
 
 class DotDict(dict):
     def __getattr__(self, attr):
@@ -378,7 +391,11 @@ def cowell(k, r0, v0, m0, T0, t,  rtol=1e-10, *, acc_params=None, callback=None,
     # Create an ode object
     if use_torchdiffeq:
         # Solve the ODE
-        solution = diffeq.odeint(lambda y,t: twobody(y,t, k.to(u.km**3/u.s**2).value, acc_params), u0, t_span, method='dopri5')
+        print("Using torchdiffeq - UNTESTED")
+        if len(t.shape) == 0:
+            solution = diffeq.odeint(lambda y,t: twobody(y,t, k.to(u.km**3/u.s**2).value, acc_params), u0, [0,t], method='dopri5')
+        else:
+            solution = diffeq.odeint(lambda y,t: twobody(y,t, k.to(u.km**3/u.s**2).value, acc_params), u0, t, method='dopri5')
     else:
         if len(t.shape) == 0:
             # rtol=1e-8
@@ -506,19 +523,66 @@ class AccParams:
                  reaction_isp=SPECIFIC_IMPULSE_TYPE.Liquid,
                  reaction_flow_rate=FALCON9_REACTION_MASS_FLOW_RATE,
                  mass_dry=FALCON9_DRY_MASS,
-                 reaction_dT=TEMP_THRUST_DT):
+                 reaction_efficiency=FALCON9_REACTION_EFFICIENCY,
+                 surface_area=FALCON9_SURFACE_AREA,
+                 axial_cross_section=FALCON9_AXIAL_CROSS_SECTION_AREA,
+                 lateral_cross_section=FALCON9_LATERAL_CROSS_SECTION_AREA,
+                 emissivity=FALCON9_EMISSIVITY,
+                 specific_heat=FALCON9_SPECIFIC_HEAT,
+                 ambient_temperature=TEMP_SPACE,
+                 atmosphere_axial_drag_coefficient=FALCON9_AXIAL_DRAG_COEF,
+                 atmosphere_lateral_drag_coefficient=FALCON9_LATERAL_DRAG_COEF,
+                 atmosphere_rho0=EARTH_ATMOSPHERE_RHO0,
+                 atmosphere_scale_height=EARTH_ATMOSPHERE_SCALE_HEIGHT
+                 ):
         if thrust_vec is None:
             self.func = self.ballistic 
         else:
             self.func = self.thrust_vectored
-        self.thrust_vec = thrust_vec
+            self.thrust_vec = thrust_vec.value
+
+        # thurst and reaction mass
         self.reaction_isp = reaction_isp.value
         self.reaction_flow_rate = reaction_flow_rate.value
         self.mass_dry = mass_dry.value
-        self.reaction_dT = reaction_dT.value
+        self.reaction_efficiency = reaction_efficiency
+
+        # temperature and cooling
+        self.surface_area = surface_area.value
+        self.emissivity = emissivity # units?
+        self.specific_heat = specific_heat.value
+        self.ambient_temperature = ambient_temperature.value
+
+        # air drag calculations
+        self.atmosphere_axial_drag_coefficient = atmosphere_axial_drag_coefficient
+        self.atmosphere_lateral_drag_coefficient = atmosphere_lateral_drag_coefficient
+        self.atmosphere_rho0 = atmosphere_rho0.value
+        self.atmosphere_scale_height = atmosphere_scale_height.value
+        self.axial_cross_section = axial_cross_section.value
+        self.lateral_cross_section = lateral_cross_section.value
+        self.lateral = False
 
     def ballistic(self, t, u_, k):
-        return (0, 0, 0, 0, 0)
+#        return (0,0,0,0,0)
+        dT = self.dT_radiation(u_)
+        drag_force, dT_drag = self.atmospheric_drag(u_)
+#        print(dT_drag)
+        mass = u_[6]
+        dv = drag_force/mass
+        dm = 0
+        return (dv[0], dv[1], dv[2], dm, dT+dT_drag)
+
+    def dT_radiation(self, u_):
+        C = self.specific_heat
+        A = self.surface_area
+        m = u_[6]  # mass
+        T = u_[7]  # temperature
+        Ta = self.ambient_temperature
+
+        # Radiant temperature change
+        dT = -self.emissivity * STEFAN_BOLTZMANN_COEF * A * (T**4 - Ta**4) / (m * C)
+
+        return dT
 
     # thrust vectored acceleration function
     def thrust_vectored(self, t, u_, k):
@@ -528,16 +592,46 @@ class AccParams:
         dm = self.reaction_flow_rate
         isp = self.reaction_isp
 
-        dT = self.reaction_dT
+        dT = self.dT_radiation(u_)
+        drag_force, dT_drag = self.atmospheric_drag(u_)
+        dT += dT_drag
 
         # ode solver doesn't like if statement
         # differentiable sigmoid function that stops thrust when fuel is gone
 #        dm *= expit(10*(mass-self.mass_dry))  
         if mass < self.mass_dry:
-            return (0, 0, 0, 0, 0)
+            dv = drag_force/mass
+            return (dv[0], dv[1], dv[2], 0, dT)
+        
+        exhaust_velocity = EARTH_G0.value * isp 
+        thrust = exhaust_velocity * dm
 
-        thrust = (EARTH_G0*isp * dm).value
-        return np.concatenate((thrust_vec*thrust/mass, [-dm],[dT]))
+        # waste heat from engine
+        ideal_exhaust_power = 0.5 * dm * exhaust_velocity**2
+        waste_heat_power = ideal_exhaust_power*(1-self.reaction_efficiency)
+        dT_engine = waste_heat_power / (self.specific_heat * mass)
+        dT += dT_engine
+
+        dv = (self.reaction_efficiency*thrust_vec*thrust + drag_force)/mass
+
+        return (dv[0],dv[1],dv[2], -dm, dT)
+
+    # thrust vectored acceleration function
+    def atmospheric_drag(self, u_):
+        r, v = u_[0:3], u_[3:6]
+        mass = u_[6]
+        # could move this altitude check outside to speed it up
+        altitude = np.linalg.norm(r)-EARTH_RADIUS_KM.value
+        if altitude > 10*self.atmosphere_scale_height: # don't compute drag in space
+            return np.array([0,0,0]), 0
+        v_mag = np.linalg.norm(v)
+
+        drag_coef = self.atmosphere_lateral_drag_coefficient if self.lateral else self.atmosphere_axial_drag_coefficient
+        cross_section = self.lateral_cross_section if self.lateral else self.axial_cross_section
+        rho = self.atmosphere_rho0 * np.exp(-altitude/self.atmosphere_scale_height)
+        drag_force = -0.5 * rho * v_mag**2 * cross_section * drag_coef * (v / v_mag)
+        dT_drag = np.linalg.norm(drag_force)*v_mag/(self.specific_heat*mass)
+        return drag_force, dT_drag
 
 
 class OrbitEngine:
