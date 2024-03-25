@@ -39,29 +39,67 @@ class Body:
     class State:
         def __init__(self, r=oe.R_ZERO, v=oe.V_ZERO, m=0*u.kg, T=0*u.Kelvin, timestamp=0*u.s, parent_axis_angle=None):
             # expected units: t[s], r[km], v[km/s], m[kg], temp[K]
-            self.timestamp = timestamp.to(u.s)
-            self.position = r.to(u.km)
-            self.velocity = v.to(u.km/u.s)
-            self.mass = m.to(u.kg)
-            self.temperature = T.to(u.Kelvin)
-            self.parent_axis_angle = parent_axis_angle
-            self.solver = None
-            self.prev_propagate_time = -1*u.s
+            self._timestamp = timestamp.to(u.s)
+            self._position = r.to(u.km)
+            self._velocity = v.to(u.km/u.s)
+            self._mass = m.to(u.kg)
+            self._temperature = T.to(u.Kelvin)
+            self._parent_axis_angle = parent_axis_angle
+            self._solver = None
+            self._prev_propagate_time = -1*u.s
+
+        position = property(
+            lambda self: self._position, 
+            lambda self, value: (setattr(self, '_position', value), self.on_setattr())[0]
+            )
+        
+        velocity = property(
+            lambda self: self._velocity, 
+            lambda self, value: (setattr(self, '_velocity', value), self.on_setattr())[0]
+            )
+        
+        mass = property(
+            lambda self: self._mass, 
+            lambda self, value: (setattr(self, '_mass', value), self.on_setattr())[0]
+            )
+        
+        temperature = property(
+            lambda self: self._temperature, 
+            lambda self, value: (setattr(self, '_temperature', value), self.on_setattr())[0]
+            )
+        
+        parent_axis_angle = property(
+            lambda self: self._parent_axis_angle, 
+            lambda self, value: (setattr(self, '_parent_axis_angle', value), self.on_setattr())[0]
+            )
+        
+        timestamp = property(
+            lambda self: self._timestamp, 
+            lambda self, value: (setattr(self, '_timestamp', value), self.on_setattr())[0]
+            )
+
+        solver = property(
+            lambda self: self._solver, 
+            )
+
+        # clear the solver when the state is modified to avoid state corruption
+        def on_setattr(self):
+            self._solver = None
 
         def __str__(self):
-            return "Timestamp: " + str(self.timestamp) + "\n" + \
-                "Position: " + str(self.position) + "\n" + \
-                "Velocity: " + str(self.velocity) + "\n" + \
-                "Mass: " + str(self.mass) + "\n" + \
-                "Temperature: " + str(self.temperature) + "\n"            
+            return "Timestamp: " + str(self._timestamp) + "\n" + \
+                "Position: " + str(self._position) + "\n" + \
+                "Velocity: " + str(self._velocity) + "\n" + \
+                "Mass: " + str(self._mass) + "\n" + \
+                "Temperature: " + str(self._temperature) + "\n"
 
         def ecc(self, k):
-            return oe.eccentricity(self.velocity.value, self.position.value, k.value)
+            return oe.eccentricity(self._velocity.value, self._position.value, k.value)
         
         def period(self, k):
             # Compute the specific mechanical energy
             # epsilon goes positive for hyperbolic orbits
-            epsilon = np.linalg.norm(self.velocity)**2 / 2 - k / np.linalg.norm(self.position)
+            epsilon = np.linalg.norm(self._velocity)**2 / 2 - k / np.linalg.norm(self._position)
 
             # Compute the semi-major axis
             # a goes negative for hyperbolic orbits
@@ -74,83 +112,83 @@ class Body:
             return T
 
         def value(self):
-            return [self.position.value, self.velocity.value, self.mass.value, self.temperature.value]
+            return [self._position.value, self._velocity.value, self._mass.value, self._temperature.value]
 
         def to_list(self):
-            return [self.position, self.velocity, self.mass, self.temperature]
+            return [self._position, self._velocity, self._mass, self._temperature]
         
         def to_dict(self):
             return {
-                'timestamp': self.timestamp,
-                'position': self.position,
-                'velocity': self.velocity,
-                'mass': self.mass,
-                'temperature': self.temperature,
-                'parent_axis_angle': self.parent_axis_angle
+                'timestamp': self._timestamp,
+                'position': self._position,
+                'velocity': self._velocity,
+                'mass': self._mass,
+                'temperature': self._temperature,
+                'parent_axis_angle': self._parent_axis_angle
             }
 
         @classmethod
         def from_instance(cls, instance):
             new_instance = cls()
-            new_instance.position = np.copy(instance.position)
-            new_instance.velocity = np.copy(instance.velocity)
-            new_instance.mass = instance.mass
-            new_instance.temperature = instance.temperature
-            new_instance.timestamp = instance.timestamp            
+            new_instance._position = np.copy(instance.position)
+            new_instance._velocity = np.copy(instance.velocity)
+            new_instance._mass = instance.mass
+            new_instance._temperature = instance.temperature
+            new_instance._timestamp = instance.timestamp            
             return new_instance
         
         def circularized(self, k):
-            res = minimize(oe.eccentricity, self.velocity.value, args=(self.position.value, k.value))
-            return Body.State(self.position, 
+            res = minimize(oe.eccentricity, self._velocity.value, args=(self._position.value, k.value))
+            return Body.State(self._position, 
                               res.x*u.km/u.s, 
-                              self.mass, 
-                              self.temperature, 
-                              self.timestamp)
+                              self._mass, 
+                              self._temperature, 
+                              self._timestamp)
 
         def lerp(self, state, t):
             new_state = Body.State()
-            new_state.position = self.position + (state.position - self.position)*t
-            new_state.velocity = self.velocity + (state.velocity - self.velocity)*t
-            new_state.mass = self.mass + (state.mass - self.mass)*t
-            new_state.temperature = self.temperature + (state.temperature - self.temperature)*t
-            new_state.timestamp = self.timestamp + (state.timestamp - self.timestamp)*t
+            new_state._position = self._position + (state.position - self._position)*t
+            new_state._velocity = self._velocity + (state.velocity - self._velocity)*t
+            new_state._mass = self._mass + (state.mass - self._mass)*t
+            new_state._temperature = self._temperature + (state.temperature - self._temperature)*t
+            new_state._timestamp = self._timestamp + (state.timestamp - self._timestamp)*t
             return new_state
 
         def prograde_vector(self):
-            return self.velocity / np.linalg.norm(self.velocity)
+            return self._velocity / np.linalg.norm(self._velocity)
             
         def normal_vector(self):
-            angular_momentum = np.cross(self.position, self.prograde_vector())
+            angular_momentum = np.cross(self._position, self.prograde_vector())
             return angular_momentum / np.linalg.norm(angular_momentum)
         
         def attractor_vector(self):
-            return self.position / np.linalg.norm(self.position)
+            return self._position / np.linalg.norm(self._position)
             
         def tangent_vector(self):
             return np.cross(self.normal_vector(), self.attractor_vector())
         
         def max_accel(self, isp, flow):
-            max_accel = (oe.EARTH_G0*isp*flow)/self.mass
+            max_accel = (oe.EARTH_G0*isp*flow)/self._mass
             return max_accel
 
         def propagate(self, k, t, acc_params=None):
-            if self.parent_axis_angle is not None and acc_params is None:
-                return self.propagate_landed(t, self.parent_axis_angle)
+            if self._parent_axis_angle is not None and acc_params is None:
+                return self.propagate_landed(t, self._parent_axis_angle)
             else:
                 return self.propagate_cowell2(k, t, acc_params)
 
         # use persistant solver
         def propagate_cowell2(self, k, t, acc_params=None):
-            if self.solver is None:
-                x, y, z = self.position.to(u.km).value
-                vx, vy, vz = self.velocity.to(u.km/u.s).value
-                m = self.mass.to(u.kg).value
-                T = self.temperature.to(u.Kelvin).value
+            if self._solver is None:
+                x, y, z = self._position.to(u.km).value
+                vx, vy, vz = self._velocity.to(u.km/u.s).value
+                m = self._mass.to(u.kg).value
+                T = self._temperature.to(u.Kelvin).value
                 self.u0 = np.array([x, y, z, vx, vy, vz, m, T])
 
                 if acc_params is not None:
                     # no reaction mass, skip the thrust calculation
-                    if acc_params.mass_dry >= self.mass.value:
+                    if acc_params.mass_dry >= self._mass.value:
                         acc_params = None
                 # Set the non Keplerian acceleration to zero by default
                 if acc_params is None:
@@ -158,19 +196,21 @@ class Body:
 
                 # can use dopri5 in re-entrant mode allowing multiple odes 
                 # to be integrated concurrently                 
-                self.solver = ode(oe.twobody).set_integrator('dopri5')
-                self.solver.set_initial_value(self.u0)  # Set initial value at t=0
-                self.solver.set_f_params(k.to(u.km**3/u.s**2).value, acc_params)
+                self._solver = ode(oe.twobody).set_integrator('dopri5')
+                self._solver.set_initial_value(self.u0)  # Set initial value at t=0
+                self._solver.set_f_params(k.to(u.km**3/u.s**2).value, acc_params)
             if len(t.shape) == 0:
-                if t < self.prev_propagate_time:
+                if t < self._prev_propagate_time:
                     # can't integrate backwards in t, reset integrator state
-                    self.solver.set_initial_value(self.u0)  
-                sol = self.solver.integrate(t.to(u.s).value)
-                self.prev_propagate_time = t
+                    self._solver.set_initial_value(self.u0)  
+                sol = self._solver.integrate(t.to(u.s).value)
+                self._prev_propagate_time = t
                 return Body.State(sol[0:3]*u.km, 
                                   sol[3:6]*u.km/u.s, 
-                                  sol[6]*u.kg, sol[7]*u.Kelvin, self.timestamp + t,
-                                  self.parent_axis_angle)
+                                  sol[6]*u.kg, 
+                                  sol[7]*u.Kelvin, 
+                                  self._timestamp + t,
+                                  self._parent_axis_angle)
             else:
                 states = []
                 for i in range(len(t)):
@@ -181,28 +221,28 @@ class Body:
         def propagate_cowell(self, k, t, acc_params=None):
             r,v,m,T = oe.cowell(
                 k=k,
-                r0=self.position,
-                v0=self.velocity, 
-                m0=self.mass,
-                T0=self.temperature,
+                r0=self._position,
+                v0=self._velocity, 
+                m0=self._mass,
+                T0=self._temperature,
                 t=t,
                 acc_params=acc_params)
             
             if len(t.shape) == 0:
-                return Body.State(r,v,m,T, self.timestamp + t)
+                return Body.State(r,v,m,T, self._timestamp + t)
             else:
                 states = []
                 for i in range(len(t)):
-                    states.append(Body.State(r[i],v[i],m[i],T[i], self.timestamp + t[i]))
+                    states.append(Body.State(r[i],v[i],m[i],T[i], self._timestamp + t[i]))
                 return states
 
         def propagate_landed(self, t, parent_axis_angle):
             if len(t.shape) == 0:
                 rot = R.from_rotvec(parent_axis_angle*t)
-                r1 = rot.apply(self.position)*u.km
-                v1 = np.cross(parent_axis_angle,self.position)/u.rad
+                r1 = rot.apply(self._position)*u.km
+                v1 = np.cross(parent_axis_angle,self._position)/u.rad
                 v1 = rot.apply(v1)*u.km/u.s
-                return Body.State(r1, v1, self.mass, self.temperature, self.timestamp + t,self.parent_axis_angle)
+                return Body.State(r1, v1, self._mass, self._temperature, self._timestamp + t,self._parent_axis_angle)
             else:
                 states = []
                 for i in range(len(t)):

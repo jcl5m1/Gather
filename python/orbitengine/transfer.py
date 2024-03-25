@@ -198,7 +198,14 @@ class TransferSolver:
     
     def compute_thrust_maneuvers(self, flow_rate, isp, dry_mass, alignment_tol=0.01, verbose=False, cache=False):
         # compute first thrust maneuver
-        self.maneuver1 = ThrustManeuver(self.state_init, self.state_transfer, self.k, self.t_delay, flow_rate, isp, dry_mass)
+        self.maneuver1 = ThrustManeuver(
+            self.state_init, 
+            self.state_transfer, 
+            self.k, 
+            self.t_delay, 
+            flow_rate, 
+            isp,
+            dry_mass)
         err = self.maneuver1.optimize(verbose=verbose, cache=cache)
         if err > alignment_tol:
             print(f"Maneuver 1 failed to achieve trajectory alignment: {err:.05f} > {alignment_tol}")
@@ -208,7 +215,14 @@ class TransferSolver:
         state_target_post_transfer = self.state_target.propagate(self.k, self.t_delay + self.t_flight)
         self.state_transfer.mass = self.maneuver1.state_post_maneuver.mass
 
-        self.maneuver2 = ThrustManeuver(self.state_transfer, state_target_post_transfer, self.k, self.t_flight, flow_rate, isp, dry_mass)
+        self.maneuver2 = ThrustManeuver(
+            self.state_transfer, 
+            state_target_post_transfer, 
+            self.k, 
+            self.t_flight, 
+            flow_rate, 
+            isp, 
+            dry_mass)
         err = self.maneuver2.optimize(verbose=verbose, cache=cache)
         if err > alignment_tol:
             print(f"Maneuver 2 failed to achieve trajectory alignment: {err:.05f} > {alignment_tol}")
@@ -232,15 +246,8 @@ class TransferSolver:
             self.maneuver2.plot()
             self.maneuver2.plot_components()
             print(f"Post Maneuver Mass: {self.maneuver2.state_post_maneuver.mass}")
-
-        # plot the entire trajectory
-        # states_tween = []
-        # for t in np.linspace(self.maneuver1.t_correction_burn, 
-        #                      self.t_flight-self.maneuver2.t_init_burn, 
-        #                      tween_count):
-        #     s = self.state_transfer.propagate(self.k, t)
-        #     states_tween.append(s)
             
+        # accumulate maneuver states
         ts = np.linspace(self.maneuver1.t_correction_burn, 
                              self.t_flight-self.maneuver2.t_init_burn, 
                              tween_count)
@@ -250,13 +257,8 @@ class TransferSolver:
         states_m2 = self.maneuver2.states()
         self.states_thrust_transfer = states_m1 + states_tween + states_m2
 
-        # for t in np.linspace(0, 
-        #                      t_postfix, 
-        #                      tween_count):
-        #     s = self.state_target.propagate(self.k, 
-        #                                     self.t_delay + self.t_flight + self.maneuver2.t_correction_burn + t)
-        #     self.states_thrust_transfer.append(s)
 
+        #accumulate target states post maneuver
         ts =  np.linspace(0, t_postfix, tween_count)
         ss = self.state_target.propagate(self.k, 
                                         self.t_delay + self.t_flight + self.maneuver2.t_correction_burn + ts)
@@ -264,7 +266,7 @@ class TransferSolver:
 
         fig, axs = plt.subplots(1, 1, figsize=(10, 10))
         axs.plot([s.position[0].value for s in self.states_thrust_transfer], 
-                 [s.position[1].value for s in self.states_thrust_transfer])
+                 [s.position[1].value for s in self.states_thrust_transfer], label='Transfer')
 
         p = states_m1[0].position.value
         axs.plot(p[0], p[1], 'ro')
@@ -315,7 +317,7 @@ class ThrustManeuver:
                                 reaction_flow_rate=self.flow_rate,
                                 reaction_isp=self.isp,
                                 mass_dry=self.mass_dry)
-
+                
     # used to generate hash for caching results 
     def input_dict(self):
         return {
@@ -396,35 +398,24 @@ class ThrustManeuver:
     
     def states(self, count=50):
         # rocket trajectory
-        states_maneuver = []
         thrust_vec_init = R.from_rotvec([0,0,self.init_thrust_angle]).apply(oe.ZERO_ANGLE_VECTOR)
         thrust_vec_correction = R.from_rotvec([0,0,self.correction_thrust_angle]).apply(oe.ZERO_ANGLE_VECTOR)
-        acc_param_init_burn = oe.AccParams(thrust_vec=thrust_vec_init,
-                                    reaction_flow_rate=self.flow_rate,
-                                    reaction_isp=self.isp)
-        acc_param_correction_burn = oe.AccParams(thrust_vec=thrust_vec_correction,
-                                    reaction_flow_rate=self.flow_rate,
-                                    reaction_isp=self.isp)
+
+        self.acc_param_init.thrust_vec = thrust_vec_init
+        self.acc_param_correction.thrust_vec = thrust_vec_correction
 
         state_init_burn = self.state_init.propagate(self.k, self.t_maneuver - self.t_init_burn)
 
-        # rocket trajectory
-        # for t in np.linspace(0, self.t_init_burn, int(count/2)):
-        #     s = state_init_burn.propagate(self.k,t, acc_params=acc_param_init_burn)
-        #     states_maneuver.append(s)
-        # state_correction_burn = states_maneuver[-1]
-        # for t in np.linspace(0, self.t_correction_burn, int(count/2)):
-        #     s = state_correction_burn.propagate(self.k,t, acc_params=acc_param_correction_burn)
-        #     states_maneuver.append(s)  
-
-
-        ts = np.linspace(0, self.t_init_burn, int(count/2))
-        ss = state_init_burn.propagate(self.k,ts, acc_params=acc_param_init_burn)
+        states_maneuver = []
+        steps = int(count/2)
+        ts = np.linspace(0, self.t_init_burn, steps)
+        ss = state_init_burn.propagate(self.k,ts, acc_params=self.acc_param_init)
         states_maneuver += ss
         state_correction_burn = states_maneuver[-1]
-        ts = np.linspace(0, self.t_correction_burn, int(count/2))
-        ss = state_correction_burn.propagate(self.k,ts, acc_params=acc_param_correction_burn)
-        states_maneuver += ss  
+        # shift allows even spacing of points in t 
+        ts = np.linspace(self.t_correction_burn/steps, self.t_correction_burn, steps-1)
+        ss = state_correction_burn.propagate(self.k,ts, acc_params=self.acc_param_correction)
+        states_maneuver += ss
 
         return states_maneuver
 
@@ -458,15 +449,9 @@ class ThrustManeuver:
         states_target = []
         fig, axs = plt.subplots(1, 1, figsize=(10, 10))
 
-
         states_maneuver = self.states()
 
         # init trajectory
-        # for t in np.linspace(self.t_maneuver-self.t_init_burn, self.t_maneuver, int(count/2)):
-        #     s = self.state_init.propagate(self.k,t)
-        #     positions_init.append(s.position)
-
-
         ts = np.linspace(self.t_maneuver-self.t_init_burn, self.t_maneuver, int(count/2))
         states_init = self.state_init.propagate(self.k,ts)
 
@@ -485,9 +470,9 @@ class ThrustManeuver:
         axs.plot(p[0], p[1], 'ro')
         axs.text(p[0].value, p[1].value, 'init_start')
 
-        p = states_init[-1].position
-        axs.plot(p[0], p[1], 'ro')
-        axs.text(p[0].value, p[1].value, 'init_stop')
+        # p = states_init[-1].position
+        # axs.plot(p[0], p[1], 'ro')
+        # axs.text(p[0].value, p[1].value, 'init_stop')
 
         p = self.state_target.position
         axs.plot(p[0], p[1], 'bo')
@@ -497,9 +482,9 @@ class ThrustManeuver:
         axs.plot(p[0], p[1], 'bo')
         axs.text(p[0].value, p[1].value, 'target_stop')
 
-        p = self.state_post_maneuver.position
+        p = states_maneuver[-1].position
         axs.plot(p[0], p[1], 'go')
-        axs.text(p[0].value, p[1].value, 'finish')
+        axs.text(p[0].value, p[1].value, 'maneuver_last')
 
         # add label for points        
         circle = plt.Circle((0, 0), oe.EARTH_RADIUS_KM.value, color='b', fill=False, linestyle='dotted')
