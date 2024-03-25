@@ -115,8 +115,6 @@ def obj_cache_save(obj, dir='cache'):
         print(f"Saved to {filename}")
         pickle.dump(obj, f)
 
-
-
 def print(*args, **kwargs):
     # Get the previous frame in the stack, otherwise it would be this function
     frame = inspect.currentframe().f_back
@@ -135,21 +133,6 @@ def pprint(*args, **kwargs):
     # Call the original print function with the file name and line number
     builtins.print(f"{file_name}:{line_number}:")
     ppt.pprint(*args, **kwargs)
-
-def debug(msg):
-    #print call stack
-    stack = inspect.stack()
-
-    #print parent function name and file and line number
-    print(f"{os.path.basename(stack[1].filename)}:{stack[1].lineno} {msg}")
-
-def debug2(t,r,v):
-    rs = ",".join([f"{x}" for x in r])
-    vs = ",".join([f"{x}" for x in v])
-
-    stack = inspect.stack()
-    msg = f"t,r,v={t.value}*u.s, [{rs}]*u.km, [{vs}]*u.km/u.s"
-    print(f"{os.path.basename(stack[1].filename)}:{stack[1].lineno} {msg}")
 
 def formatTime(time):
     if time > 1000*u.year:

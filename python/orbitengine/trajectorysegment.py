@@ -27,7 +27,6 @@ from scipy.integrate import ode
 import json
 import pickle
 import orbitengine.engine as oe
-from orbitengine.engine import debug
 
 class TrajectorySegment:
     class Type(Enum):
@@ -228,7 +227,7 @@ class TrajectorySegment:
                 #hyperbolic orbit, non-elliptical
                 if t_stop - self.t0 > TRAJECTORY_NONPERIODIC_TIME_LIMIT:
                     t_stop = self.t0 + TRAJECTORY_NONPERIODIC_TIME_LIMIT
-                    debug(f"non-periodic segment too long, truncating to {TRAJECTORY_NONPERIODIC_TIME_LIMIT}")
+                    oe.print(f"non-periodic segment too long, truncating to {TRAJECTORY_NONPERIODIC_TIME_LIMIT}")
             else:
                 if self.t0+self.period < t_stop:
                     t_stop = self.t0+self.period
@@ -250,7 +249,7 @@ class TrajectorySegment:
         for t in times:
             res = self.propagate(t)
             if res is None:
-                debug(f"trajectory segment propagate failed: {t} -> {res}")
+                oe.print(f"trajectory segment propagate failed: {t} -> {res}")
                 break
             r,v,rot,w,m, temp = res
             collision_res = self.checkCollision(r, r_last, render)
@@ -310,7 +309,7 @@ class TrajectorySegment:
                                                         self.attractor.position.to(u.km).value, 
                                                         self.attractor.size.to(u.km).value)
                 if len(intersections) == 0:
-                    debug(f"no intersection - r:{r_mag} r:{np.linalg.norm(r_prev).to(u.m)} attractor:{self.attractor.size.to(u.m)}")
+                    oe.print(f"no intersection - r:{r_mag} r:{np.linalg.norm(r_prev).to(u.m)} attractor:{self.attractor.size.to(u.m)}")
                     r *= attractor_size/r_mag
                     intersections = [0, r.to(u.km).value]
                 self.setCollisionPoint(render, intersections[0][1])
@@ -360,7 +359,7 @@ class TrajectorySegment:
                 t1 = self.states[i][0]
                 if t1 > ts:
                     interp = (ts-t0)/(t1-t0)
-#                    debug(f"ts:{ts:.2f} t1:{t1:.2f} estimate i:{i} guess_i:{guess_i}")
+#                    oe.print(f"ts:{ts:.2f} t1:{t1:.2f} estimate i:{i} guess_i:{guess_i}")
                     state0 = self.states[i-1]
                     state1 = self.states[i]
                     res = []
@@ -437,7 +436,7 @@ class TrajectorySegment:
             # # this set absolute max accel
             # if accel.value <= 0:
             #     accel = 0*u.m/u.s/u.s
-            #     debug(f"net thurst accel {accel:.2f} not enough for lift off")
+            #     oe.print(f"net thurst accel {accel:.2f} not enough for lift off")
 
             # # need to check this is above the planet's accel
             # accel_vec = vec*accel
@@ -455,7 +454,7 @@ class TrajectorySegment:
                     Tnew = oe.TEMP_SPACE + (self.T0 - oe.TEMP_SPACE)*np.exp(-ts_raw.value*oe.TEMP_RADIANT_CONSTANT)
                     return r, v, axis_quat.getHpr()*u.deg, w, self.m0, Tnew
                 except RuntimeError as e:
-                    debug(f"{e}  -----------------------------")
+                    oe.print(f"{e}  -----------------------------")
                     r,v,m,temp = oe.cowell(
                         k=self.attractor.k,
                         r0=self.r0,
@@ -475,7 +474,7 @@ class TrajectorySegment:
                     t=ts, 
                     acc_params=self.accel_params)
                 return r, v, axis_quat.getHpr()*u.deg, w, m, temp
-        debug("propagate un recognized segment type")
+        oe.print("propagate un recognized segment type")
         return None
     
     def clear(self):

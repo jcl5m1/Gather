@@ -12,7 +12,7 @@ import primatives
 import numpy as np
 from scipy.optimize import minimize
 import orbitengine.engine as oe
-from orbitengine.engine import OrbitEngine, debug
+from orbitengine.engine import OrbitEngine
 from orbitengine.body import Body
 from orbitengine.trajectorysegment import TrajectorySegment
 
@@ -202,7 +202,7 @@ class MyApp(ShowBase):
         if key == 'x':
             self.ship.randomize(1*oe.EARTH_RADIUS_KM, 0*u.km/u.s, self.simulationTime, type=TrajectorySegment.Type.LANDED)
         if key == 'n':
-            oe.debug("adding ship")
+            oe.print("adding ship")
             thread = threading.Thread(target=self.addRandomShip)
             thread.start()
 

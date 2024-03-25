@@ -29,7 +29,6 @@ from scipy.integrate import ode
 import json
 import pickle
 import orbitengine.engine as oe
-from orbitengine.engine import debug
 from scipy.integrate import odeint, ode
 
 from orbitengine.trajectorysegment import TrajectorySegment
@@ -302,7 +301,7 @@ class Body:
                                     t0=t_start,
                                     type=TrajectorySegment.Type.POSITION_LOCKED)
         elif np.linalg.norm(r0-self.parent.position) < self.parent.size + 1*u.m: # landed on that parent with 1m tolerance
-            debug("Creating landed segment")
+            oe.print("Creating landed segment")
             seg = TrajectorySegment(body=self,
                                     attractor=parent,
                                     r0=r0,
@@ -357,9 +356,9 @@ class Body:
         thrust = oe.EARTH_G0*launch_params.reaction_isp *u.s* launch_params.reaction_flow_rate*u.kg/u.s
         accel = thrust/m0
         if accel <= oe.EARTH_G0:
-            debug(f"Net thurst accel is {accel.to(u.m/u.s**2):.3f}.  Lift off: FAILED")
+            oe.print(f"Net thurst accel is {accel.to(u.m/u.s**2):.3f}.  Lift off: FAILED")
             return
-        debug(f"Net thurst accel is {accel.to(u.m/u.s**2):.3f}.  Lift off: SUCCESS")
+        oe.print(f"Net thurst accel is {accel.to(u.m/u.s**2):.3f}.  Lift off: SUCCESS")
 
         #launch trajectory
         t_launch_turn = t_start + launch_burn_time*u.s
@@ -441,9 +440,9 @@ class Body:
     def propagate(self, t=0*u.s, estimate=False):
 
         if self.flag:
-            debug("----------------------------------------------")
+            oe.print("----------------------------------------------")
             for seg in self.trajectorySegments:
-                debug(f"{self.name} t={t.value:.2f} segment t0:{seg.t0.value:.2f} t1:{seg.t1.value:.2f} m0:{seg.m0.value:.2f} m1:{seg.m1.value:.2f} {seg.type}")
+                oe.print(f"{self.name} t={t.value:.2f} segment t0:{seg.t0.value:.2f} t1:{seg.t1.value:.2f} m0:{seg.m0.value:.2f} m1:{seg.m1.value:.2f} {seg.type}")
 
         for seg in self.trajectorySegments:
             res = seg.propagate(t, estimate=estimate)
@@ -518,7 +517,7 @@ class Body:
         if per1 is not None and per2 is not None:
             per_max = np.max([per1.to(u.s).value,per2.to(u.s).value])
         elif bounds[0] is None and bounds[1] is None:
-            debug(f"Warning: lambertSearch using default max period of {per_max}")
+            oe.print(f"Warning: lambertSearch using default max period of {per_max}")
 
         if bounds[0] is None:
             bounds[0] = t_start.to(u.s).value + per_max
@@ -569,7 +568,7 @@ class Body:
                 info = data['info']
         else:
             guess, min_value = self.lambertSearch(t_start, target, launch=True,resolution=50)
-            debug(f"lambert guess: {guess} min_value: {min_value}")
+            oe.print(f"lambert guess: {guess} min_value: {min_value}")
 
             p1 = self.trajectorySegments[0].period.to(u.s).value
             p2 = target.trajectorySegments[0].period.to(u.s).value
@@ -579,7 +578,7 @@ class Body:
 
             info = [None]
             res = minimize(oe.compute_dv, guess, args=(self, target, info, True), bounds=bounds)
-            debug(f"minimize guess: {res.x} min_value: {res.fun}")
+            oe.print(f"minimize guess: {res.x} min_value: {res.fun}")
 
             t_transfer_start = res.x[0]*u.s
             t_transfer_duration = res.x[1]*u.s
@@ -695,7 +694,7 @@ class Body:
         self.trajectorySegments.append(seg_target)
 
         for s in self.trajectorySegments:
-            debug(f"{s.t0:.2f} {s.t1:.2f} {s.type}")
+            oe.print(f"{s.t0:.2f} {s.t1:.2f} {s.type}")
         self.createTrajectoryGeometry(self.render, thickness=2, color=self.color)
 
 
@@ -753,13 +752,13 @@ class Body:
         t_burn2 = (dv2/accel_max).to(u.s)
 
         if result.nfev == 0:
-            debug(result.message)
+            oe.print(result.message)
 
         if t_burn1/2 + t_burn2/2 > t_flight:
-            debug(f"{t_burn1/2}+{t_burn2/2} > {t_flight} - not enough thrust to execute this trajectory!!!!!!!!")
+            oe.print(f"{t_burn1/2}+{t_burn2/2} > {t_flight} - not enough thrust to execute this trajectory!!!!!!!!")
             return
         ts_stop = time.time()
-#        debug(f"Trajectory optimzation Time: {ts_stop-ts_start:.2f}")
+#        oe.print(f"Trajectory optimzation Time: {ts_stop-ts_start:.2f}")
         ts_start = time.time()
 
         r,v = self.orbit.computePseudoManouverTrajectory(r1,v1,r2,v2,v1_sol, v2_sol,
@@ -768,10 +767,10 @@ class Body:
                                                                thickness=5, 
                                                                t_launch=t_launch)
         ts_stop = time.time()
- #       debug(f"PseudoManouver geometery Time: {ts_stop-ts_start:.2f}")
+ #       oe.print(f"PseudoManouver geometery Time: {ts_stop-ts_start:.2f}")
 
         if self.orbit.collision:
-            debug("orbit causes collision!!!")
+            oe.print("orbit causes collision!!!")
     
     def randomize(self, dist, vel, time=0*u.s, type=TrajectorySegment.Type.BALLISTIC, createGeometry=True):
         self.clearTrajectory()
