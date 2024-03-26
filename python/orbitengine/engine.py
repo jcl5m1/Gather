@@ -31,7 +31,7 @@ import pprint as ppt
 import pickle
 import hashlib
 
-EARTH_RADIUS_KM = const.R_earth.to(u.km)
+EARTH_RADIUS_KM = const.R_earth.to(u.km).value
 T_ZERO = 0*u.s
 T_INFINITY = sys.float_info.max*u.s
 R_ZERO = [0,0,0]*u.km
@@ -60,15 +60,15 @@ FALCON9_AXIAL_DRAG_COEF = 0.3
 FALCON9_LATERAL_DRAG_COEF = 2.5
 
 EARTH_G0 = (9.81*u.m/u.s**2).to(u.km/u.s**2)
-ALTITUDE_LEO = 500*u.km + EARTH_RADIUS_KM
-ALTITUDE_GEO = 35786*u.km + EARTH_RADIUS_KM
-ALTITUDE_LUNAR = 405953.805*u.km + EARTH_RADIUS_KM
+ALTITUDE_LEO = 500*u.km + EARTH_RADIUS_KM*u.km
+ALTITUDE_GEO = 35786*u.km + EARTH_RADIUS_KM*u.km
+ALTITUDE_LUNAR = 405953.805*u.km + EARTH_RADIUS_KM*u.km
 EARTH_K = Earth.k.to(u.km**3/u.s**2)
 EARTH_AXIS_ANGLE = [0,0,2*np.pi/(24*3600)]*u.rad/u.s  # need to correct for earth tilt
 EARTH_ATMOSPHERE_RHO0 = (1.225*u.kg/u.m**3).to(u.kg/u.km**3)
 EARTH_ATMOSPHERE_SCALE_HEIGHT = 8.5*u.km
 MIMIMUM_MANEUVER_ALTITUDE = 20*u.km
-TRAJECTORY_LAUNCH_MIN_ALTITUDE = EARTH_RADIUS_KM/10
+TRAJECTORY_LAUNCH_MIN_ALTITUDE = EARTH_RADIUS_KM*u.km/10
 LAUNCH_TURN_TIME = 3
 INSERTION_BURN_TIME = 2.82
 
@@ -621,7 +621,7 @@ class AccParams:
         r, v = u_[0:3], u_[3:6]
         mass = u_[6]
         # could move this altitude check outside to speed it up
-        altitude = np.linalg.norm(r)-EARTH_RADIUS_KM.value
+        altitude = np.linalg.norm(r)-EARTH_RADIUS_KM
         if altitude > 10*self.atmosphere_scale_height: # don't compute drag in space
             return np.array([0,0,0]), 0
         v_mag = np.linalg.norm(v)

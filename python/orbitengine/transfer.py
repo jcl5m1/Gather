@@ -83,7 +83,7 @@ class TransferSolver:
         ss = self.state_target.propagate(self.k,self.t_delay + self.t_flight + ts)
         axs.plot([s.position[0].value for s in ss], [s.position[1].value for s in ss], label='Target')
 
-        circle = plt.Circle((0, 0), oe.EARTH_RADIUS_KM.value, color='b', fill=False, linestyle='dotted')
+        circle = plt.Circle((0, 0), oe.EARTH_RADIUS_KM, color='b', fill=False, linestyle='dotted')
         axs.add_artist(circle)
         axs.set_aspect('equal', adjustable='box')
         axs.legend()
@@ -190,7 +190,7 @@ class TransferSolver:
                 positions_target.append(s.position)
             axs[1].plot([p[0].value for p in positions_target], [p[1].value for p in positions_target], label='Target')
 
-            circle = plt.Circle((0, 0), oe.EARTH_RADIUS_KM.value, color='b', fill=False, linestyle='dotted')
+            circle = plt.Circle((0, 0), oe.EARTH_RADIUS_KM, color='b', fill=False, linestyle='dotted')
             axs[1].add_artist(circle)
             axs[1].set_aspect('equal', adjustable='box')
             plt.show()
@@ -282,7 +282,7 @@ class TransferSolver:
         axs.plot(p[0], p[1], 'go')
         axs.text(p[0], p[1], 'target_stop')
 
-        circle = plt.Circle((0, 0), oe.EARTH_RADIUS_KM.value, color='b', fill=False, linestyle='dotted')
+        circle = plt.Circle((0, 0), oe.EARTH_RADIUS_KM, color='b', fill=False, linestyle='dotted')
         axs.add_artist(circle)
         axs.set_aspect('equal', adjustable='box')
         axs.legend()
@@ -432,7 +432,7 @@ class ThrustManeuver:
         accel.append(accel[-1]) # pad to be equal length
 
         times = [s.timestamp.value for s in states_maneuver]-self.t_maneuver.value
-        axs[0].plot(times, [np.linalg.norm(s.position).value - oe.EARTH_RADIUS_KM.value for s in states_maneuver])
+        axs[0].plot(times, [np.linalg.norm(s.position).value - oe.EARTH_RADIUS_KM for s in states_maneuver])
         axs[0].title.set_text('Altitude')
         axs[1].plot(times, [np.linalg.norm(s.velocity).value for s in states_maneuver])
         axs[1].title.set_text('Velocity')
@@ -487,7 +487,7 @@ class ThrustManeuver:
         axs.text(p[0].value, p[1].value, 'maneuver_last')
 
         # add label for points        
-        circle = plt.Circle((0, 0), oe.EARTH_RADIUS_KM.value, color='b', fill=False, linestyle='dotted')
+        circle = plt.Circle((0, 0), oe.EARTH_RADIUS_KM, color='b', fill=False, linestyle='dotted')
 #            axs.add_artist(circle)  # adds 8-9 sec delay, unsure why
         axs.set_aspect('equal', adjustable='box')
 

@@ -111,13 +111,13 @@ class MyApp(ShowBase):
         self.ship2.createTrajectoryGeometry(render=self.render)      
         self.orbitEngine.addBody(self.ship2)
 
-        axis = primatives.createAxis(oe.EARTH_RADIUS_KM.value/2)
+        axis = primatives.createAxis(oe.EARTH_RADIUS_KM/2)
         axis_np = NodePath(axis)
         axis_np.reparentTo(self.render)
         
         graph_size = (0.4,0.10*aspect_ratio)
 
-        hitpoint = primatives.createCube(oe.EARTH_RADIUS_KM.value*0.025,color=LVecBase4f(1,0,0,1))
+        hitpoint = primatives.createCube(oe.EARTH_RADIUS_KM*0.025,color=LVecBase4f(1,0,0,1))
         self.hitpoint_np = NodePath(hitpoint)
         self.hitpoint_np.reparentTo(self.render)
         self.hitpointPos = None

@@ -14,7 +14,7 @@ CACHE_MAX_TIME = 0.1
 np.set_printoptions(precision=2)
 
 # rocket on ground
-r0 = np.array([oe.EARTH_RADIUS_KM.value, 0, 0])*u.km
+r0 = np.array([oe.EARTH_RADIUS_KM, 0, 0])*u.km
 ground_velocity = oe.EARTH_RADIUS_KM*2*np.pi/(24*3600*u.s)
 v0 = np.array([0, ground_velocity.value, 0])*u.km/u.s
 m0 = 100000*u.kg # rocket + fuel

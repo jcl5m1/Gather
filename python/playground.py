@@ -16,7 +16,7 @@ import time
 np.set_printoptions(precision=2)
 
 # rocket on ground
-r0 = np.array([oe.EARTH_RADIUS_KM.value, 0, 0])*u.km
+r0 = np.array([oe.EARTH_RADIUS_KM, 0, 0])*u.km
 ground_velocity = oe.EARTH_RADIUS_KM*2*np.pi/(24*3600*u.s)
 v0 = np.array([0, ground_velocity.value, 0])*u.km/u.s
 m0 = 100000*u.kg # rocket + fuel
@@ -70,7 +70,7 @@ u0 = [*s.position.value, *s.velocity.value, s.mass.value, s.temperature.value]
 
 # solution = odeint(oe.twobody_ode, u0, [0,t], args=(k.value, acc_params))
 # position = solution[:, :3]
-# altitude = np.linalg.norm(position, axis=1) - oe.EARTH_RADIUS_KM.value
+# altitude = np.linalg.norm(position, axis=1) - oe.EARTH_RADIUS_KM
 # print(altitude)
 # s2 =  s.propagate(k, t*u.s, acc_params)
 
@@ -81,10 +81,10 @@ start_time = time.time()
 alt2 = []
 for t in ts:
     s2 =  s.propagate(k, t*u.s, acc_params)
-    alt2.append(np.linalg.norm(s2.position.value) - oe.EARTH_RADIUS_KM.value)
+    alt2.append(np.linalg.norm(s2.position.value) - oe.EARTH_RADIUS_KM)
 
 # states = s.propagate(k, ts*u.s, acc_params)
-# alt2 = [np.linalg.norm(s.position.value) - oe.EARTH_RADIUS_KM.value for s in states]
+# alt2 = [np.linalg.norm(s.position.value) - oe.EARTH_RADIUS_KM for s in states]
 stop_time = time.time()
 print("Run Time: ", stop_time - start_time)
 plt.plot(10*ts)
