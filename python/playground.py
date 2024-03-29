@@ -23,7 +23,7 @@ m0 = 100000*u.kg # rocket + fuel
 #dry_mass =  oe.FALCON9_DRY_MASS
 T0 = oe.TEMP_EARTH
 #isp = oe.SPECIFIC_IMPULSE_TYPE.Liquid
-state_launch = Body.State( r0, v0, m0, T0, parent_axis_angle=oe.EARTH_AXIS_ANGLE)
+state_launch = Body.State( r0, v0, m0, T0, parent_axis_angle=oe.EARTH_AXIS_ANGLE_Z)
 
 # compute a target in circular orbit
 state_leo = Body.State(np.array([-oe.ALTITUDE_LEO.value, 0, 0])*u.km,

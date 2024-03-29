@@ -1,0 +1,28 @@
+.cell-output-ipywidget-background {
+   background-color: transparent !important;
+}
+.jp-OutputArea-output {
+   background-color: transparent;
+}  
+.widget-label {
+    color: white !important;
+}
+.widget-label-basic {
+    color: white !important;
+}
+                  
+.widget-readout {
+    color: white !important;
+}
+.box_style{
+    background-color:transparent;
+}
+.text_style{
+    color: white;
+}
+.text_style2{
+    color: white;
+}
+.text_style3{
+    color: white;
+}

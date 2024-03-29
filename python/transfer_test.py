@@ -25,7 +25,7 @@ dry_mass =  5000*u.kg #rocket only
 flow_rate = 1.0*oe.FALCON9_REACTION_MASS_FLOW_RATE
 
 
-state_launch = Body.State( r0, v0, m0, T0, parent_axis_angle=oe.EARTH_AXIS_ANGLE)
+state_launch = Body.State( r0, v0, m0, T0, parent_axis_angle=oe.EARTH_AXIS_ANGLE_Z)
 # compute a target in circular orbit
 state_leo = Body.State(np.array([-oe.ALTITUDE_LEO.value, 0, 0])*u.km,
                     np.array([0, -5, 0])*u.km/u.s,   # guess

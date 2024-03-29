@@ -188,7 +188,7 @@ class Body:
                 if acc_params is not None:
                     # no reaction mass, skip the thrust calculation
                     if acc_params.mass_dry >= self._mass.value:
-                        acc_params = None
+                        acc_params.function = oe.AccParams.ballistic
                 # Set the non Keplerian acceleration to zero by default
                 if acc_params is None:
                     acc_params = oe.AccParams()
@@ -698,25 +698,25 @@ class Body:
         self.createTrajectoryGeometry(self.render, thickness=2, color=self.color)
 
 
-    def computeInterceptManeuverFromLaunch(self, t_start, orbit2):
-        self.orbit.r_launch = self.position
-        self.orbit.v_launch = self.velocity
+    # def computeInterceptManeuverFromLaunch(self, t_start, orbit2):
+    #     self.orbit.r_launch = self.position
+    #     self.orbit.v_launch = self.velocity
 
-        #accelation is normal to surface of attractor
-        r_attractor = [0,0,0]*u.km
-        acc = (self.orbit.r_launch - r_attractor)
-        acc_vector = acc/np.linalg.norm(acc)
-        thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.FALCON9_REACTION_MASS_FLOW_RATE        
-        self.thrust = acc_vector*thrust
-        acc = self.thrust/self.mass
-        t_launch = np.sqrt(2*(oe.MIMIMUM_MANEUVER_ALTITUDE/np.linalg.norm(acc)).to(u.s**2))
+    #     #accelation is normal to surface of attractor
+    #     r_attractor = [0,0,0]*u.km
+    #     acc = (self.orbit.r_launch - r_attractor)
+    #     acc_vector = acc/np.linalg.norm(acc)
+    #     thrust = oe.EARTH_G0*oe.SPECIFIC_IMPULSE_TYPE.Liquid * oe.FALCON9_REACTION_MASS_FLOW_RATE        
+    #     self.thrust = acc_vector*thrust
+    #     acc = self.thrust/self.mass
+    #     t_launch = np.sqrt(2*(oe.MIMIMUM_MANEUVER_ALTITUDE/np.linalg.norm(acc)).to(u.s**2))
 
-        v = self.orbit.v_launch + acc*t_launch
-        r = self.orbit.r_launch + self.orbit.v_launch*t_launch + 0.5*acc*t_launch**2
-        self.landed = False
+    #     v = self.orbit.v_launch + acc*t_launch
+    #     r = self.orbit.r_launch + self.orbit.v_launch*t_launch + 0.5*acc*t_launch**2
+    #     self.landed = False
 
-        self.orbit.set(self.parent, r, v, t_start + t_launch)
-        self.computeInterceptManeuver(t_start + t_launch, orbit2, t_launch=t_launch)
+    #     self.orbit.set(self.parent, r, v, t_start + t_launch)
+    #     self.computeInterceptManeuver(t_start + t_launch, orbit2, t_launch=t_launch)
 
     def computeInterceptManeuver(self, t_start, orbit2, t_launch=0.0*u.s):
         if self.landed:
