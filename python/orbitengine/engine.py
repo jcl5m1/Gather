@@ -567,7 +567,7 @@ class AccParams:
         self.temperature_scale_height = temperature_scale_height.to(u.km).value
         self.surface_area = surface_area.to(u.km**2).value
         self.emissivity = emissivity # units?
-        self.specific_heat = specific_heat.to(u.N*u.km/u.kg/u.Kelvin).value
+        self.specific_heat = specific_heat.to(u.J/u.kg/u.Kelvin).value
         self.ambient_temperature = ambient_temperature.to(u.Kelvin).value
 
         # air drag calculations
@@ -678,6 +678,7 @@ class AccParams:
         drag_coef = self.atmosphere_lateral_drag_coefficient if self.lateral else self.atmosphere_axial_drag_coefficient
         cross_section = self.lateral_cross_section if self.lateral else self.axial_cross_section
         rho = self.atmosphere_rho0 * np.exp(-altitude/self.atmosphere_scale_height)
+
         drag_force = -0.5 * rho * v_mag**2 * cross_section * drag_coef * (v / v_mag)
         dT_drag = np.linalg.norm(drag_force)*v_mag/(self.specific_heat*mass)
         return drag_force, dT_drag
