@@ -135,67 +135,6 @@ def obj_cache_save(obj, dir='cache'):
         print(f"Saved to {filename}")
         pickle.dump(obj, f)
 
-def print(*args, **kwargs):
-    # Get the previous frame in the stack, otherwise it would be this function
-    frame = inspect.currentframe().f_back
-    # Get the file name and line number of the previous frame
-    file_name = os.path.basename(frame.f_code.co_filename)
-    line_number = frame.f_lineno
-    # Call the original print function with the file name and line number
-    builtins.print(f"{file_name}:{line_number} ", *args, **kwargs)
-
-def pprint(*args, **kwargs):
-    # Get the previous frame in the stack, otherwise it would be this function
-    frame = inspect.currentframe().f_back
-    # Get the file name and line number of the previous frame
-    file_name = os.path.basename(frame.f_code.co_filename)
-    line_number = frame.f_lineno
-    # Call the original print function with the file name and line number
-    builtins.print(f"{file_name}:{line_number}:")
-    ppt.pprint(*args, **kwargs)
-
-def formatTime(time):
-    if time > 1000*u.year:
-        return f"{time.to(u.year):.2e}"
-    if time > 1*u.year:
-        return f"{time.to(u.year):.2f}"
-    if time > 1*u.day:
-        return f"{time.to(u.day):.2f}"
-    if time > 1*u.hour:
-        return f"{time.to(u.hour):.2f}"
-    if time > 1*u.min:
-        return f"{time.to(u.min):.2f}"
-    return f"{time.to(u.s):.2f}"
-
-def formatDistance(distance):
-    if distance > 9.461e+12*u.km:
-        return f"{distance.to(u.km).value/9.461e+12:.2f} Lyr"
-    elif distance > 1.079e+9*u.km:
-        return f"{distance.to(u.km).value/1.079e+97:.2f} Lhr"
-    elif distance > 299792*u.km:
-        return f"{distance.to(u.km).value/299792:.2f} Ls"
-    elif distance > 1000*u.km:
-        return f"{distance.to(u.Mm):.2f}"
-    elif distance > 1*u.km:
-        return f"{distance.to(u.km):.2f}"
-    else:
-        return f"{distance.to(u.m):.2f}"
-
-def formatVelocity(velocity):
-    if velocity > 1000*u.km/u.s:
-        return f"{velocity.to(u.Mm/u.s):.2f}"
-    elif velocity > 1*u.km/u.s:
-        return f"{velocity.to(u.km/u.s):.2f}"
-    else:
-        return f"{velocity.to(u.m/u.s):.2f}"
-
-def formatAcceleration(acceleration):
-    if acceleration > 1000*u.km/u.s**2:
-        return f"{acceleration.to(u.Mm/u.s**2):.2f}"
-    elif acceleration > 1*u.km/u.s:
-        return f"{acceleration.to(u.km/u.s**2):.2f}"
-    else:
-        return f"{acceleration.to(u.m/u.s**2):.2f}"
 
 def time_to_true_anomaly(t, a, e, mu):
     # Calculate the mean anomaly
@@ -253,49 +192,6 @@ def convertToEllipse(orbit, segments=100, t_start=0, t_end=1):
     
     return points
 
-def spherical_to_cartesian(rtp):
-    x = rtp[0] * np.sin(rtp[1]) * np.cos(rtp[2])
-    y = rtp[0] * np.sin(rtp[1]) * np.sin(rtp[2])
-    z = rtp[0] * np.cos(rtp[1])
-    return np.array([x, y, z])
-
-def cartesian_to_spherical(cart):
-    r = np.linalg.norm(cart)
-    theta = np.arccos(cart[2] / r)
-    phi = np.arctan2(cart[1], cart[0])
-    return np.array([r, theta, phi])
-
-def line_sphere_intersection(P1, P2, C, r):
-    # Compute the directional vector of the line
-    d = P2 - P1
-
-    # Compute the vector from the center of the sphere to P1
-    f = P1 - C
-
-    # Solve the quadratic equation
-    a = np.dot(d, d)
-    if a < EPSILON:
-        return [(0,P1)]
-    b = 2 * np.dot(f, d)
-    c = np.dot(f, f) - r**2
-
-    discriminant = b**2 - 4*a*c
-    if discriminant < 0:
-        # No intersection
-        return []
-    else:
-        # Compute the two intersections
-        t1 = (-b - np.sqrt(discriminant)) / (2*a)
-        t2 = (-b + np.sqrt(discriminant)) / (2*a)
-
-        # If the intersections are outside the line segment, discard them
-        intersections = []
-        if 0 <= t1 <= 1:
-            intersections.append((t1, P1 + t1*d))
-        if 0 <= t2 <= 1:
-            intersections.append((t2, P1 + t2*d))
-
-        return intersections
 
 
 # reverse first two paramters for odeint, wrapping function threw error?

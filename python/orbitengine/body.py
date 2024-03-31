@@ -116,15 +116,15 @@ class Body:
         def to_list(self):
             return [self._position, self._velocity, self._mass, self._temperature]
         
-        def to_dict(self):
-            return {
-                'timestamp': self._timestamp,
-                'position': self._position,
-                'velocity': self._velocity,
-                'mass': self._mass,
-                'temperature': self._temperature,
-                'parent_axis_angle': self._parent_axis_angle
-            }
+        # def to_dict(self):
+        #     return {
+        #         'timestamp': self._timestamp,
+        #         'position': self._position,
+        #         'velocity': self._velocity,
+        #         'mass': self._mass,
+        #         'temperature': self._temperature,
+        #         'parent_axis_angle': self._parent_axis_angle
+        #     }
 
         @classmethod
         def from_instance(cls, instance):
