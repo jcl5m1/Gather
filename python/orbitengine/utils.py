@@ -5,16 +5,26 @@ import numpy as np
 import time
 import functools
 import os
-import pickle
-import json
 from astropy.units import Quantity
+import astropy.units as u
 import inspect
 import builtins
 import pprint
+
+import faiss
+import orbitengine.utils as util
+import pandas as pd
+import re
+
+from astropy.units import Quantity
+
+
 from scipy.optimize import minimize
 EPSILON = 1e-6
 
 CACHE_DIR = "cache"
+CACHE_INDEX_FILENAME = 'index.faiss'
+CACHE_DATA_FILENAME = 'data.pkl'
 
 def print(*args, **kwargs):
     # Get the previous frame in the stack, otherwise it would be this function
@@ -129,74 +139,202 @@ def get_source_recursive(obj):
 
     return source_code
 
+def tolist(item):
+    if isinstance(item, list):
+        return [tolist(subitem) for subitem in item]
+    elif isinstance(item, dict):
+        return [tolist(value) for key, value in item.items()]
+    elif isinstance(item, tuple):  # Handle tuples
+        return list(tolist(subitem) for subitem in item)
+    elif isinstance(item, Quantity):
+            return item.value.tolist()
+    elif isinstance(item, np.ndarray):
+        return item.tolist()
+    elif isinstance(item, object) and hasattr(item, '__dict__'):
+       return tolist(item.__dict__)
+    elif isinstance(item, bool):
+        return 1 if item else 0
+    elif item is None:
+        return 0
+    else:
+        return item
+
+def flatten(lst):
+    return [item for sublist in lst for item in flatten(sublist)] if isinstance(lst, list) else [lst]
+
+def hash_code(code):
+    code_alphanumeric = re.sub(r'\W+', '', code)
+    code_hash = hashlib.sha256(code_alphanumeric.encode()).hexdigest()
+    return code_hash
+
+
+
+# def load_nearest_neighbor_index(extract_feature_func, func, file_suffix = '.pkl', rebuild=False):
+#     path = os.path.join(util.CACHE_DIR, func.__module__, func.__name__)
+#     file_list = os.listdir(path)
+#     index_filename = 'index.faiss'
+#     index_prefix = index_filename.split('.')[0]
+#     items_filename = index_prefix+'_metadata.pkl'
+#     if not rebuild:
+#         if os.path.exists(os.path.join(path, index_filename)) and os.path.exists(os.path.join(path, items_filename)):
+#             index = faiss.read_index(os.path.join(path,index_filename))
+#             items_df = pd.read_pickle(os.path.join(path, items_filename))
+#             return index, items_df
+#         else:
+#             print("No Index exists, building...")
+
+#     #only use files that start with the prefix:
+#     file_list = [file for file in file_list if file.endswith(file_suffix) and not file.startswith(index_prefix)]
+
+#     # Feature Extraction
+#     features = []
+#     items = []
+#     for file in file_list:
+#         feature_vector = extract_feature_func(os.path.join(path, file))
+#         features.append(feature_vector)
+#         cache = pickle.load(open(os.path.join(path, file), 'rb'))         
+#         items.append([feature_vector,cache])
+
+#     data = np.stack(features)  # Combine vectors into a NumPy array
+
+#     # Build Faiss Index
+#     dimension = data.shape[1]  
+#     index = faiss.IndexFlatL2(dimension) 
+#     index.add(data) 
+
+#     #save index and file paths to file
+#     faiss.write_index(index, os.path.join(path,index_filename))
+#     items_df = pd.DataFrame(items,columns=['vector', 'item'])
+#     items_df.to_pickle(os.path.join(path, items_filename))
+
+#     return index, items_df
+
+
+def load_nearest_neighbor_index(func, rebuild=False):
+    code_str = get_source_recursive(func)
+    func_hash = hash_code(code_str)
+
+    path = os.path.join(util.CACHE_DIR, func.__module__, func.__name__)
+    if not rebuild:
+        if os.path.exists(os.path.join(path, CACHE_DATA_FILENAME)):
+            if os.path.exists(os.path.join(path, CACHE_INDEX_FILENAME)):
+                index = faiss.read_index(os.path.join(path, CACHE_INDEX_FILENAME))
+                data_df = pd.read_pickle(os.path.join(path, CACHE_DATA_FILENAME))
+                return index, data_df[data_df['data'].apply(lambda x: x['func_hash'] == func_hash)]
+            else:
+                print("No Index exists, building...")
+        else:
+            raise FileNotFoundError(f"No Cache Data exists: {os.path.join(path, CACHE_DATA_FILENAME)}")
+
+    data_filename = os.path.join(path, CACHE_DATA_FILENAME)
+    if os.path.exists(data_filename):
+        data_df = pd.read_pickle(data_filename)
+    else:
+        data_df = pd.DataFrame()
+
+    features = data_df['vector'].tolist()
+    data = np.stack(features)  # Combine vectors into a NumPy array
+
+    # Build Faiss Index
+    dimension = data.shape[1]
+    index = faiss.IndexFlatL2(dimension) 
+    index.add(data)
+
+    #save index and file paths to file
+    faiss.write_index(index, os.path.join(path,CACHE_INDEX_FILENAME))
+
+    return index, data_df
+
+
+def get_nearest_cached(func, args, kwargs, k=1):
+
+    index, items_df = load_nearest_neighbor_index(func)
+    query_vector = np.array(flatten(tolist([args, kwargs]))).astype('float32')
+    distances, indices = index.search(np.array([query_vector]), k)
+    results = []
+    indices[0][0]
+    for i, d in zip(indices[0], distances[0]):
+        res = items_df.iloc[i]['data']['result']
+        results.append((d, res))
+    if k == 1:
+        return results[0]
+    return results
+
+
+def save_cached(func, args, kwargs, result):
+    code_str = get_source_recursive(func)
+    func_hash = hash_code(code_str)
+
+    data = {
+        '__module__':func.__module__,
+        '__name__':func.__name__,
+        'func_hash':func_hash, # allows detecting changes to the code
+        'args':args,
+        'kwargs':kwargs,
+        'result': result
+    }
+
+    # save directly to metadata pickle
+    data_filename = os.path.join(CACHE_DIR, func.__module__,func.__name__, CACHE_DATA_FILENAME)
+
+    if os.path.exists(data_filename):
+        df_existing = pd.read_pickle(data_filename)
+    else:
+        df_existing = pd.DataFrame()
+
+    feature_vector = np.array(flatten(tolist([args, kwargs]))).astype('float32')
+
+    df_new = pd.DataFrame({'vector': [feature_vector], 'data': [data]})
+    # Append the new DataFrame to the existing DataFrame
+    df_combined = pd.concat([df_existing,df_new], ignore_index=True)  # Reset index
+
+    # Save the combined DataFrame to the pickle file
+    print(f"Saving result to cache {data_filename}")
+    os.makedirs(os.path.dirname(data_filename), exist_ok=True)
+    df_combined.to_pickle(data_filename)
+
+    #rebuild index?
+    load_nearest_neighbor_index(func, rebuild=True)
+
 
 def cache(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        dir=CACHE_DIR
+        try:
+            dist, res = get_nearest_cached(func, args, kwargs)
+            if dist == 0:  # by default only accept exact matches
+                return res
+        except FileNotFoundError:
+            print("No Cache found. Computing...")
 
-        code_str = get_source_recursive(func)
-        hasher = hashlib.md5()
-        hasher.update(code_str.encode())
-        hasher.update(pickle.dumps(args))
-        hasher.update(pickle.dumps(kwargs))
-        hash = hasher.hexdigest()
-
-        filename = os.path.join(dir, f"{func.__module__}{func.__name__}_{hash}.pkl")
-        if os.path.exists(filename):
-            with open(filename, 'rb') as fp:
-                return pickle.load(fp)['result']
         result = func(*args, **kwargs)
-
-        os.makedirs(dir,exist_ok=True)
-        data = {
-            '__module__':func.__module__,
-            '__name__':func.__name__,
-            'hash':hash,
-            'result':result,
-            'args':args,
-            'kwargs':kwargs
-        }
-        with open(filename,'wb') as fp:
-            pickle.dump(data, fp)
+        save_cached(func, args, kwargs, result)
         return result
     return wrapper
+
 
 @time_it
 def minimize_cached(func, x, cache_tol=EPSILON, **kwargs):
     # create a unique filename from source code, and parameters
-    hasher = hashlib.md5()
-    code_str = get_source_recursive(func)
-    hasher.update(code_str.encode())
-    hasher.update(pickle.dumps(kwargs))
-    hash = hasher.hexdigest()
-    dir = CACHE_DIR
-    filename = os.path.join(dir, f"{func.__module__}{func.__name__}_{hash}.pkl")
+
     x0 = x
-    #load the guess from cache
-    if os.path.exists(filename):
-        with open(filename, 'rb') as fp:
-            res = pickle.load(fp)['res']
+    # does a nearest neighbor search to find the closest cached result
+    try:
+        dist, res = get_nearest_cached(func, None, kwargs)
+        print(f"Loaded Cache Result guess: {res.x}\t distance: {dist}")
+        if dist == 0:  # if exact match, return this result
             return res
+        x0 = res.x
+    except FileNotFoundError:
+        print("No Cache found. Computing...")
 
     # compute minimization
     res = minimize(func, x0, **kwargs)
 
     # save the guess to cache only if 
-    # minimization converged to 0 and wasn't already cached
+    # minimization converged close to 0
     if res.fun < cache_tol:
-        os.makedirs(dir,exist_ok=True)
-        data = {
-            '__module__':func.__module__,
-            '__name__':func.__name__,
-            'hash':hash,
-            'kwargs':kwargs,
-            'res': res
-        }
-        with open(filename, 'wb') as fp:
-            pickle.dump(data, fp)
-            print(f"Cached result: {filename}")
-
+        save_cached(func, None, kwargs, res)
     return res
 
 def spherical_to_cartesian(rtp):

@@ -6,8 +6,8 @@ from astropy import constants as const
 from poliastro import iod
 from scipy.optimize import fsolve
 from scipy.spatial.transform import Rotation
-import primatives
-from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexReader, GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode, LQuaternion, Vec3
+#import primatives
+#from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexReader, GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode, LQuaternion, Vec3
 from enum import Enum
 import math
 from scipy.optimize import minimize
@@ -204,7 +204,7 @@ class TrajectorySegment:
             acc = thrust/self.body.mass - g
             self.period = np.sqrt(2*oe.TRAJECTORY_LAUNCH_MIN_ALTITUDE/acc).to(u.s)
 
-    def createGeometry(self, render=None, thickness=2, color=LVecBase4f(0,1,0,1)):                
+    def createGeometry(self, render=None, thickness=2, color=(0,1,0,1)):                
         self.color = color
         self.thickness = thickness
         TRAJECTORY_NONPERIODIC_TIME_LIMIT = 4*u.hour
@@ -278,17 +278,17 @@ class TrajectorySegment:
 
         if self.np is not None:
             self.np.removeNode()
-        path = primatives.createLineList(positions, close=False, color=color, thickness=thickness)
-        self.np = NodePath(path)
-        self.np.reparentTo(render)
+        # path = primatives.createLineList(positions, close=False, color=color, thickness=thickness)
+        # self.np = NodePath(path)
+        # self.np.reparentTo(render)
         return self.collision and (self.type == TrajectorySegment.Type.BALLISTIC)
 
     def setCollisionPoint(self, render, position):
         if self.collision_np is not None:
             self.collision_np.removeNode()
-        self.collision_np = NodePath(primatives.createCube(0.005,color=LVecBase4f(1,0,0,1)))
-        self.collision_np.setPos(LVecBase3f(*position))
-        self.collision_np.reparentTo(render)
+        # self.collision_np = NodePath(primatives.createCube(0.005,color=LVecBase4f(1,0,0,1)))
+        # self.collision_np.setPos(LVecBase3f(*position))
+        # self.collision_np.reparentTo(render)
 
     def checkCollision(self, r, r_prev=None, render=None):
         if self.type != TrajectorySegment.Type.BALLISTIC:
@@ -376,105 +376,105 @@ class TrajectorySegment:
 
 
         #propagate rotation
-        axis_quat = LQuaternion()
-        axis_quat.setHpr(Vec3(*self.rr0.value))
-        axis_vec = Vec3(0,0,1)
-        axis_vec = axis_quat.xform(axis_vec)
+        # axis_quat = LQuaternion()
+        # axis_quat.setHpr(Vec3(*self.rr0.value))
+        # axis_vec = Vec3(0,0,1)
+        # axis_vec = axis_quat.xform(axis_vec)
 
-        rotation_quat = LQuaternion()
+        # rotation_quat = LQuaternion()
         #providing axis angle is helpful for calculating children
-        w = [self.rv0[0], axis_vec, ts]
+        # w = [self.rv0[0], axis_vec, ts]
     
-        if self.type == TrajectorySegment.Type.POSITION_LOCKED:
-            ts %= self.period
-            rotation_quat.setFromAxisAngle((w[0]*ts).value, w[1])
-            axis_quat *= rotation_quat
-            return self.r0, self.v0, axis_quat.getHpr()*u.deg, w, self.m0, self.T0
+        # if self.type == TrajectorySegment.Type.POSITION_LOCKED:
+        #     ts %= self.period
+        #     rotation_quat.setFromAxisAngle((w[0]*ts).value, w[1])
+        #     axis_quat *= rotation_quat
+        #     return self.r0, self.v0, axis_quat.getHpr()*u.deg, w, self.m0, self.T0
 
-        if self.type == TrajectorySegment.Type.LANDED:
-            ts_raw = ts*1
-            ts %= self.period
-            rotation_quat.setFromAxisAngle((w[0]*ts).value, w[1])
-            axis_quat *= rotation_quat
-            #adjust position an velocity for rotation based on rotation of the parent
-            pr, pv, p_rot, pw, pm, ptemp = self.body.parent.propagate(ts)
+        # if self.type == TrajectorySegment.Type.LANDED:
+        #     ts_raw = ts*1
+        #     ts %= self.period
+        #     rotation_quat.setFromAxisAngle((w[0]*ts).value, w[1])
+        #     axis_quat *= rotation_quat
+        #     #adjust position an velocity for rotation based on rotation of the parent
+        #     pr, pv, p_rot, pw, pm, ptemp = self.body.parent.propagate(ts)
             
-            p_rot_angle = pw[0]*pw[2]
-            p_quat = LQuaternion()
-            p_quat.setFromAxisAngle(p_rot_angle.value, pw[1])
-            r = p_quat.xform(Vec3(*self.r0.value))*u.km
-            # reset height to ground level is below ground
-            altitude = np.linalg.norm(r-self.body.parent.position)
-            if altitude < self.body.parent.size + 1*u.m:
-                r *= self.body.parent.size/altitude
+        #     p_rot_angle = pw[0]*pw[2]
+        #     p_quat = LQuaternion()
+        #     p_quat.setFromAxisAngle(p_rot_angle.value, pw[1])
+        #     r = p_quat.xform(Vec3(*self.r0.value))*u.km
+        #     # reset height to ground level is below ground
+        #     altitude = np.linalg.norm(r-self.body.parent.position)
+        #     if altitude < self.body.parent.size + 1*u.m:
+        #         r *= self.body.parent.size/altitude
 
-            w2_axis = np.array([*pw[1]])
-            w2_mag = pw[0].to(u.rad/u.s)
-            v = np.cross(w2_axis*w2_mag, r).value*u.km/u.s #for conversion to km/s?
-            Tnew = oe.TEMP_EARTH + (self.T0 - oe.TEMP_EARTH)*np.exp(-ts_raw.value*oe.STEFAN_BOLTZMANN_COEF)
-            return r, v, axis_quat.getHpr()*u.deg, p_quat, self.m0, Tnew
+        #     w2_axis = np.array([*pw[1]])
+        #     w2_mag = pw[0].to(u.rad/u.s)
+        #     v = np.cross(w2_axis*w2_mag, r).value*u.km/u.s #for conversion to km/s?
+        #     Tnew = oe.TEMP_EARTH + (self.T0 - oe.TEMP_EARTH)*np.exp(-ts_raw.value*oe.STEFAN_BOLTZMANN_COEF)
+        #     return r, v, axis_quat.getHpr()*u.deg, p_quat, self.m0, Tnew
 
-        if self.type == TrajectorySegment.Type.LAUNCH:
+        # if self.type == TrajectorySegment.Type.LAUNCH:
 
-            r,v,m,temp = oe.cowell(
-                k=self.attractor.k,
-                r0=self.r0,
-                v0=self.v0, 
-                m0=self.m0,
-                T0=self.T0,
-                t=ts, 
-                acc_params=self.accel_params)
-            return r, v, axis_quat.getHpr()*u.deg, w, m, temp
+        #     r,v,m,temp = oe.cowell(
+        #         k=self.attractor.k,
+        #         r0=self.r0,
+        #         v0=self.v0, 
+        #         m0=self.m0,
+        #         T0=self.T0,
+        #         t=ts, 
+        #         acc_params=self.accel_params)
+        #     return r, v, axis_quat.getHpr()*u.deg, w, m, temp
 
-            # # vec is normal to the planet
-            # vec = self.r0 - self.body.parent.position
-            # alt = np.linalg.norm(vec)
-            # vec = vec/alt
-            # g = self.body.parent.k/alt**2
-            # accel = self.body.thrust_max/self.body.mass - g.to(u.m/u.s/u.s)
+        #     # # vec is normal to the planet
+        #     # vec = self.r0 - self.body.parent.position
+        #     # alt = np.linalg.norm(vec)
+        #     # vec = vec/alt
+        #     # g = self.body.parent.k/alt**2
+        #     # accel = self.body.thrust_max/self.body.mass - g.to(u.m/u.s/u.s)
 
-            # # this set absolute max accel
-            # if accel.value <= 0:
-            #     accel = 0*u.m/u.s/u.s
-            #     oe.print(f"net thurst accel {accel:.2f} not enough for lift off")
+        #     # # this set absolute max accel
+        #     # if accel.value <= 0:
+        #     #     accel = 0*u.m/u.s/u.s
+        #     #     oe.print(f"net thurst accel {accel:.2f} not enough for lift off")
 
-            # # need to check this is above the planet's accel
-            # accel_vec = vec*accel
-            # v = self.v0 + accel_vec*ts
-            # r = self.r0 + self.v0*ts + 0.5*accel_vec*ts*ts
-            # return r, v, axis_quat.getHpr()*u.deg, w
+        #     # # need to check this is above the planet's accel
+        #     # accel_vec = vec*accel
+        #     # v = self.v0 + accel_vec*ts
+        #     # r = self.r0 + self.v0*ts + 0.5*accel_vec*ts*ts
+        #     # return r, v, axis_quat.getHpr()*u.deg, w
 
-        if self.type == TrajectorySegment.Type.BALLISTIC:
-            if self.kepler is not None:
-                ts_raw = ts*1
-                ts %= self.kepler.period
-                try:
-                    r,v = self.kepler.propagate(ts).rv()
-                    #estimate temperature
-                    Tnew = oe.TEMP_SPACE + (self.T0 - oe.TEMP_SPACE)*np.exp(-ts_raw.value*oe.STEFAN_BOLTZMANN_COEF)
-                    return r, v, axis_quat.getHpr()*u.deg, w, self.m0, Tnew
-                except RuntimeError as e:
-                    oe.print(f"{e}  -----------------------------")
-                    r,v,m,temp = oe.cowell(
-                        k=self.attractor.k,
-                        r0=self.r0,
-                        v0=self.v0, 
-                        m0=self.m0,
-                        T0=self.T0,
-                        t=ts, 
-                        acc_params=self.accel_params)
-                    return r, v, axis_quat.getHpr()*u.deg, w, m, temp
-            else:
-                r,v,m, temp = oe.cowell(
-                    k=self.attractor.k,
-                    r0=self.r0,
-                    v0=self.v0, 
-                    m0=self.m0,
-                    T0=self.T0,
-                    t=ts, 
-                    acc_params=self.accel_params)
-                return r, v, axis_quat.getHpr()*u.deg, w, m, temp
-        oe.print("propagate un recognized segment type")
+        # if self.type == TrajectorySegment.Type.BALLISTIC:
+        #     if self.kepler is not None:
+        #         ts_raw = ts*1
+        #         ts %= self.kepler.period
+        #         try:
+        #             r,v = self.kepler.propagate(ts).rv()
+        #             #estimate temperature
+        #             Tnew = oe.TEMP_SPACE + (self.T0 - oe.TEMP_SPACE)*np.exp(-ts_raw.value*oe.STEFAN_BOLTZMANN_COEF)
+        #             return r, v, axis_quat.getHpr()*u.deg, w, self.m0, Tnew
+        #         except RuntimeError as e:
+        #             oe.print(f"{e}  -----------------------------")
+        #             r,v,m,temp = oe.cowell(
+        #                 k=self.attractor.k,
+        #                 r0=self.r0,
+        #                 v0=self.v0, 
+        #                 m0=self.m0,
+        #                 T0=self.T0,
+        #                 t=ts, 
+        #                 acc_params=self.accel_params)
+        #             return r, v, axis_quat.getHpr()*u.deg, w, m, temp
+        #     else:
+        #         r,v,m, temp = oe.cowell(
+        #             k=self.attractor.k,
+        #             r0=self.r0,
+        #             v0=self.v0, 
+        #             m0=self.m0,
+        #             T0=self.T0,
+        #             t=ts, 
+        #             acc_params=self.accel_params)
+        #         return r, v, axis_quat.getHpr()*u.deg, w, m, temp
+        # oe.print("propagate un recognized segment type")
         return None
     
     def clear(self):

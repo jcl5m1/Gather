@@ -6,8 +6,8 @@ from astropy import constants as const
 from poliastro import iod
 from scipy.optimize import fsolve
 from scipy.spatial.transform import Rotation
-import primatives
-from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexReader, GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode, LQuaternion, Vec3
+#import primatives
+#from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexReader, GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode, LQuaternion, Vec3
 from enum import Enum
 import math
 from scipy.optimize import minimize
@@ -462,19 +462,19 @@ class Body:
             if seg.t1 < time:
                 seg.np.hide()
 
-        self.position, self.velocity, self.rotation, w, self.mass, self.temperature = res
-        if self.np is None:
-            return
-        self.np.setPos(LVecBase3f(*self.position.to(u.km).value))
-        self.np.setHpr(LVecBase3f(*self.rotation.to(u.deg).value))
+#         self.position, self.velocity, self.rotation, w, self.mass, self.temperature = res
+#         if self.np is None:
+#             return
+#         self.np.setPos(LVecBase3f(*self.position.to(u.km).value))
+#         self.np.setHpr(LVecBase3f(*self.rotation.to(u.deg).value))
 
-        p1 = self.position.to(u.km).value
-        p2 = p1 + self.velocity.to(u.km/u.s).value
-#        p2 = self.position.to(u.km).value + 1000*self.velocity.to(u.km/u.s).value
-        if self.velocity_np is not None:
-            self.velocity_np.removeNode()
-        self.velocity_np = NodePath(primatives.createLine(LVecBase3f(*p1), LVecBase3f(*p2), 2, self.color))
-        self.velocity_np.reparentTo(self.render)
+#         p1 = self.position.to(u.km).value
+#         p2 = p1 + self.velocity.to(u.km/u.s).value
+# #        p2 = self.position.to(u.km).value + 1000*self.velocity.to(u.km/u.s).value
+#         if self.velocity_np is not None:
+#             self.velocity_np.removeNode()
+#         self.velocity_np = NodePath(primatives.createLine(LVecBase3f(*p1), LVecBase3f(*p2), 2, self.color))
+#         self.velocity_np.reparentTo(self.render)
 
         self.lastTime = time
 
@@ -817,28 +817,29 @@ class Body:
         self.trajectorySegments.append(seg_new)
         seg_new.createGeometry(render=render, thickness=thickness, color=color)
 
-    def createGeometry(self, render, type=Type.VESSEL, size=0.01*u.km, color=LVecBase4f(1,1,1,1)):
-        self.color = color
-        self.render = render
-        self.size = size
-        if type == Body.Type.VESSEL:
-            self.fixedScale = False # allow scalling to camera distance
-            data = primatives.createPyramid(size.to(u.km).value, color)
-            self.np = NodePath(data)
-        if type == Body.Type.PLANET:
-            self.fixedScale = True #at some point, should convert to icon
-            data = primatives.createIcosphere(size.to(u.km).value, oe.PLANET_ICOSHPERE_LEVEL, color)
-            # rotate so the icosphere is aligned with the z axis
-            self.np = NodePath(data)
-            self.np.setRenderModeWireframe()
+    def createGeometry(self, render, type=Type.VESSEL, size=0.01*u.km, color=(1,1,1,1)):
+        # self.color = color
+        # self.render = render
+        # self.size = size
+        # if type == Body.Type.VESSEL:
+        #     self.fixedScale = False # allow scalling to camera distance
+        #     data = primatives.createPyramid(size.to(u.km).value, color)
+        #     self.np = NodePath(data)
+        # if type == Body.Type.PLANET:
+        #     self.fixedScale = True #at some point, should convert to icon
+        #     data = primatives.createIcosphere(size.to(u.km).value, oe.PLANET_ICOSHPERE_LEVEL, color)
+        #     # rotate so the icosphere is aligned with the z axis
+        #     self.np = NodePath(data)
+        #     self.np.setRenderModeWireframe()
 
-            #draw pole axis
-            axis_data = primatives.createLine(LVecBase3f(0,0,size.to(u.km).value*0.8), 
-                                              LVecBase3f(0,0,size.to(u.km).value*1.2), 2, color)
-            axis_np = NodePath(axis_data)
-            axis_np.reparentTo(self.np)
+        #     #draw pole axis
+        #     axis_data = primatives.createLine(LVecBase3f(0,0,size.to(u.km).value*0.8), 
+        #                                       LVecBase3f(0,0,size.to(u.km).value*1.2), 2, color)
+        #     axis_np = NodePath(axis_data)
+        #     axis_np.reparentTo(self.np)
 
-        self.np.reparentTo(render)
+        # self.np.reparentTo(render)
+        return
 
     def showTrajectory(self, show=True):
         for seg in self.trajectorySegments:

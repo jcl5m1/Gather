@@ -6,7 +6,7 @@ from astropy import constants as const
 from poliastro import iod
 from scipy.optimize import fsolve
 from scipy.spatial.transform import Rotation
-from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexReader, GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode, LQuaternion, Vec3
+#from panda3d.core import LVecBase4f, NodePath, LVecBase3f,GeomVertexReader, GeomVertexWriter, GeomVertexData, GeomTriangles, GeomNode, LQuaternion, Vec3
 from enum import Enum
 import math
 from scipy.optimize import minimize
