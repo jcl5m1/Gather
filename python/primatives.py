@@ -14,6 +14,11 @@ import math
 from panda3d.core import LVecBase4f
 from panda3d.core import Geom, GeomVertexFormat, GeomVertexData, GeomVertexWriter, GeomTriangles, GeomNode
 from panda3d.core import ColorAttrib
+from panda3d.core import CardMaker, NodePath
+import numpy as np
+from direct.gui.OnscreenText import OnscreenText
+from panda3d.core import TextNode
+
 
 
 def normalize(vector, size=1):
@@ -23,14 +28,14 @@ def normalize(vector, size=1):
 def midpoint(v1, v2):
     return ((v1[0] + v2[0]) / 2, (v1[1] + v2[1]) / 2, (v1[2] + v2[2]) / 2)
 
-def createEllipse(radius_x, radius_y, num_segments, color=LVecBase4f(1, 1, 1, 1)):
+def createEllipse(radius_x, radius_y, num_segments, color=LVecBase4f(1, 1, 1, 1), thickness=2):
 
     # Calculate the angle between each segment
     angle_delta = 2 * math.pi / num_segments
 
     # Define the vertices and colors of the ellipse
     lines = LineSegs()
-    lines.setThickness(2)
+    lines.setThickness(thickness)
     lines.moveTo(radius_x, 0, 0)
     for i in range(num_segments):
         angle = i * angle_delta
@@ -43,11 +48,98 @@ def createEllipse(radius_x, radius_y, num_segments, color=LVecBase4f(1, 1, 1, 1)
     return lines.create()
 
 
+class Graph:
+    def __init__(self, renderer, width, height, color=LVecBase4f(1, 1, 1, 1), font=None):
+        # Create a CardMaker
+        self.cm = CardMaker('graph')
 
-def createLineList(points, close=False, color=LVecBase4f(1, 1, 1, 1)):
+        # Set the size of the card to create a square
+        # The arguments are the left, right, bottom, and top edges of the card
+        self.cm.setFrame(0, width, 0, height)
+
+        self.width = width
+        self.height = height
+        #set color
+        self.cm.setColor(color)
+
+        # Create a LineSegs to hold the lines
+        self.lines = LineSegs()
+        self.lines.setThickness(2)
+        self.lines.setColor(LVecBase4f(0.0, 1.0, 0.0, 1))
+
+        self.lines.moveTo(0,0,0)
+        self.lines.drawTo(width,0,height)
+
+        self.lines.moveTo(0,0,height)
+        self.lines.drawTo(width,0,0)
+
+        self.np = NodePath(self.cm.generate())
+
+        # Create a NodePath from the lines and attach it to the card
+        self.lines_np = NodePath(self.lines.create())
+        self.lines_np.reparentTo(self.np)
+        self.lines_np.setBin("fixed", 0)
+
+        self.vertLabels = OnscreenText(text='[info]', pos=(0.85, -0.95), scale=0.04, fg=(1, 1, 1, 1), align=TextNode.ALeft, font=font)
+
+        self.np.reparentTo(renderer)
+
+
+    def clear(self):
+        for node in self.np.getChildren():
+            node.removeNode()
+
+
+    def plot(self, data, color=LVecBase4f(1, 1, 1, 1)):
+
+        self.lines = LineSegs()  #clear old data?
+        self.lines.setThickness(2)
+        self.lines.setColor(color)
+        self.data = data
+        min_value = np.min(data)
+        max_value = np.max(data)
+        
+        def scale(value, min, max):
+            return (value - min) / (max - min)
+
+        # Plot the data as lines
+        self.lines.moveTo(0, 0, self.height*scale(data[0], min_value, max_value))
+        for i in range(len(data)):
+            self.lines.setColor(LVecBase4f(1, 1, 1, 1))  # Set color for each line segment
+            self.lines.drawTo(self.width*i/len(data),0, self.height*scale(data[i], min_value, max_value))
+
+        if self.lines_np is not None:
+            self.lines_np.removeNode()
+
+        self.vertLabels.setText(f"{min_value:.2f}")
+
+        # Create a NodePath from the lines and attach it to the card
+        self.lines_np = NodePath(self.lines.create())
+        self.lines_np.reparentTo(self.np)
+        self.lines_np.setBin("fixed", 0)
+
+                
+    def vline(self, i, color=LVecBase4f(1, 1, 1, 1)):
+        self.lines = LineSegs()
+        self.lines.setThickness(2)
+        self.lines.setColor(color)
+        self.lines.moveTo(self.width*i/len(self.data), 0, 0)
+        self.lines.drawTo(self.width*i/len(self.data),0, self.height)
+        # if self.lines_np is not None:
+        #     self.lines_np.removeNode()
+        # Create a NodePath from the lines and attach it to the card
+        self.lines_np = NodePath(self.lines.create())
+        self.lines_np.reparentTo(self.np)
+        self.lines_np.setBin("fixed", 0)
+
+
+
+
+
+def createLineList(points, close=False, color=LVecBase4f(1, 1, 1, 1), thickness=2):
     # Define the vertices and colors of the ellipse
     lines = LineSegs()
-    lines.setThickness(2)
+    lines.setThickness(thickness)
     lines.moveTo(points[0][0], points[0][1], points[0][2])
     for pt in points:
         lines.setColor(color)  # Red X-axis
@@ -79,11 +171,11 @@ def createPyramid(size=1, color=LVecBase4f(1, 1, 1, 1)):
 
     # Define the vertices
     vertices = [
-        (size / 2, size / 2, 0),
-        (-size / 2, size / 2, 0),
-        (-size / 2, -size / 2, 0),
-        (size / 2, -size / 2, 0),
-        (0, 0, height),
+        (size / 2, size / 2, -height/2),
+        (-size / 2, size / 2, -height/2),
+        (-size / 2, -size / 2, -height/2),
+        (size / 2, -size / 2, -height/2),
+        (0, 0, height/2),
     ]
     for vertex in vertices:
         vertex_writer.addData3f(*vertex)
@@ -113,7 +205,6 @@ def createPyramid(size=1, color=LVecBase4f(1, 1, 1, 1)):
     node.addGeom(geom)
 
     node.setAttrib(ColorAttrib.makeFlat(color))
-
 
     return node
 
@@ -165,9 +256,21 @@ def createCube(size, color=LVecBase4f(1, 1, 1, 1)):
     return node
 
 
-def createIcosphere(size, subdivisions):
+def createIcosphere(size, subdivisions, color):
     # Golden ratio
     phi = (1 + math.sqrt(5)) / 2
+
+    angle = math.atan2(1,phi)
+    def rotate_vertices(angle, vertices):
+        # Rotate all vertices by the negative of the angle
+        rotated_vertices = []
+        for vertex in vertices:
+            x = vertex[0]
+            y = vertex[1] * math.cos(angle) - vertex[2] * math.sin(angle)
+            z = vertex[1] * math.sin(angle) + vertex[2] * math.cos(angle)
+            rotated_vertices.append((x, y, z))
+
+        return rotated_vertices
 
     # Create icosahedron vertices
     vertices = [
@@ -184,6 +287,8 @@ def createIcosphere(size, subdivisions):
         (-phi,  0, -1),
         (-phi,  0,  1)
     ]
+
+    vertices = rotate_vertices(angle,vertices)
 
     faces = [
         (0, 11, 5),
@@ -266,6 +371,8 @@ def createIcosphere(size, subdivisions):
 
     node = GeomNode("icosphere")
     node.addGeom(geom)
+
+    node.setAttrib(ColorAttrib.makeFlat(color))
 
     return node
 
