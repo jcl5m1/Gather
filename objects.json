@@ -1,0 +1,19 @@
+{
+    "_default": {
+        "1": {
+            "_id": {
+                "$oid": "66c7c82a8ce9ef0fd008a23e"
+            },
+            "name": "Earth",
+            "shape": "Sphere",
+            "mass": 5.972e+24,
+            "radius": 6371,
+            "color": "0x333333",
+            "position": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+            }
+        }
+    }
+}
