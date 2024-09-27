@@ -1,19 +1,52 @@
 {
     "_default": {
         "1": {
-            "_id": {
-                "$oid": "66c7c82a8ce9ef0fd008a23e"
-            },
+            "id": "66c7c82a8ce9ef0fd008a23e",
             "name": "Earth",
             "shape": "Sphere",
             "mass": 5.972e+24,
             "radius": 6371,
-            "color": "0x333333",
+            "color": "0x555555",
             "position": {
                 "x": 0,
                 "y": 0,
                 "z": 0
-            }
+            },
+            "velocity": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+            },
+            "angularVelocity": {
+                "x": 0.0, 
+                "y": 2.9832046146900003e-05, 
+                "z": 6.65405575875e-05
+            },
+            "parent": null
+        },
+        "2": {
+            "id": "66c7c82a8ce9ef0fd008a23f",
+            "name": "Moon",
+            "shape": "Sphere",
+            "mass": 7.347e+22,
+            "radius": 1737,
+            "color": "0x555555",
+            "position": {
+                "x": 384000,
+                "y": 0,
+                "z": 0
+            },
+            "velocity": {
+                "x": 0,
+                "y": 1.022,
+                "z": 0
+            },
+            "angularVelocity": {
+                "x": 0,
+                "y": 0,
+                "z": 2.6617e-06
+            },
+            "parent": "66c7c82a8ce9ef0fd008a23e"
         }
     }
 }

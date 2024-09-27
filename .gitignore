@@ -73,8 +73,9 @@ crashlytics-build.properties
 
 
 *.pyc
-*.json
 *.pkl
 *.faiss
 /Unity/*
 *.env
+bundle.*
+node_modules/*

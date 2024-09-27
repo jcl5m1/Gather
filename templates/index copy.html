@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gather</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+        #object-name { position: absolute; top: 10px; left: 10px; color: white; font-size: 24px; }
+        #debug { position: absolute; bottom: 10px; left: 10px; color: white; font-size: 12px; }
+        #fullscreen-button { position: absolute; top: 10px; right: 10px; padding: 10px; background: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="object-name">Loading...</div>
+    <div id="debug">{debug}</div>
+    <button id="fullscreen-button">Go Full Screen</button>
+    <div id="player"></div> <!-- YouTube player container -->
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // Set up the scene, camera, and renderer
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Add OrbitControls
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.25;
+        controls.screenSpacePanning = false;
+        controls.maxPolarAngle = Math.PI / 2;
+
+        // Position the camera
+        camera.position.z = 20000;
+
+        // Create a small sphere
+        const smallSphereGeometry = new THREE.SphereGeometry(100, 32, 32);
+        const smallSphereMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const smallSphere = new THREE.Mesh(smallSphereGeometry, smallSphereMaterial);
+        scene.add(smallSphere);
+
+        // Raycaster for detecting intersections
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+
+        // Fetch the object name from the backend
+        fetch('/api/object')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('debug').innerText = data.color;
+                document.getElementById('object-name').innerText = data.name;
+
+                // Create a geometry and a material, then combine them into a mesh
+                geo = new THREE.IcosahedronGeometry(data.radius,10);
+                mat = new THREE.MeshBasicMaterial({ color: parseInt(data.color, 16), wireframe: true });
+                sphere2 = new THREE.Mesh(geo, mat);
+                sphere2.position.set(data.position.x, data.position.y, data.position.z);
+                scene.add(sphere2);
+
+            })
+            .catch(error => {
+            console.error('Error fetching object name:', error);
+            document.getElementById('object-name').innerText = 'Error loading object name';
+            });
+                // Handle window resize
+                window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Fullscreen functionality
+        document.getElementById('fullscreen-button').addEventListener('click', () => {
+            if (document.documentElement.requestFullscreen) {
+                document.documentElement.requestFullscreen();
+            } else if (document.documentElement.mozRequestFullScreen) { // Firefox
+                document.documentElement.mozRequestFullScreen();
+            } else if (document.documentElement.webkitRequestFullscreen) { // Chrome, Safari and Opera
+                document.documentElement.webkitRequestFullscreen();
+            } else if (document.documentElement.msRequestFullscreen) { // IE/Edge
+                document.documentElement.msRequestFullscreen();
+            }
+        });
+
+
+
+        // Create the animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Rotate the sphere
+            if (typeof sphere2 !== 'undefined') {
+                sphere2.rotation.x += 0.002;
+                sphere2.rotation.y += 0.002;
+            }
+
+            // Render the scene from the perspective of the camera
+            renderer.render(scene, camera);
+        }
+
+        // Add mouse click and drag event handlers
+        let isDragging = false;
+        let previousMousePosition = {
+            x: 0,
+            y: 0
+        };
+
+        renderer.domElement.addEventListener('mousedown', onMouseDown);
+        renderer.domElement.addEventListener('mousemove', onMouseMove);
+        renderer.domElement.addEventListener('mouseup', onMouseUp);
+        renderer.domElement.addEventListener('wheel', onScroll);
+
+        function onScroll(event) {
+            // Change the camera distance based on scroll direction
+            const delta = event.deltaY;
+            let dist = camera.position.distanceTo(scene.position);
+            if (delta > 0) {
+                dist *= 1.02;
+            } else {
+                dist *= 0.98;
+            }
+            camera.position.setLength(dist);
+            
+
+
+        }
+        renderer.domElement.addEventListener('contextmenu', onContextMenu);
+
+        function onContextMenu(event) {
+            event.preventDefault();
+        }
+
+        function onMouseDown(event) {
+            if (event.button === 2) {
+                isDragging = true;
+                previousMousePosition = {
+                    x: event.clientX,
+                    y: event.clientY
+                };
+            }
+
+            if (event.button === 0) {
+                // Calculate the hit point in 3D space
+                const mouse = new THREE.Vector2();
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObject(sphere2);
+                if (intersects.length > 0) {
+                    const hitPoint = intersects[0].point;
+
+                    // Create a small red sphere at the hit point
+                    const sphereGeometry = new THREE.SphereGeometry(100, 32, 32);
+                    const sphereMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                    const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+                    sphere.position.copy(hitPoint);
+                    scene.add(sphere);
+                }
+            }
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            // Update the raycaster with the camera and mouse position
+            raycaster.setFromCamera(mouse, camera);
+
+            // Calculate objects intersecting the raycaster
+            const intersects = raycaster.intersectObjects(scene.children);
+
+            if (intersects.length > 0) {
+                // Position the small sphere at the intersection point
+                smallSphere.position.copy(intersects[0].point);
+            }
+            controls.update();
+
+            previousMousePosition = {
+                x: event.clientX,
+                y: event.clientY
+            };
+
+        }
+
+
+
+
+        function onMouseUp(event) {
+            if (event.button === 2) {
+                isDragging = false;
+            }
+        }
+
+        // Function to convert degrees to radians
+        function toRadians(degrees) {
+            return degrees * Math.PI / 180;
+        }
+
+        // Show coordinates in debug element
+        renderer.domElement.addEventListener('mousemove', showCoordinates);
+
+        function showCoordinates(event) {
+            const coordinates = {
+                x: event.clientX,
+                y: event.clientY
+            };
+            document.getElementById('debug').innerText = `X: ${coordinates.x}, Y: ${coordinates.y}`;
+        }
+
+
+        // YouTube API will call this function when the API is ready
+        function onYouTubeIframeAPIReady() {
+            new YT.Player('player', {
+                height: '0',
+                width: '0',
+                videoId: 'https://www.youtube.com/watch?v=khnr4-ehwKA', // Replace with your YouTube video ID
+                events: {
+                    'onReady': onPlayerReady
+                }
+            });
+        }
+
+        // The API will call this function when the video player is ready
+        function onPlayerReady(event) {
+            event.target.playVideo();
+            console.log('Video player is ready');
+        }
+
+        // Start the animation loop
+        animate();
+    </script>
+</body>
+</html>
