@@ -1,8 +1,10 @@
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
 let renderer: THREE.WebGLRenderer;
+let controls: OrbitControls;
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 const cursorGeometry = new THREE.SphereGeometry(100, 5, 5);
@@ -112,7 +114,7 @@ class Body {
         this.mesh.position.set(this.position.x, this.position.y, this.position.z);
 
         const axis = this.angularVelocity.clone().normalize();
-        const angle = this.angularVelocity.length()*100.0;
+        const angle = this.angularVelocity.length()*1.0;
 
         const quaternion = new THREE.Quaternion().setFromAxisAngle(axis, angle);
         this.mesh.quaternion.multiplyQuaternions(quaternion, this.mesh.quaternion);
@@ -134,12 +136,71 @@ function init() {
 
     window.addEventListener('resize', onWindowResize);
 
+    // Initialize OrbitControls
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true; // Enable damping (inertia)
+    controls.dampingFactor = 0.25; // Damping factor
+    controls.screenSpacePanning = true; // Do not allow panning in screen space
+    controls.minDistance = 10; // Minimum distance for zoom
+    controls.maxDistance = 1000000; // Maximum distance for zoom
+    controls.maxPolarAngle = Math.PI; // Limit vertical rotation
+    controls.enableRotate = true;
+    controls.enablePan = false;
+    controls.mouseButtons = {
+        LEFT: THREE.MOUSE.RIGHT,
+        MIDDLE: THREE.MOUSE.MIDDLE,
+        RIGHT: THREE.MOUSE.LEFT
+    };
+
     camera.position.z = 20000; // km
+    controls.update();
 
     scene.add(cursor);
 
-
     animate();
+
+    document.addEventListener('contextmenu', event => event.preventDefault());
+
+    let isDragging = false;
+    let previousMousePosition = { x: 0, y: 0 };
+
+    function onDocumentMouseDown(event: MouseEvent) {
+        if (event.button === 2) { // Right mouse button
+            isDragging = true;
+        }
+    }
+
+    function onDocumentMouseUp(event: MouseEvent) {
+        if (event.button === 2) { // Right mouse button
+            isDragging = false;
+        }
+    }
+
+    function onDocumentMouseMove(event: MouseEvent) {
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObjects(objects.map(obj => obj.mesh));
+    
+        if (intersects.length > 0) {
+            const intersection = intersects[0];
+            cursor.position.copy(intersection.point);
+        }
+    
+        previousMousePosition = {
+            x: event.clientX,
+            y: event.clientY
+        };
+    }
+
+    function toRadians(angle: number) {
+        return angle * (Math.PI / 180);
+    }
+
+    document.addEventListener('mousedown', onDocumentMouseDown, false);
+    document.addEventListener('mouseup', onDocumentMouseUp, false);
+    document.addEventListener('mousemove', onDocumentMouseMove, false);
     
     fetch(`${currentHost}/api/object`)
         .then(response => response.json())
@@ -250,13 +311,13 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-function onDocumentMouseWheel(event: WheelEvent) {
-    if (event.deltaY < 0) {
-        if(camera.position.length() < 1) // too close to the origin
-            return
-    }
-    camera.position.z += event.deltaY * 0.0005 * camera.position.length();
-}
+// function onDocumentMouseWheel(event: WheelEvent) {
+//     if (event.deltaY < 0) {
+//         if(camera.position.length() < 1) // too close to the origin
+//             return
+//     }
+//     camera.position.z += event.deltaY * 0.0005 * camera.position.length();
+// }
 
 function toggleFullScreen() {
     if (!document.fullscreenElement) {
@@ -272,10 +333,11 @@ function toggleFullScreen() {
 
 document.addEventListener('dblclick', toggleFullScreen);
 
-document.addEventListener('wheel', onDocumentMouseWheel, false);
+//document.addEventListener('wheel', onDocumentMouseWheel, false);
 
 function animate() {
     requestAnimationFrame(animate);
+    controls.update();
     //for each object in Objects, update the position
     objects.forEach((obj) => {
         obj.update();    
