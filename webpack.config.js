@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 
 module.exports = {
   entry: './src/index.ts',
@@ -29,7 +30,13 @@ module.exports = {
     liveReload: true,
     open: false,
     host: '0.0.0.0', // Accept connections from any IP
-    allowedHosts: 'all'
-
+    allowedHosts: 'all',
+    // server: {
+    //   type: 'https',
+    //   options: {
+    //     key: fs.readFileSync(path.join(__dirname, 'server.key')),
+    //     cert: fs.readFileSync(path.join(__dirname, 'server.crt')),
+    //   },
+    // },
   },
 };
