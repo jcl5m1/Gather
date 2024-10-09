@@ -1,6 +1,7 @@
 export let logDiv: HTMLDivElement;
+export let resourceDiv: HTMLDivElement;
 
-export function initLogDiv(document: Document) {
+export function init(document: Document) {
     logDiv = document.createElement('div');
     logDiv.style.position = 'absolute';
     logDiv.style.top = '10px';
@@ -10,6 +11,16 @@ export function initLogDiv(document: Document) {
     logDiv.style.fontFamily = 'Arial';
     logDiv.innerText = `Console:`;
     document.body.appendChild(logDiv);
+
+    resourceDiv = document.createElement('div');
+    resourceDiv.style.position = 'absolute';
+    resourceDiv.style.top = '10px';
+    resourceDiv.style.right = '10px';
+    resourceDiv.style.color = 'white';
+    resourceDiv.style.fontSize = '15px';
+    resourceDiv.style.fontFamily = 'Arial';
+    resourceDiv.innerText = `Resources:`;
+    document.body.appendChild(resourceDiv);
 }
 
 export function appendToLog(text: string) {
@@ -26,4 +37,15 @@ export function appendToLog(text: string) {
         lines.splice(0, lines.length - maxLines);
     }
     logDiv.innerText = lines.join('\n');
+}
+
+export function updateResources(resources: { [key: string]: number }) {
+    if (!resourceDiv) {
+        return;
+    }
+
+    resourceDiv.innerText = `Resources:\n`;
+    for (const key in resources) {
+        resourceDiv.innerText += `${key}: ${resources[key]}\n`;
+    }
 }

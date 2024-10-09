@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { Body } from './body';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import config from './config.json';
-import { initLogDiv, appendToLog } from './utils'; // Assuming you have a utility function for logging
+import { appendToLog } from './utils'; // Assuming you have a utility function for logging
+import * as utils from './utils';
 import * as state from './state';
 
 let scene: THREE.Scene;
@@ -24,7 +25,8 @@ function init() {
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000000);
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.domElement.style.border = 'none';
-    initLogDiv(document);
+    state.init();
+    utils.init(document);
     appendToLog('Initializing scene...');
 
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -157,6 +159,19 @@ function init() {
         });
 }
 
+async function getById(endpoint: string, id: string) {
+    return fetch(`${currentHost}/api/${endpoint}?id=${id}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Error fetching ${endpoint} with id ${id}: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .catch(error => {
+            console.error(`Error fetching ${endpoint}:`, error);
+            throw error;
+        });
+}
 
 function highlightSelectedBody(body: Body | null) {
     if (body === selectedBody) {
@@ -188,6 +203,28 @@ function onDocumentMouseClick(event: MouseEvent) {
         const intersection = intersects[0];
         let newlySelectedObject = state.bodies.find(obj => obj.mesh === intersection.object) ?? null;
         if (newlySelectedObject) {
+            if (newlySelectedObject === selectedBody) {
+                if (newlySelectedObject.name === "Resource") {
+                    let obj_data = getById('object',newlySelectedObject.id);
+                    obj_data.then(data => {
+                        let resourceId = data[0].resource_id;
+                        let resource_data = getById('resource', resourceId);
+                        resource_data.then(data => {
+                            appendToLog(`Resource data: ${JSON.stringify(data)}`);
+                            state.adjustResource(data[0].name, 1);
+                            utils.updateResources(state.resources); 
+
+                        }).catch(error => {
+                            console.error('Error fetching resource data:', error);
+                        });
+                    }).catch(error => {
+                        console.error('Error fetching object data:', error);
+                    });
+                    // const resourceId = obj_data.resource_id;
+                    // appendToLog(`Extracted resource ID: ${resourceId}`);
+                    return
+                }
+            }
             highlightSelectedBody(newlySelectedObject);
         }
     }
