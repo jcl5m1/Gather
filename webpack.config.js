@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { DefinePlugin } = require('webpack');
 
 module.exports = {
   entry: './src/index.ts',
@@ -13,6 +14,8 @@ module.exports = {
       },
     ],
   },
+  plugins: [
+  ],
   resolve: {
     extensions: ['.ts', '.js'],
   },

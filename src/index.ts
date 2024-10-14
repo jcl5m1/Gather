@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Body } from './body';
+import { RenderBody } from './renderbody';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import config from './config.json';
 import { appendToLog } from './utils'; // Assuming you have a utility function for logging
@@ -15,10 +15,9 @@ const mouse = new THREE.Vector2();
 const cursorGeometry = new THREE.SphereGeometry(config.CURSOR_SIZE, 3, 3);
 const cursorMaterial = new THREE.MeshBasicMaterial({ color: config.SELECTED_COLOR });
 const cursor = new THREE.Mesh(cursorGeometry, cursorMaterial);
-const currentHost = `http://${window.location.hostname}:8010`;
 
-let selectedBody: Body | null = null;
-let focusBody: Body | null = null;
+let selectedBody: RenderBody | null = null;
+let focusBody: RenderBody | null = null;
 
 function init() {    
     scene = new THREE.Scene();
@@ -101,6 +100,23 @@ function init() {
         }
     }
 
+    async function updateHoverText(intersectedBody: RenderBody, event: MouseEvent) {
+        if (intersectedBody && intersectedBody.name === "Resource") {
+            const resource = await utils.getResourceById(intersectedBody.referenceId);
+            if (resource) {
+                utils.hoverTextDiv.style.position = 'absolute';
+                utils.hoverTextDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+                utils.hoverTextDiv.style.color = 'white';
+                utils.hoverTextDiv.style.padding = '5px';
+                utils.hoverTextDiv.style.borderRadius = '5px';
+                utils.hoverTextDiv.innerText = resource.name;
+                utils.hoverTextDiv.style.left = `${event.clientX+10}px`;
+                utils.hoverTextDiv.style.top = `${event.clientY+5}px`;
+                utils.hoverTextDiv.style.display = 'block';
+            }
+        }
+    }
+
     function onDocumentMouseMove(event: MouseEvent) {
         mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
         mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -111,6 +127,16 @@ function init() {
         if (intersects.length > 0) {
             const intersection = intersects[0];
             cursor.position.copy(intersection.point);
+
+            const intersectedBody = state.bodies.find(obj => obj.mesh === intersection.object) ?? null;
+            if (intersectedBody && intersectedBody.name === "Resource") {
+                updateHoverText(intersectedBody, event);
+            } else {
+                utils.hoverTextDiv.style.display = 'none';
+//                utils.hoverTextDiv.style.display = 'none';
+            }
+
+
         }
     
         previousMousePosition = {
@@ -127,53 +153,40 @@ function init() {
     document.addEventListener('mouseup', onDocumentMouseUp, false);
     document.addEventListener('mousemove', onDocumentMouseMove, false);
     
-    fetch(`${currentHost}/api/object`)
+    fetch(`${utils.currentHost}/api?table=body`)
         .then(response => response.json())
         .then(data => {
 
-            let earth: Body;
+            let earth: RenderBody;
 
             data.forEach((item: any, index: number) => {
-                let obj = Body.fromJSON(item);
+                let obj = RenderBody.fromJSON(item);
                 state.bodies.push(obj);
                 scene.add(obj.mesh);
-                console.log(`Added object: ${obj.name}`);
+                console.log(`Added body: ${obj.name}`);
             });
 
             //for each object that is attached add mesh to parent mesh
             //for some reason this is does not work if you do it in the previous loop
             state.bodies.forEach((obj) => {
                 if (obj.attached) {
-                    const parentObject = state.bodies.find(o => o.id == obj.parent);
-                    if (parentObject) {
-                        parentObject.mesh.add(obj.mesh);
+                    const parentBody = state.bodies.find(o => o.id == obj.parentId);
+                    if (parentBody) {
+                        parentBody.mesh.add(obj.mesh);
                     }
                 }
             });
 
 
-            appendToLog('Loaded Objects:' + state.bodies.length);
+            appendToLog('Loaded Bodies:' + state.bodies.length);
         })
         .catch(error => {
-            console.error('Error fetching object names:', error);
+            console.error('Error fetching body names:', error);
         });
 }
 
-async function getById(endpoint: string, id: string) {
-    return fetch(`${currentHost}/api/${endpoint}?id=${id}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error(`Error fetching ${endpoint} with id ${id}: ${response.statusText}`);
-            }
-            return response.json();
-        })
-        .catch(error => {
-            console.error(`Error fetching ${endpoint}:`, error);
-            throw error;
-        });
-}
 
-function highlightSelectedBody(body: Body | null) {
+function highlightSelectedBody(body: RenderBody | null) {
     if (body === selectedBody) {
         return;
     }
@@ -205,23 +218,17 @@ function onDocumentMouseClick(event: MouseEvent) {
         if (newlySelectedObject) {
             if (newlySelectedObject === selectedBody) {
                 if (newlySelectedObject.name === "Resource") {
-                    let obj_data = getById('object',newlySelectedObject.id);
+                    let obj_data = utils.getById('body',newlySelectedObject.id);
                     obj_data.then(data => {
-                        let resourceId = data[0].resource_id;
-                        let resource_data = getById('resource', resourceId);
-                        resource_data.then(data => {
-                            appendToLog(`Resource data: ${JSON.stringify(data)}`);
-                            state.adjustResource(data[0].name, 1);
-                            utils.updateResources(state.resources); 
-
-                        }).catch(error => {
-                            console.error('Error fetching resource data:', error);
-                        });
-                    }).catch(error => {
-                        console.error('Error fetching object data:', error);
-                    });
-                    // const resourceId = obj_data.resource_id;
-                    // appendToLog(`Extracted resource ID: ${resourceId}`);
+                        //inefficient to call every time, TODO to cache resource table on client
+                        let resourceId = data[0].referenceId;
+                        utils.getResourceById(resourceId).then(resource => {
+                            if(resource) {
+                                appendToLog(`Resource result: ${resource.name}`);
+                                state.updateInventory(resource.name, 1);
+                            }
+                        })
+                    }).catch(error => { console.error('Error fetching resource:', error); });
                     return
                 }
             }
@@ -234,48 +241,14 @@ function onDocumentMouseClick(event: MouseEvent) {
     
 }
 
-
-function onAddItemOnEarth(event: MouseEvent) {
-
-    //find object named earth
-    const earth = state.bodies.find(o => o.name == "Earth");
-    if (!earth) {
-        console.error('Earth object not found');
-        return;
+function onDocumentKeyDown(event: KeyboardEvent) {
+    if (event.key === 'm' || event.key === 'M') {
+        state.setMode((state.mode + 1) % (Object.keys(state.Mode).length/2));
+        appendToLog(`Mode changed to: ${state.Mode[state.mode]}`);
     }
-    const newObject = new Body(
-        "",
-        'Item',
-        '#00ff00',
-        100,
-        1,
-        'sphere',
-        earth.id,
-        true,
-        cursor.position.clone(),
-        new THREE.Vector3(0, 0, 0),
-        new THREE.Vector3(0, 0, 0)
-    );
-    state.bodies.push(newObject);
-    scene.add(newObject.mesh);
-    console.log('New sphere object created at cursor position.');
-
-    fetch(`${currentHost}/api/addObject`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(newObject.toJSON())
-    })
-    .then(response => response.json())
-    .then(data => {
-        console.log('Object successfully added to the server:', data);
-    })
-    .catch(error => {
-        console.error('Error adding object to the server:', error);
-    });
-    
 }
+
+document.addEventListener('keydown', onDocumentKeyDown, false);
 
 document.addEventListener('click', onDocumentMouseClick, false);
 
@@ -290,8 +263,6 @@ function onDocumentMouseMove(event: MouseEvent) {
         const intersection = intersects[0];
         cursor.position.copy(intersection.point);
     }
-
-    
 }
 
 document.addEventListener('mousemove', onDocumentMouseMove, false);

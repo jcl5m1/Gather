@@ -1,91 +1,29 @@
 import * as THREE from 'three';
+import { Body } from './types/body'; // Removed as Body is defined in the same file
 import { appendToLog } from './utils'; // Assuming you have a utility function for logging
 import config from './config.json';
 import * as state from './state';
 
-export class Body {
-    id:string;
-    name: string;
-    color: string;
-    radius: GLfloat;
-    shape: string;
-    mass: GLfloat;
-    parent: string;
-    attached: boolean;
-    position: THREE.Vector3;
-    velocity: THREE.Vector3;
-    angularVelocity: THREE.Vector3;
-    mesh: THREE.Mesh;
+export class RenderBody  extends Body {
+    mesh: THREE.Mesh = new THREE.Mesh();
 
-    static fromJSON(json: any): Body {
-        return new Body(
-            json.id,
-            json.name,
-            json.color,
-            json.radius,
-            json.mass,
-            json.shape,
-            json.parent,
-            json.attached,
-            new THREE.Vector3(parseFloat(json.position.x), parseFloat(json.position.y), parseFloat(json.position.z)),
-            new THREE.Vector3(parseFloat(json.velocity.x), parseFloat(json.velocity.y), parseFloat(json.velocity.z)),
-            new THREE.Vector3(parseFloat(json.angularVelocity.x), parseFloat(json.angularVelocity.y), parseFloat(json.angularVelocity.z)),
-        );
+    constructor(init: Partial<Body>) {
+        super(init);
+        this.createMesh();
     }
 
-    toJSON(): any {
-        return {
-            id: this.id,
-            name: this.name,
-            radius: this.radius,
-            mass: this.mass,
-            color: this.color,
-            parent: this.parent,
-            attached: this.attached,
-            position: {
-                x: this.position.x,
-                y: this.position.y,
-                z: this.position.z
-            },
-            velocity: {
-                x: this.velocity.x,
-                y: this.velocity.y,
-                z: this.velocity.z
-            },
-            angularVelocity: {
-                x: this.angularVelocity.x,
-                y: this.angularVelocity.y,
-                z: this.angularVelocity.z
-            }
-        };
+    toJSON() {
+        return super.toJSON();
     }
 
-    constructor(id: string,
-        name: string, 
-        color: string, 
-        radius: GLfloat, 
-        mass: GLfloat,         
-        shape: string,
-        parent: string,        
-        attached: boolean,
-        position: THREE.Vector3, 
-        velocity: THREE.Vector3, 
-        angularVelocity: THREE.Vector3) {
-        this.id = id;
-        this.name = name;
-        this.radius = radius;
-        this.mass = mass;
-        this.color = color;
-        this.shape = shape;
-        this.parent = parent;
-        this.attached = attached;
-        this.position = position;
-        this.velocity = velocity;
-        this.angularVelocity = angularVelocity;
+    static fromJSON(json: any) {
+        return new RenderBody(super.fromJSON(json));
+    }
 
+    createMesh() {
         let geometry: THREE.BufferGeometry;
 
-        switch (shape) {
+        switch (this.shape) {
             case 'Icosahedron':
                 geometry = new THREE.IcosahedronGeometry(this.radius, 10);
                 break;
@@ -140,9 +78,9 @@ export class Body {
         }
 
         //convert color string to THREE.Color
-        const colorValue = parseInt(color.replace(/^#/, ''), 16);
+        const colorValue = parseInt(this.color.replace(/^#/, ''), 16);
         let material = new THREE.MeshPhongMaterial({ color: colorValue, flatShading: true , wireframe: config.RENDER_WIREFRAME});
-        if (name === "Earth") {
+        if (this.name === "Earth") {
 
             state.setFocusBody(this);
 
@@ -152,35 +90,45 @@ export class Body {
                     map: earthTexture,
                     shininess: 10
                 });
-                this.mesh.material = material; // Update the material after the texture is loaded
+                if (this.mesh) {
+                    this.mesh.material = material; // Update the material after the texture is loaded
+                }
             }, undefined, (error) => {
                 appendToLog(`Error loading Earth texture: ${error}`);
             });
         }
         this.mesh = new THREE.Mesh(geometry, material);
-        this.mesh.position.set(this.position.x, this.position.y, this.position.z);
+        if (this.mesh) {
+            this.mesh.position.set(this.position.x, this.position.y, this.position.z);
+        }
 
-        if (this.parent) {
-            const parentObject = state.bodies.find(o => o.id === this.parent);
+        if (this.parentId) {
+            const parentObject = state.bodies.find(o => o.id === this.parentId);
             if (parentObject) {
             const direction = new THREE.Vector3().subVectors(parentObject.position, this.position).normalize();
             const quaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, -1, 0), direction);
             this.mesh.quaternion.copy(quaternion);
             }
         }
-    }
 
+      }
+    
     update() {
         if (this.attached) {
             return;
         }
         this.position.add(this.velocity);
-        this.mesh.position.set(this.position.x, this.position.y, this.position.z);
+        if (this.mesh) {
+            this.mesh.position.set(this.position.x, this.position.y, this.position.z);
+        }
 
         const axis = this.angularVelocity.clone().normalize();
         const angle = this.angularVelocity.length()*1.0;
 
         const quaternion = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-        this.mesh.quaternion.multiplyQuaternions(quaternion, this.mesh.quaternion);
+        if (this.mesh) {
+            this.mesh.quaternion.multiplyQuaternions(quaternion, this.mesh.quaternion);
+        }
     }
 }   
+

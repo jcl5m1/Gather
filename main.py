@@ -12,51 +12,76 @@ db = TinyDB('gamedata.json')
 objects_collection = db.table('objects')
 resources_collection = db.table('resources')
 
+@app.route('/api', methods=['GET'])
+def handleGet():
+    tableId = request.args.get('table')
+    if not tableId:
+        return jsonify({"error": "Table not specified"}), 400
+    table = db.table(tableId)    
+    if not table:
+        return jsonify({"error": "Table not found"}), 404
 
-@app.route('/api/object', methods=['GET'])
-def get_object():
     id = request.args.get('id')
     if not id:
-        return jsonify(objects_collection.all())        
-    obj = objects_collection.search(Query().id == id)
-    if not obj:
-        return jsonify({"error": "Object not found"}), 404
+        return jsonify(table.all())        
+    item = table.search(Query().id == id)
+    if not item:
+        return jsonify({"error": "Id not found"}), 404
     #print log of endpoint and response
     print(f"GET {request.path}?{request.query_string.decode('utf-8')}")
-    return jsonify(obj)
+    return jsonify(item)
 
-@app.route('/api/resource', methods=['GET'])
-def get_resource():
-    id = request.args.get('id')
-    if not id:
-        return jsonify(resources_collection.all())        
-    res = resources_collection.search(Query().id == id)
-    if not res:
-        return jsonify({"error": "Resource not found"}), 404
-    #print log of endpoint and response
-    print(f"GET {request.path}?{request.query_string.decode('utf-8')}")
-    return jsonify(res)
-
-@app.route('/api/addObject', methods=['POST'])
-def addObject():
+@app.route('/api', methods=['POST'])
+def handlePost():
     data = request.get_json()
     if not data:
         return jsonify({"error": "Invalid input"}), 400
-
+    tableId = data.get('table')
+    if not tableId:
+        return jsonify({"error": "Table not specified"}), 400
+    item = data.get('item')
+    if not item:
+        return jsonify({"error": "Item not specified"}), 400
     # Assuming the object has an 'id' field
-    if 'id' not in data or data['id']=="":
+    if 'id' not in item or item['id']=="":
         # Generate a unique id timestamp plus random number
-        data['id'] = str(int(time.time() * 1000000)).zfill(4) + str(random.randint(0, 1000)).zfill(3)
-    objects_collection.insert(data)
+        item['id'] = str(int(time.time() * 1000000)).zfill(4) + str(random.randint(0, 1000)).zfill(3)
+    itemId = item['id']
+    table = db.table(tableId)
+    if not table:
+        return jsonify({"error": "Table not found"}), 404
+    if table.contains(Query().id == itemId):
+        table.update(item, Query().id == itemId)
+    else:
+        table.insert(item)
+
     # Print log of endpoint and response
     print(f"POST {request.path} - {data}")
-    return jsonify({"message": "Object added successfully",
-                    "id": data['id']}), 201
+    return jsonify({"message": "Item added successfully",
+                    "id": item['id'], 
+                    "table": tableId}), 201
+
+@app.route('/api', methods=['DELETE'])
+def handleDelete():
+    tableId = request.args.get('table')
+    if not tableId:
+        return jsonify({"error": "Table not specified"}), 400
+    itemId = request.args.get('id')
+    if not itemId:
+        return jsonify({"error": "Item ID not specified"}), 400
+    collection = db.table(tableId)
+    if not collection.contains(Query().id == itemId):
+        return jsonify({"error": "Item not found"}), 404
+    collection.remove(Query().id == itemId)
+    # Print log of endpoint and response
+    print(f"DELETE {request.path}?{request.query_string.decode('utf-8')}")
+    return jsonify({"message": "Item deleted successfully",
+                    "id": itemId, 
+                    "table": tableId}), 200
 
 @app.route('/')
 def index():
     return send_from_directory(app.static_folder, 'index.html')
-
 
 @app.route('/test')
 def test():
