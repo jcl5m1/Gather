@@ -31,6 +31,9 @@ export function init() {
         console.error('Error fetching inventory data:', error);
         inventory = {};
     });
+
+
+
 }
     
 export function setFocusBody(body: RenderBody | null) {

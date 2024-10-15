@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import { Body } from './types/body'; // Removed as Body is defined in the same file
+import {Body} from './types/body'; // Removed as Body is defined in the same file
 import { appendToLog } from './utils'; // Assuming you have a utility function for logging
 import config from './config.json';
 import * as state from './state';
 
-export class RenderBody  extends Body {
+export class RenderBody extends Body {
     mesh: THREE.Mesh = new THREE.Mesh();
 
     constructor(init: Partial<Body>) {

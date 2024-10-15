@@ -71,13 +71,15 @@ export function setModeUI(mode: string) {
     modeDiv.innerText = `Mode: ${mode}`;
 }
 
-export function updateInventoryUI(inventory: { [key: string]: number }) {
+export async function updateInventoryUI(inventory: { [key: string]: number }) {
     if (!inventoryDiv) {
         return;
     }
     inventoryDiv.innerText = `Inventory:\n`;
     for (const key in inventory) {
-        inventoryDiv.innerText += `${key}: ${inventory[key]}\n`;
+        let resource = await getResourceById(key);
+        if(resource)
+            inventoryDiv.innerText += `${resource.name}: ${inventory[key]}\n`;
     }
 }
 

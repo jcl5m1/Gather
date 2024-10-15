@@ -26,6 +26,7 @@ function init() {
     renderer.domElement.style.border = 'none';
     state.init();
     utils.init(document);
+    utils.setModeUI(state.Mode[state.mode]);
     appendToLog('Initializing scene...');
 
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -53,7 +54,7 @@ function init() {
         RIGHT: THREE.MOUSE.LEFT
     };
 
-    camera.position.z = 20000; // km
+    camera.position.z = 10000; // km
     controls.update();
 
     scene.add(cursor);
@@ -221,13 +222,24 @@ function onDocumentMouseClick(event: MouseEvent) {
                     let obj_data = utils.getById('body',newlySelectedObject.id);
                     obj_data.then(data => {
                         //inefficient to call every time, TODO to cache resource table on client
-                        let resourceId = data[0].referenceId;
-                        utils.getResourceById(resourceId).then(resource => {
-                            if(resource) {
-                                appendToLog(`Resource result: ${resource.name}`);
-                                state.updateInventory(resource.name, 1);
-                            }
-                        })
+
+                        switch(state.mode) {
+                            case state.Mode.Selection:
+                                let resourceId = data[0].referenceId;
+                                utils.getResourceById(resourceId).then(resource => {
+                                    if(resource) {
+                                        appendToLog(`Resource collected: ${resource.name}`);
+                                        state.updateInventory(resource.id, 1);
+                                    }
+                                })
+                                break;
+                            case state.Mode.Build:
+                                appendToLog(`Resource Build: ${data[0].name}`);
+                                break;
+                            case state.Mode.Transport:
+                                appendToLog(`Resource Transport: ${data[0].name}`);
+                                break;
+                        }
                     }).catch(error => { console.error('Error fetching resource:', error); });
                     return
                 }

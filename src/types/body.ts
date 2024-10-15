@@ -1,5 +1,63 @@
 import * as THREE from 'three';
 
+export function Vector3fromJSON(json: any): THREE.Vector3 {
+  return new THREE.Vector3(json.x, json.y, json.z);
+}
+
+export function Vector3toJSON(vector: THREE.Vector3): any {
+  return {
+    x: vector.x,
+    y: vector.y,
+    z: vector.z,
+  };
+}
+
+export function toJSON<T extends object>(obj: T): any {
+  const json: any = {};
+  for (const key in obj) {
+    if (obj.hasOwnProperty(key)) {
+      const value = (obj as any)[key];
+      if (value instanceof THREE.Vector3) {
+        json[key] = Vector3toJSON(value);
+      } else {
+        json[key] = value;
+      }
+    }
+  }
+  return json;
+}
+
+
+// function fromJSON(json: any): Body {
+//   const obj = new Body({});
+//   for (const key in json) {
+//     if (json.hasOwnProperty(key)) {
+//       const value = json[key];
+//       if (value && typeof value === 'object' && 'x' in value && 'y' in value && 'z' in value) {
+//         (obj as any)[key] = Vector3fromJSON(value);
+//       } else {
+//         (obj as any)[key] = value;
+//       }
+//     }
+//   }
+//   return obj;
+// }
+
+export function fromJSON<T extends object>(json: any, cls: new () => T): T {
+  const obj = new cls();
+  for (const key in json) {
+    if (json.hasOwnProperty(key)) {
+      const value = json[key];
+      if (value && typeof value === 'object' && 'x' in value && 'y' in value && 'z' in value) {
+        (obj as any)[key] = Vector3fromJSON(value);
+      } else {
+        (obj as any)[key] = value;
+      }
+    }
+  }
+  return obj;
+}
+
 
 export class Body {
   angularVelocity: THREE.Vector3 = new THREE.Vector3();
@@ -23,64 +81,22 @@ export class Body {
   }
 
   static fromJSON(json: any): Body {
-    return new Body({
-      angularVelocity: new THREE.Vector3(
-        json["angularVelocity"].x,
-        json["angularVelocity"].y,
-        json["angularVelocity"].z
-      ),
-      attached: json["attached"],
-      color: json["color"],
-      id: json["id"],
-      mass: json["mass"],
-      name: json["name"],
-      parentId: json["parentId"],
-      position: new THREE.Vector3(
-        json["position"].x,
-        json["position"].y,
-        json["position"].z
-      ),
-      radius: json["radius"],
-      referenceId: json["referenceId"],
-      referenceTable: json["referenceTable"],
-      shape: json["shape"],
-      timestamp: json["timestamp"],
-      velocity: new THREE.Vector3(
-        json["velocity"].x,
-        json["velocity"].y,
-        json["velocity"].z
-      ),
-    });
+//    return fromJSON(json, Body);
+    const obj = new Body({});
+    for (const key in json) {
+      if (json.hasOwnProperty(key)) {
+        const value = json[key];
+        if (value && typeof value === 'object' && 'x' in value && 'y' in value && 'z' in value) {
+          (obj as any)[key] = Vector3fromJSON(value);
+        } else {
+          (obj as any)[key] = value;
+        }
+      }
+    }
+    return obj;
   }
 
   toJSON(): any {
-    return {
-      angularVelocity: {
-        x: this.angularVelocity.x,
-        y: this.angularVelocity.y,
-        z: this.angularVelocity.z,
-      },
-      attached: this.attached,
-      color: this.color,
-      id: this.id,
-      mass: this.mass,
-      name: this.name,
-      parentId: this.parentId,
-      position: {
-        x: this.position.x,
-        y: this.position.y,
-        z: this.position.z,
-      },
-      radius: this.radius,
-      referenceId: this.referenceId,
-      referenceTable: this.referenceTable,
-      shape: this.shape,
-      timestamp: this.timestamp,
-      velocity: {
-        x: this.velocity.x,
-        y: this.velocity.y,
-        z: this.velocity.z,
-      },
-    };
+    return toJSON(this);
   }
 }
