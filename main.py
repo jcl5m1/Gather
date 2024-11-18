@@ -7,13 +7,10 @@ import time, random
 app = Flask(__name__, static_folder='dist', template_folder='templates')
 CORS(app)  # Enable CORS for all routes
 
-
-db = TinyDB('gamedata.json')
-objects_collection = db.table('objects')
-resources_collection = db.table('resources')
-
 @app.route('/api', methods=['GET'])
 def handleGet():
+    db = TinyDB('gamedata.json')
+
     tableId = request.args.get('table')
     if not tableId:
         return jsonify({"error": "Table not specified"}), 400
@@ -33,7 +30,10 @@ def handleGet():
 
 @app.route('/api', methods=['POST'])
 def handlePost():
+    db = TinyDB('gamedata.json')
+
     data = request.get_json()
+    print(data)
     if not data:
         return jsonify({"error": "Invalid input"}), 400
     tableId = data.get('table')
@@ -43,9 +43,8 @@ def handlePost():
     if not item:
         return jsonify({"error": "Item not specified"}), 400
     # Assuming the object has an 'id' field
-    if 'id' not in item or item['id']=="":
-        # Generate a unique id timestamp plus random number
-        item['id'] = str(int(time.time() * 1000000)).zfill(4) + str(random.randint(0, 1000)).zfill(3)
+    if 'id' not in item or item['id']=='':
+        return jsonify({"error": "Id not specified"}), 400
     itemId = item['id']
     table = db.table(tableId)
     if not table:
@@ -63,6 +62,8 @@ def handlePost():
 
 @app.route('/api', methods=['DELETE'])
 def handleDelete():
+    db = TinyDB('gamedata.json')
+
     tableId = request.args.get('table')
     if not tableId:
         return jsonify({"error": "Table not specified"}), 400

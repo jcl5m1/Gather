@@ -62,16 +62,13 @@ export function fromJSON<T extends object>(json: any, cls: new () => T): T {
 export class Body {
   angularVelocity: THREE.Vector3 = new THREE.Vector3();
   attached: boolean = false;
-  color: string = '';
   id: string = '';
   mass: number = 1.0;
   name: string = 'unidentifed';
   parentId: string = '';
   position: THREE.Vector3 = new THREE.Vector3();
   radius: number = 1.0;
-  referenceId: string = '';
-  referenceTable: string = '';
-  shape: string = 'cube';
+  data: any = {};
   timestamp: number = 0;
   velocity: THREE.Vector3 = new THREE.Vector3();
   [property: string]: any;

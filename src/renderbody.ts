@@ -6,10 +6,11 @@ import * as state from './state';
 
 export class RenderBody extends Body {
     mesh: THREE.Mesh = new THREE.Mesh();
+    color: string = '';
+    shape: string = 'cube';
 
     constructor(init: Partial<Body>) {
         super(init);
-        this.createMesh();
     }
 
     toJSON() {
@@ -17,7 +18,11 @@ export class RenderBody extends Body {
     }
 
     static fromJSON(json: any) {
-        return new RenderBody(super.fromJSON(json));
+        let rb = new RenderBody(super.fromJSON(json));
+        rb.color = json.color;
+        rb.shape = json.shape;
+        rb.createMesh();
+        return rb;
     }
 
     createMesh() {

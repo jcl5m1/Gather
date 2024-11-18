@@ -5,6 +5,7 @@ import config from './config.json';
 import { appendToLog } from './utils'; // Assuming you have a utility function for logging
 import * as utils from './utils';
 import * as state from './state';
+import { Body } from './types/body';
 
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
@@ -103,7 +104,7 @@ function init() {
 
     async function updateHoverText(intersectedBody: RenderBody, event: MouseEvent) {
         if (intersectedBody && intersectedBody.name === "Resource") {
-            const resource = await utils.getResourceById(intersectedBody.referenceId);
+            const resource = await utils.getResourceById(intersectedBody.data.referenceId);
             if (resource) {
                 utils.hoverTextDiv.style.position = 'absolute';
                 utils.hoverTextDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
@@ -157,9 +158,6 @@ function init() {
     fetch(`${utils.currentHost}/api?table=body`)
         .then(response => response.json())
         .then(data => {
-
-            let earth: RenderBody;
-
             data.forEach((item: any, index: number) => {
                 let obj = RenderBody.fromJSON(item);
                 state.bodies.push(obj);
@@ -191,9 +189,7 @@ function highlightSelectedBody(body: RenderBody | null) {
     if (body === selectedBody) {
         return;
     }
-    if(body?.name === "Earth") {  
-        body = null;
-    }
+
     if (selectedBody) {
         // Reset the color of the previously selected object
         (selectedBody.mesh.material as THREE.MeshBasicMaterial).color.set(selectedBody.color);
@@ -201,7 +197,9 @@ function highlightSelectedBody(body: RenderBody | null) {
     if (body) {
         // Highlight the new selected object
         appendToLog(`Selected: ${body.name} ${body.id} `);
-        (body.mesh.material as THREE.MeshBasicMaterial).color.set(config.SELECTED_COLOR);
+        if(body.name != "Earth") {
+            (body.mesh.material as THREE.MeshBasicMaterial).color.set(config.SELECTED_COLOR);
+        }
     }
     selectedBody = body;
 }
@@ -218,31 +216,11 @@ function onDocumentMouseClick(event: MouseEvent) {
         let newlySelectedObject = state.bodies.find(obj => obj.mesh === intersection.object) ?? null;
         if (newlySelectedObject) {
             if (newlySelectedObject === selectedBody) {
-                if (newlySelectedObject.name === "Resource") {
-                    let obj_data = utils.getById('body',newlySelectedObject.id);
-                    obj_data.then(data => {
-                        //inefficient to call every time, TODO to cache resource table on client
-
-                        switch(state.mode) {
-                            case state.Mode.Selection:
-                                let resourceId = data[0].referenceId;
-                                utils.getResourceById(resourceId).then(resource => {
-                                    if(resource) {
-                                        appendToLog(`Resource collected: ${resource.name}`);
-                                        state.updateInventory(resource.id, 1);
-                                    }
-                                })
-                                break;
-                            case state.Mode.Build:
-                                appendToLog(`Resource Build: ${data[0].name}`);
-                                break;
-                            case state.Mode.Transport:
-                                appendToLog(`Resource Transport: ${data[0].name}`);
-                                break;
-                        }
-                    }).catch(error => { console.error('Error fetching resource:', error); });
-                    return
-                }
+                let obj_data = utils.getById('body',newlySelectedObject.id);
+                obj_data.then(data => {
+                    handleAction(data[0], intersection);
+                }).catch(error => { console.error('Error fetching resource:', error); });
+                return
             }
             highlightSelectedBody(newlySelectedObject);
         }
@@ -253,11 +231,82 @@ function onDocumentMouseClick(event: MouseEvent) {
     
 }
 
+function handleAction(body: any, intersection: THREE.Intersection) {
+    //inefficient to call every time, TODO to cache resource table on client
+    switch(state.mode) {
+        case state.Mode.Selection:
+            switch(body.name) {
+                case 'Resource':
+                    state.updateInventory(body.data.referenceId, 1);
+                    break;
+                case 'Earth':
+                    appendToLog(`Select Earth: ${body.name}`);
+                    state.setFocusBody(body);
+                    break;
+                case 'Strucutre':
+                    appendToLog(`Select Structure: ${body.name}`);
+                    break;
+            }
+            break;
+        case state.Mode.Build:
+            switch(body.name) {
+                case 'Resource':
+                    appendToLog(`Resource Build: ${body.name}`);
+                    //build miner
+                    break;
+                case 'Earth':
+                    appendToLog(`Earth Build: ${body.name} ${JSON.stringify(intersection.point)}`);
+                    //build factory
+                    break;
+                case 'Structure':
+                    //upgrade 
+                    appendToLog(`Structure Build: ${body.name}`);
+                    break;
+
+            }
+            break;
+        case state.Mode.Transport:
+            appendToLog(`Transport not yet supported: ${body.name}`);
+            break;
+    }
+}
+
+
 function onDocumentKeyDown(event: KeyboardEvent) {
     if (event.key === 'm' || event.key === 'M') {
         state.setMode((state.mode + 1) % (Object.keys(state.Mode).length/2));
         appendToLog(`Mode changed to: ${state.Mode[state.mode]}`);
     }
+
+    if (event.key === 't' || event.key === 'T') {
+        console.log("test");
+        // create empty invntory
+        const invetoryUUID = utils.generateUUID()
+        const inventoryJSON = {
+            id:invetoryUUID,
+            inventory: {}
+        }
+        utils.postToTable('inventory', inventoryJSON)
+
+        //create body
+        const bodyUUID = utils.generateUUID()
+        const partialBody: Partial<Body> = {
+            id: bodyUUID,
+            name: 'Structure',
+            position: new THREE.Vector3(1, 2, 3),
+            data: {
+                refernceId: "Factory",
+                referenceTable: "Structure",
+                inventoryId: invetoryUUID
+            }
+          };
+        const bodyJSON = new Body(partialBody).toJSON()
+        console.log(bodyJSON);
+        utils.postToTable('inventory', bodyJSON)
+
+        //utils.postToTable('test', bodyJSON);
+    }
+
 }
 
 document.addEventListener('keydown', onDocumentKeyDown, false);

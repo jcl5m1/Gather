@@ -4,6 +4,7 @@ export let modeDiv: HTMLDivElement;
 export let hoverTextDiv: HTMLDivElement;
 import { Resource } from './types/resource'; // Removed as Body is defined in the same file
 export let resourceTable: Resource[] = [];
+import { v4 as uuidv4 } from 'uuid';
 
 export function init(document: Document) {
     logDiv = document.createElement('div');
@@ -103,7 +104,6 @@ export async function getResourceById(id: string) {
 
 export const currentHost = `http://${window.location.hostname}:8010`;
 export async function getById(table: string, id: string) {
-
     // use cached resource table
     if(table === 'resource') {
         return getResourceById(id);
@@ -121,6 +121,36 @@ export async function getById(table: string, id: string) {
         })
         .catch(error => {
             console.error(`Error fetching ${table}:`, error);
+            throw error;
+        });
+}
+
+export function generateUUID() {
+    return uuidv4();
+}
+
+export async function postToTable(table: string, json: any) {
+    const data = {
+        table: table,
+        item: json
+    }
+
+    console.log(`Posting to ${table}`);
+    return fetch(`${currentHost}/api`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+    })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Error posting to ${table}: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .catch(error => {
+            console.error(`Error posting to ${table}:`, error);
             throw error;
         });
 }
