@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>REST API Example</title>
+</head>
+<body>
+    <h2>REST API Test</h2>
+    <pre id="output"></pre>
+
+    <script>
+        const API_URL = "https://script.google.com/macros/s/AKfycbxGMvkhLAjQ1yv-nfOyV_Y5rPPHocETUQm8Pifvh7KxF4JafTw4wVwjc2M8-3b3CLM8Mw/exec";
+
+        async function get(url, payload) {
+            try {
+                // Convert payload to query string
+                const queryString = new URLSearchParams(payload).toString();
+                const fullUrl = `${url}?${queryString}`;
+
+                // Send GET request
+                const response = await fetch(fullUrl);
+                
+                // Log to output div
+                const output = document.getElementById('output');
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    output.textContent += "Item retrieved successfully!\n";
+                    output.textContent += "Response: " + JSON.stringify(data, null, 2) + "\n\n";
+                    return data;
+                } else {
+                    output.textContent += `Failed to retrieve item. Status code: ${response.status}\n`;
+                    output.textContent += "Response: " + await response.text() + "\n\n";
+                    return null;
+                }
+            } catch (error) {
+                const output = document.getElementById('output');
+                output.textContent += `An error occurred: ${error}\n\n`;
+                return null;
+            }
+        }
+
+        // Test the GET operation
+        const payload = {
+            operation: "read",
+            table: "bodies",
+        };
+
+        // Execute the GET request when page loads
+        window.onload = () => get(API_URL, payload);
+    </script>
+</body>
+</html>
