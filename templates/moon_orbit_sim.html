@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Moon Orbit Simulation</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px;
+            font-family: Arial, sans-serif;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        label {
+            display: inline-block;
+            width: 120px;
+        }
+        .slider-container {
+            margin-top: 10px;
+            padding: 10px;
+            border-top: 1px solid #666;
+        }
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <div id="orbitType" style="background: rgba(255,255,255,0.2); padding: 5px; margin-bottom: 10px; text-align: center;">
+            Orbit Type: Unknown
+        </div>
+        <div class="control-group">
+            <h3>Moon Parameters</h3>
+            <div>
+                <label>Position X:</label>
+                <input type="number" id="posX" value="15" step="1">
+            </div>
+            <div>
+                <label>Position Y:</label>
+                <input type="number" id="posY" value="0" step="1">
+            </div>
+            <div>
+                <label>Position Z:</label>
+                <input type="number" id="posZ" value="0" step="1">
+            </div>
+            <div>
+                <label>Velocity X:</label>
+                <input type="number" id="velX" value="0" step="0.1">
+            </div>
+            <div>
+                <label>Velocity Y:</label>
+                <input type="number" id="velY" value="10.0" step="0.1">
+            </div>
+            <div>
+                <label>Velocity Z:</label>
+                <input type="number" id="velZ" value="0" step="0.1">
+            </div>
+            <div>
+                <label>Mass:</label>
+                <input type="number" id="mass" value="0.1" step="0.1">
+            </div>
+        </div>
+        <button onclick="resetSimulation()">Reset Simulation</button>
+        <div class="slider-container">
+            <div class="slider-label">
+                <span>Time Scale: </span>
+                <span id="timeScaleValue">1.0x</span>
+            </div>
+            <input type="range" id="timeScale" min="1" max="1000" step="0.1" value="1" style="width: 100%">
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // Constants
+        const G = 1; // Simplified gravitational constant for visualization
+        const SCALE = 1; // Scale factor for visualization
+        let timeScale = 1.0; // Time scale multiplier
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Add OrbitControls
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(5, 3, 5);
+        scene.add(directionalLight);
+
+        // Planet
+        const planetGeometry = new THREE.SphereGeometry(2, 32, 32);
+        const planetMaterial = new THREE.MeshPhongMaterial({ color: 0x3366cc });
+        const planet = new THREE.Mesh(planetGeometry, planetMaterial);
+        scene.add(planet);
+
+        // Moon
+        const moonGeometry = new THREE.SphereGeometry(0.5, 32, 32);
+        const moonMaterial = new THREE.MeshPhongMaterial({ color: 0xcccccc });
+        const moon = new THREE.Mesh(moonGeometry, moonMaterial);
+        scene.add(moon);
+
+        // Periapsis and Apoapsis markers (unlit)
+        const markerGeometry = new THREE.SphereGeometry(0.2, 16, 16);
+        const periapsisMarker = new THREE.Mesh(
+            markerGeometry,
+            new THREE.MeshBasicMaterial({ color: 0x00ff00 })
+        );
+        const apoapsisMarker = new THREE.Mesh(
+            markerGeometry,
+            new THREE.MeshBasicMaterial({ color: 0xff0000 })
+        );
+        scene.add(periapsisMarker);
+        scene.add(apoapsisMarker);
+
+        // Actual orbit trail line
+        const orbitGeometry = new THREE.BufferGeometry();
+        const orbitMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.5 });
+        const orbitLine = new THREE.Line(orbitGeometry, orbitMaterial);
+        scene.add(orbitLine);
+
+        // Idealized elliptical orbit line
+        const idealOrbitGeometry = new THREE.BufferGeometry();
+        const idealOrbitMaterial = new THREE.LineBasicMaterial({ 
+            color: 0x00ffff, 
+            opacity: 0.8,
+            transparent: true 
+        });
+        const idealOrbitLine = new THREE.Line(idealOrbitGeometry, idealOrbitMaterial);
+        scene.add(idealOrbitLine);
+
+        // Camera position
+        camera.position.set(30, 20, 30);
+        camera.lookAt(scene.position);
+
+        // Moon state
+        let moonState = {
+            position: new THREE.Vector3(),
+            velocity: new THREE.Vector3(),
+            mass: 0.1
+        };
+
+        // Planet state
+        const planetState = {
+            position: new THREE.Vector3(0, 0, 0),
+            mass: 1000 // Much larger than moon for stable orbit
+        };
+
+        // Generate points for an elliptical orbit
+        function generateEllipsePoints(a, e, h, eVec) {
+            const points = [];
+            const numPoints = 100;
+            const b = a * Math.sqrt(1 - e * e); // semi-minor axis
+            const c = a * e; // distance from center to focus
+
+            // Normalize vectors
+            const hNorm = h.clone().normalize();
+            const eNorm = eVec.clone().normalize();
+            
+            // Calculate orbit plane basis vectors
+            const periapsisDir = eNorm;
+            const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
+            
+            // Calculate center of ellipse (offset from focus by -c along periapsis direction)
+            const center = periapsisDir.clone().multiplyScalar(-c);
+            
+            // Generate ellipse points in the orbit plane
+            for (let i = 0; i <= numPoints; i++) {
+                const theta = (i / numPoints) * Math.PI * 2;
+                
+                // Calculate point relative to ellipse center
+                const point = new THREE.Vector3();
+                point.addScaledVector(periapsisDir, a * Math.cos(theta));
+                point.addScaledVector(perpDir, b * Math.sin(theta));
+                
+                // Add center offset to get final point
+                point.add(center);
+                
+                points.push(point);
+            }
+            
+            return points;
+        }
+
+        // Time scale slider
+        const timeScaleSlider = document.getElementById('timeScale');
+        const timeScaleValue = document.getElementById('timeScaleValue');
+        
+        timeScaleSlider.addEventListener('input', function(e) {
+            timeScale = parseFloat(e.target.value);
+            timeScaleValue.textContent = timeScale.toFixed(1) + 'x';
+        });
+
+        // Add event listener for Enter key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                resetSimulation();
+            }
+        });
+
+        function calculateOrbitType() {
+            // Calculate specific orbital energy
+            const v = moonState.velocity.length();
+            const r = moonState.position.length();
+            const mu = G * planetState.mass;
+            const specificEnergy = (v * v / 2) - (mu / r);
+            
+            const orbitTypeDiv = document.getElementById('orbitType');
+            if (specificEnergy < 0) {
+                // Calculate orbital parameters for elliptical orbit
+                const pos = moonState.position.clone();
+                const vel = moonState.velocity.clone();
+                
+                // Calculate specific angular momentum (h = r × v)
+                const h = new THREE.Vector3().crossVectors(pos, vel);
+                
+                // Calculate eccentricity vector
+                const hMag = h.length();
+                const vMag = vel.length();
+                const rMag = pos.length();
+                
+                // e = ((v × h)/μ) - (r/|r|)
+                const vCrossH = new THREE.Vector3().crossVectors(vel, h);
+                const eVec = vCrossH.multiplyScalar(1/mu).sub(pos.normalize());
+                const e = eVec.length();
+                
+                // Calculate semi-major axis
+                const a = -mu / (2 * specificEnergy);
+                
+                // Calculate periapsis and apoapsis distances
+                const periapsisDistance = a * (1 - e);
+                const apoapsisDistance = a * (1 + e);
+                
+                // Update markers and ideal orbit
+                if (e < 1) { // Only show markers for valid elliptical orbits
+                    // Get the direction of eccentricity vector for periapsis
+                    const periapsisDir = eVec.normalize();
+                    const apoapsisDir = periapsisDir.clone().multiplyScalar(-1);
+                    
+                    periapsisMarker.position.copy(periapsisDir.multiplyScalar(periapsisDistance));
+                    apoapsisMarker.position.copy(apoapsisDir.multiplyScalar(apoapsisDistance));
+                    
+                    periapsisMarker.visible = true;
+                    apoapsisMarker.visible = true;
+
+                    // Generate and update ideal elliptical orbit
+                    const ellipsePoints = generateEllipsePoints(a, e, h, eVec);
+                    idealOrbitGeometry.setFromPoints(ellipsePoints);
+                    idealOrbitLine.visible = true;
+                    
+                    orbitTypeDiv.innerHTML = `Orbit Type: Elliptical<br>
+                        Semi-major axis: ${a.toFixed(2)}<br>
+                        Eccentricity: ${e.toFixed(3)}<br>
+                        Periapsis: ${periapsisDistance.toFixed(2)}<br>
+                        Apoapsis: ${apoapsisDistance.toFixed(2)}`;
+                } else {
+                    periapsisMarker.visible = false;
+                    apoapsisMarker.visible = false;
+                    idealOrbitLine.visible = false;
+                    orbitTypeDiv.textContent = 'Orbit Type: Elliptical (near parabolic)';
+                }
+                orbitTypeDiv.style.color = '#90EE90'; // Light green
+            } else if (specificEnergy > 0) {
+                periapsisMarker.visible = false;
+                apoapsisMarker.visible = false;
+                idealOrbitLine.visible = false;
+                orbitTypeDiv.textContent = 'Orbit Type: Hyperbolic';
+                orbitTypeDiv.style.color = '#FFB6C1'; // Light red
+            } else {
+                periapsisMarker.visible = false;
+                apoapsisMarker.visible = false;
+                idealOrbitLine.visible = false;
+                orbitTypeDiv.textContent = 'Orbit Type: Parabolic';
+                orbitTypeDiv.style.color = '#ADD8E6'; // Light blue
+            }
+        }
+
+        function resetSimulation() {
+            // Get values from inputs
+            moonState.position.set(
+                parseFloat(document.getElementById('posX').value),
+                parseFloat(document.getElementById('posY').value),
+                parseFloat(document.getElementById('posZ').value)
+            );
+            moonState.velocity.set(
+                parseFloat(document.getElementById('velX').value),
+                parseFloat(document.getElementById('velY').value),
+                parseFloat(document.getElementById('velZ').value)
+            );
+            moonState.mass = parseFloat(document.getElementById('mass').value);
+
+            // Clear orbit trail
+            orbitPoints.length = 0;
+            orbitGeometry.setFromPoints([moonState.position]);
+
+            // Calculate and display orbit type
+            calculateOrbitType();
+        }
+
+        // Animation variables
+        const dt = 0.001; // Base time step
+        const orbitPoints = [];
+        const maxOrbitPoints = 5000; // Increased to show more of the orbit
+
+        function updateOrbit() {
+            // Apply time scale to simulation steps
+            const scaledDt = dt * timeScale;
+            
+            // Calculate gravitational force
+            const r = moonState.position.clone().sub(planetState.position);
+            const distance = r.length();
+            
+            // Prevent division by zero and extreme forces at very small distances
+            if (distance < 2.5) {
+                return;
+            }
+            
+            const force = r.normalize().multiplyScalar(
+                -G * moonState.mass * planetState.mass / (distance * distance)
+            );
+
+            // Update velocity and position using Euler integration
+            moonState.velocity.add(force.multiplyScalar(scaledDt / moonState.mass));
+            moonState.position.add(moonState.velocity.clone().multiplyScalar(scaledDt));
+
+            // Update moon position
+            moon.position.copy(moonState.position);
+
+            // Update orbit trail
+            orbitPoints.push(moonState.position.clone());
+            if (orbitPoints.length > maxOrbitPoints) orbitPoints.shift();
+            orbitGeometry.setFromPoints(orbitPoints);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updateOrbit();
+            controls.update(); // Update controls
+            renderer.render(scene, camera);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', onWindowResize, false);
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Initialize simulation
+        resetSimulation();
+        animate();
+    </script>
+</body>
+</html>
