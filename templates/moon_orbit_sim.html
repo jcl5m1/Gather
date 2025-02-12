@@ -111,11 +111,14 @@
         const planet = new THREE.Mesh(planetGeometry, planetMaterial);
         scene.add(planet);
 
-        // Moon
+        // Moons
         const moonGeometry = new THREE.SphereGeometry(0.5, 32, 32);
-        const moonMaterial = new THREE.MeshPhongMaterial({ color: 0xcccccc });
-        const moon = new THREE.Mesh(moonGeometry, moonMaterial);
-        scene.add(moon);
+        const moon1Material = new THREE.MeshPhongMaterial({ color: 0xcccccc });
+        const moon2Material = new THREE.MeshPhongMaterial({ color: 0xff9999 });
+        const moon1 = new THREE.Mesh(moonGeometry, moon1Material);
+        const moon2 = new THREE.Mesh(moonGeometry, moon2Material);
+        scene.add(moon1);
+        scene.add(moon2);
 
         // Periapsis and Apoapsis markers (unlit)
         const markerGeometry = new THREE.SphereGeometry(0.2, 16, 16);
@@ -130,11 +133,15 @@
         scene.add(periapsisMarker);
         scene.add(apoapsisMarker);
 
-        // Actual orbit trail line
-        const orbitGeometry = new THREE.BufferGeometry();
-        const orbitMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.5 });
-        const orbitLine = new THREE.Line(orbitGeometry, orbitMaterial);
-        scene.add(orbitLine);
+        // Orbit trail lines
+        const orbit1Geometry = new THREE.BufferGeometry();
+        const orbit2Geometry = new THREE.BufferGeometry();
+        const orbit1Material = new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.5 });
+        const orbit2Material = new THREE.LineBasicMaterial({ color: 0xff9999, opacity: 0.5 });
+        const orbit1Line = new THREE.Line(orbit1Geometry, orbit1Material);
+        const orbit2Line = new THREE.Line(orbit2Geometry, orbit2Material);
+        scene.add(orbit1Line);
+        scene.add(orbit2Line);
 
         // Idealized elliptical orbit line
         const idealOrbitGeometry = new THREE.BufferGeometry();
@@ -150,11 +157,25 @@
         camera.position.set(30, 20, 30);
         camera.lookAt(scene.position);
 
-        // Moon state
-        let moonState = {
+        // Moon states
+        let moon1State = {
             position: new THREE.Vector3(),
             velocity: new THREE.Vector3(),
             mass: 0.1
+        };
+
+        let moon2State = {
+            position: new THREE.Vector3(),
+            velocity: new THREE.Vector3(),
+            mass: 0.1,
+            initialPos: new THREE.Vector3(),
+            initialVel: new THREE.Vector3(),
+            orbitParams: {
+                a: 0,        // semi-major axis
+                e: 0,        // eccentricity
+                period: 0,   // orbital period
+                startTime: 0 // time reference for orbit calculation
+            }
         };
 
         // Planet state
@@ -162,6 +183,72 @@
             position: new THREE.Vector3(0, 0, 0),
             mass: 1000 // Much larger than moon for stable orbit
         };
+
+        // Function to calculate initial eccentric anomaly
+        function calculateInitialE(initialPos, initialVel, a, e, mu) {
+            // Calculate specific angular momentum vector
+            const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
+            
+            // Calculate radius and velocity magnitudes
+            const r = initialPos.length();
+            const v = initialVel.length();
+            
+            // Calculate radial velocity component
+            const radialVel = initialVel.dot(initialPos.clone().normalize());
+            
+            // Calculate true anomaly directly from position and velocity
+            const theta = Math.atan2(
+                h.length() * radialVel,
+                h.length() * h.length() / r - mu
+            );
+            
+            // Convert true anomaly to eccentric anomaly
+            // Handle the quadrant correctly based on radial velocity
+            const E = 2 * Math.atan(Math.sqrt((1 - e) / (1 + e)) * Math.tan(theta / 2));
+            return E;
+        }
+
+        // Function to calculate position on elliptical orbit
+        function calculateEllipticalPosition(time, a, e, period, startTime, initialPos, initialVel) {
+            const mu = G * planetState.mass;
+            const E0 = calculateInitialE(initialPos, initialVel, a, e, mu);
+            
+            // Mean anomaly at t=0
+            const M0 = E0 - e * Math.sin(E0);
+            
+            // Current mean anomaly
+            const M = M0 + 2 * Math.PI * ((time - startTime) / period);
+            
+            // Solve Kepler's equation iteratively (M = E - e*sin(E))
+            let E = M; // Initial guess
+            for(let i = 0; i < 10; i++) {
+                E = M + e * Math.sin(E);
+            }
+            
+            // Calculate position in orbital plane coordinates
+            const x = a * (Math.cos(E) - e);
+            const y = a * Math.sqrt(1 - e*e) * Math.sin(E);
+            
+            // Calculate orbit orientation vectors
+            const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
+            const hNorm = h.clone().normalize();
+            
+            // Calculate eccentricity vector
+            const vCrossH = new THREE.Vector3().crossVectors(initialVel, h);
+            const eVec = vCrossH.multiplyScalar(1/mu).sub(initialPos.clone().normalize());
+            const eNorm = eVec.clone().normalize();
+            
+            // Calculate orbit plane basis vectors
+            const periapsisDir = eNorm;
+            const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
+            
+            // Transform from orbital plane to 3D space
+            const position = new THREE.Vector3();
+            position.addScaledVector(periapsisDir, x);
+            position.addScaledVector(perpDir, y);
+            
+            return position;
+        }
 
         // Generate points for an elliptical orbit
         function generateEllipsePoints(a, e, h, eVec) {
@@ -217,16 +304,16 @@
 
         function calculateOrbitType() {
             // Calculate specific orbital energy
-            const v = moonState.velocity.length();
-            const r = moonState.position.length();
+            const v = moon1State.velocity.length();
+            const r = moon1State.position.length();
             const mu = G * planetState.mass;
             const specificEnergy = (v * v / 2) - (mu / r);
             
             const orbitTypeDiv = document.getElementById('orbitType');
             if (specificEnergy < 0) {
                 // Calculate orbital parameters for elliptical orbit
-                const pos = moonState.position.clone();
-                const vel = moonState.velocity.clone();
+                const pos = moon1State.position.clone();
+                const vel = moon1State.velocity.clone();
                 
                 // Calculate specific angular momentum (h = r × v)
                 const h = new THREE.Vector3().crossVectors(pos, vel);
@@ -294,21 +381,56 @@
 
         function resetSimulation() {
             // Get values from inputs
-            moonState.position.set(
+            const pos = new THREE.Vector3(
                 parseFloat(document.getElementById('posX').value),
                 parseFloat(document.getElementById('posY').value),
                 parseFloat(document.getElementById('posZ').value)
             );
-            moonState.velocity.set(
+            const vel = new THREE.Vector3(
                 parseFloat(document.getElementById('velX').value),
                 parseFloat(document.getElementById('velY').value),
                 parseFloat(document.getElementById('velZ').value)
             );
-            moonState.mass = parseFloat(document.getElementById('mass').value);
+            const mass = parseFloat(document.getElementById('mass').value);
 
-            // Clear orbit trail
-            orbitPoints.length = 0;
-            orbitGeometry.setFromPoints([moonState.position]);
+            // Set states for both moons
+            moon1State.position.copy(pos);
+            moon1State.velocity.copy(vel);
+            moon1State.mass = mass;
+
+            moon2State.position.copy(pos);
+            moon2State.velocity.copy(vel);
+            moon2State.mass = mass;
+            moon2State.initialPos.copy(pos);
+            moon2State.initialVel.copy(vel);
+
+            // Calculate orbital parameters for moon2
+            const mu = G * planetState.mass;
+            const r = pos.length();
+            const v = vel.length();
+            const h = new THREE.Vector3().crossVectors(pos, vel).length();
+            
+            // Calculate orbital elements
+            const specificEnergy = (v * v / 2) - (mu / r);
+            const a = -mu / (2 * specificEnergy);
+            const e = Math.sqrt(1 + (2 * specificEnergy * h * h) / (mu * mu));
+            const period = 2 * Math.PI * Math.sqrt(Math.pow(a, 3) / mu);
+
+            moon2State.orbitParams = {
+                a: a,
+                e: e,
+                period: period,
+                startTime: 0
+            };
+
+            // Clear orbit trails
+            orbit1Points.length = 0;
+            orbit2Points.length = 0;
+            orbit1Geometry.setFromPoints([pos]);
+            orbit2Geometry.setFromPoints([pos]);
+
+            // Reset current time
+            currentTime = 0;
 
             // Calculate and display orbit type
             calculateOrbitType();
@@ -316,37 +438,53 @@
 
         // Animation variables
         const dt = 0.001; // Base time step
-        const orbitPoints = [];
+        const orbit1Points = [];
+        const orbit2Points = [];
         const maxOrbitPoints = 5000; // Increased to show more of the orbit
+        let currentTime = 0;
 
         function updateOrbit() {
             // Apply time scale to simulation steps
             const scaledDt = dt * timeScale;
+            currentTime += scaledDt;
             
-            // Calculate gravitational force
-            const r = moonState.position.clone().sub(planetState.position);
+            // Update moon1 using numerical integration
+            const r = moon1State.position.clone().sub(planetState.position);
             const distance = r.length();
             
             // Prevent division by zero and extreme forces at very small distances
-            if (distance < 2.5) {
-                return;
+            if (distance >= 2.5) {
+                const force = r.normalize().multiplyScalar(
+                    -G * moon1State.mass * planetState.mass / (distance * distance)
+                );
+
+                // Update velocity and position using Euler integration
+                moon1State.velocity.add(force.multiplyScalar(scaledDt / moon1State.mass));
+                moon1State.position.add(moon1State.velocity.clone().multiplyScalar(scaledDt));
             }
-            
-            const force = r.normalize().multiplyScalar(
-                -G * moonState.mass * planetState.mass / (distance * distance)
+
+            // Update moon2 using analytical solution
+            moon2State.position = calculateEllipticalPosition(
+                currentTime,
+                moon2State.orbitParams.a,
+                moon2State.orbitParams.e,
+                moon2State.orbitParams.period,
+                moon2State.orbitParams.startTime,
+                moon2State.initialPos,
+                moon2State.initialVel
             );
 
-            // Update velocity and position using Euler integration
-            moonState.velocity.add(force.multiplyScalar(scaledDt / moonState.mass));
-            moonState.position.add(moonState.velocity.clone().multiplyScalar(scaledDt));
+            // Update moon positions
+            moon1.position.copy(moon1State.position);
+            moon2.position.copy(moon2State.position);
 
-            // Update moon position
-            moon.position.copy(moonState.position);
-
-            // Update orbit trail
-            orbitPoints.push(moonState.position.clone());
-            if (orbitPoints.length > maxOrbitPoints) orbitPoints.shift();
-            orbitGeometry.setFromPoints(orbitPoints);
+            // Update orbit trails
+            orbit1Points.push(moon1State.position.clone());
+            orbit2Points.push(moon2State.position.clone());
+            if (orbit1Points.length > maxOrbitPoints) orbit1Points.shift();
+            if (orbit2Points.length > maxOrbitPoints) orbit2Points.shift();
+            orbit1Geometry.setFromPoints(orbit1Points);
+            orbit2Geometry.setFromPoints(orbit2Points);
         }
 
         function animate() {
