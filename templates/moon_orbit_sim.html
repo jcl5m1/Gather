@@ -153,6 +153,153 @@
         const idealOrbitLine = new THREE.Line(idealOrbitGeometry, idealOrbitMaterial);
         scene.add(idealOrbitLine);
 
+        // Bezier curve approximation
+        const bezierOrbitGeometry = new THREE.BufferGeometry();
+        const bezierOrbitMaterial = new THREE.LineBasicMaterial({ 
+            color: 0x00ff00, 
+            opacity: 0.8,
+            transparent: true 
+        });
+        const bezierOrbitLine = new THREE.Line(bezierOrbitGeometry, bezierOrbitMaterial);
+        scene.add(bezierOrbitLine);
+
+        // Control points visualization
+        const controlPointGeometry = new THREE.SphereGeometry(0.1, 8, 8);
+        const controlPointMaterial = new THREE.MeshBasicMaterial({ color: 0xff00ff });
+        const controlPoints = [];
+        for (let i = 0; i < 12; i++) { // 12 control points total (4 curves * 3 control points each, with shared endpoints)
+            const point = new THREE.Mesh(controlPointGeometry, controlPointMaterial);
+            point.visible = false;
+            scene.add(point);
+            controlPoints.push(point);
+        }
+
+        // Control point connection lines
+        const controlLineMaterial = new THREE.LineBasicMaterial({ 
+            color: 0xff00ff,
+            opacity: 0.5,
+            transparent: true
+        });
+        const controlLines = [];
+        for (let i = 0; i < 8; i++) { // 8 lines (2 per curve segment)
+            const lineGeometry = new THREE.BufferGeometry();
+            const line = new THREE.Line(lineGeometry, controlLineMaterial);
+            line.visible = false;
+            scene.add(line);
+            controlLines.push(line);
+        }
+
+        // BezierCurve class for orbit approximation
+        class BezierCurve {
+            constructor(p0, p1, p2, p3) {
+                this.p0 = p0;
+                this.p1 = p1;
+                this.p2 = p2;
+                this.p3 = p3;
+            }
+
+            getPoint(t) {
+                const point = new THREE.Vector3();
+                const mt = 1 - t;
+                const mt2 = mt * mt;
+                const mt3 = mt2 * mt;
+                const t2 = t * t;
+                const t3 = t2 * t;
+
+                point.x = mt3 * this.p0.x + 3 * mt2 * t * this.p1.x + 3 * mt * t2 * this.p2.x + t3 * this.p3.x;
+                point.y = mt3 * this.p0.y + 3 * mt2 * t * this.p1.y + 3 * mt * t2 * this.p2.y + t3 * this.p3.y;
+                point.z = mt3 * this.p0.z + 3 * mt2 * t * this.p1.z + 3 * mt * t2 * this.p2.z + t3 * this.p3.z;
+
+                return point;
+            }
+        }
+
+        // Function to generate Bezier curve approximation of elliptical orbit
+        function generateBezierOrbitPoints(a, e, h, eVec) {
+            const points = [];
+            const numPointsPerCurve = 25; // 25 points per curve segment
+            const b = a * Math.sqrt(1 - e * e); // semi-minor axis
+            const c = a * e; // distance from center to focus
+
+            // Normalize vectors
+            const hNorm = h.clone().normalize();
+            const eNorm = eVec.clone().normalize();
+            
+            // Calculate orbit plane basis vectors
+            const periapsisDir = eNorm;
+            const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
+            
+            // Calculate center of ellipse (offset from focus by -c along periapsis direction)
+            const center = periapsisDir.clone().multiplyScalar(-c);
+
+            // Control points for the four Bezier curves
+            // Using approximation method with control points at 0, 90, 180, 270, 360 degrees
+            const k = 0.551915024494; // Magic number to approximate circle with Bezier curves
+            
+            const p0 = new THREE.Vector3(a, 0, 0);
+            const p1 = new THREE.Vector3(a, b * k, 0);
+            const p2 = new THREE.Vector3(a * k, b, 0);
+            const p3 = new THREE.Vector3(0, b, 0);
+            const p4 = new THREE.Vector3(-a * k, b, 0);
+            const p5 = new THREE.Vector3(-a, b * k, 0);
+            const p6 = new THREE.Vector3(-a, 0, 0);
+            const p7 = new THREE.Vector3(-a, -b * k, 0);
+            const p8 = new THREE.Vector3(-a * k, -b, 0);
+            const p9 = new THREE.Vector3(0, -b, 0);
+            const p10 = new THREE.Vector3(a * k, -b, 0);
+            const p11 = new THREE.Vector3(a, -b * k, 0);
+
+            // Create four Bezier curves
+            const curves = [
+                new BezierCurve(p0, p1, p2, p3),
+                new BezierCurve(p3, p4, p5, p6),
+                new BezierCurve(p6, p7, p8, p9),
+                new BezierCurve(p9, p10, p11, p0)
+            ];
+
+            // Update control point positions and connection lines
+            const allControlPoints = [p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11];
+            allControlPoints.forEach((p, i) => {
+                const transformedPoint = new THREE.Vector3();
+                transformedPoint.addScaledVector(periapsisDir, p.x);
+                transformedPoint.addScaledVector(perpDir, p.y);
+                transformedPoint.add(center);
+                controlPoints[i].position.copy(transformedPoint);
+            });
+
+            // Update control line positions
+            // First curve (p0-p1-p2-p3)
+            controlLines[0].geometry.setFromPoints([controlPoints[0].position, controlPoints[1].position]);
+            controlLines[1].geometry.setFromPoints([controlPoints[3].position, controlPoints[2].position]);
+            // Second curve (p3-p4-p5-p6)
+            controlLines[2].geometry.setFromPoints([controlPoints[3].position, controlPoints[4].position]);
+            controlLines[3].geometry.setFromPoints([controlPoints[6].position, controlPoints[5].position]);
+            // Third curve (p6-p7-p8-p9)
+            controlLines[4].geometry.setFromPoints([controlPoints[6].position, controlPoints[7].position]);
+            controlLines[5].geometry.setFromPoints([controlPoints[9].position, controlPoints[8].position]);
+            // Fourth curve (p9-p10-p11-p0)
+            controlLines[6].geometry.setFromPoints([controlPoints[9].position, controlPoints[10].position]);
+            controlLines[7].geometry.setFromPoints([controlPoints[0].position, controlPoints[11].position]);
+
+            // Generate points for each curve
+            curves.forEach(curve => {
+                for (let i = 0; i <= numPointsPerCurve; i++) {
+                    const t = i / numPointsPerCurve;
+                    const point = curve.getPoint(t);
+                    
+                    // Transform point to orbit plane
+                    const transformedPoint = new THREE.Vector3();
+                    transformedPoint.addScaledVector(periapsisDir, point.x);
+                    transformedPoint.addScaledVector(perpDir, point.y);
+                    transformedPoint.add(center);
+                    
+                    points.push(transformedPoint);
+                }
+            });
+
+            return points;
+        }
+
         // Camera position
         camera.position.set(30, 20, 30);
         camera.lookAt(scene.position);
@@ -351,6 +498,13 @@
                     const ellipsePoints = generateEllipsePoints(a, e, h, eVec);
                     idealOrbitGeometry.setFromPoints(ellipsePoints);
                     idealOrbitLine.visible = true;
+
+                    // Generate and update Bezier curve approximation
+                    const bezierPoints = generateBezierOrbitPoints(a, e, h, eVec);
+                    bezierOrbitGeometry.setFromPoints(bezierPoints);
+                    bezierOrbitLine.visible = true;
+                    controlPoints.forEach(point => point.visible = true);
+                    controlLines.forEach(line => line.visible = true);
                     
                     orbitTypeDiv.innerHTML = `Orbit Type: Elliptical<br>
                         Semi-major axis: ${a.toFixed(2)}<br>
@@ -361,6 +515,9 @@
                     periapsisMarker.visible = false;
                     apoapsisMarker.visible = false;
                     idealOrbitLine.visible = false;
+                    bezierOrbitLine.visible = false;
+                    controlPoints.forEach(point => point.visible = false);
+                    controlLines.forEach(line => line.visible = false);
                     orbitTypeDiv.textContent = 'Orbit Type: Elliptical (near parabolic)';
                 }
                 orbitTypeDiv.style.color = '#90EE90'; // Light green
@@ -368,12 +525,18 @@
                 periapsisMarker.visible = false;
                 apoapsisMarker.visible = false;
                 idealOrbitLine.visible = false;
+                bezierOrbitLine.visible = false;
+                controlPoints.forEach(point => point.visible = false);
+                controlLines.forEach(line => line.visible = false);
                 orbitTypeDiv.textContent = 'Orbit Type: Hyperbolic';
                 orbitTypeDiv.style.color = '#FFB6C1'; // Light red
             } else {
                 periapsisMarker.visible = false;
                 apoapsisMarker.visible = false;
                 idealOrbitLine.visible = false;
+                bezierOrbitLine.visible = false;
+                controlPoints.forEach(point => point.visible = false);
+                controlLines.forEach(line => line.visible = false);
                 orbitTypeDiv.textContent = 'Orbit Type: Parabolic';
                 orbitTypeDiv.style.color = '#ADD8E6'; // Light blue
             }
