@@ -8,11 +8,24 @@
     "rootDir": "./src",
     "moduleResolution": "node",
     "resolveJsonModule": true,
-    "esModuleInterop": true
-    
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "lib": [
+      "dom",
+      "es6",
+      "dom.iterable",
+      "scripthost"
+    ],
+    "baseUrl": "./",
+    "paths": {
+      "*": ["node_modules/*"]
+    }
   },
   "include": [
-    "src/**/*", 
+    "src/**/*",
     "src/custom.d.ts"
+  ],
+  "exclude": [
+    "node_modules"
   ]
 }

@@ -112,7 +112,7 @@
         scene.add(planet);
 
         // Moons
-        const moonGeometry = new THREE.SphereGeometry(0.5, 32, 32);
+        const moonGeometry = new THREE.SphereGeometry(1.0, 32, 32);
         const moon1Material = new THREE.MeshPhongMaterial({ color: 0xcccccc });
         const moon2Material = new THREE.MeshPhongMaterial({ color: 0xff9999 });
         const moon1 = new THREE.Mesh(moonGeometry, moon1Material);
@@ -121,7 +121,7 @@
         scene.add(moon2);
 
         // Periapsis and Apoapsis markers (unlit)
-        const markerGeometry = new THREE.SphereGeometry(0.2, 16, 16);
+        const markerGeometry = new THREE.SphereGeometry(0.3, 16, 16);
         const periapsisMarker = new THREE.Mesh(
             markerGeometry,
             new THREE.MeshBasicMaterial({ color: 0x00ff00 })

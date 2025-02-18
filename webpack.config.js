@@ -1,9 +1,10 @@
 const path = require('path');
 const fs = require('fs');
 const { DefinePlugin } = require('webpack');
+const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 module.exports = {
-  entry: './src/index.ts',
+  entry: './src/moonOrbitSim/index.ts',
   mode: 'development',
   module: {
     rules: [
@@ -15,6 +16,14 @@ module.exports = {
     ],
   },
   plugins: [
+    new CopyWebpackPlugin({
+      patterns: [
+        { 
+          from: 'src/moonOrbitSim/index.html',
+          to: 'index.html'
+        }
+      ]
+    })
   ],
   resolve: {
     extensions: ['.ts', '.js'],

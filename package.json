@@ -20,8 +20,9 @@
   "devDependencies": {
     "@types/three": "^0.169.0",
     "@types/uuid": "^10.0.0",
+    "copy-webpack-plugin": "^12.0.2",
     "ts-loader": "^9.5.1",
-    "webpack": "^5.95.0",
+    "webpack": "^5.96.1",
     "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^5.1.0"
   },
