@@ -93,7 +93,7 @@ export class UIManager {
         
         const arrow = document.createElement('span');
         arrow.style.cssText = 'margin-right: 6px; font-size: 10px; width: 12px; display: inline-block;';
-        arrow.textContent = defaultExpanded ? '▼' : '▶';
+        arrow.innerHTML = defaultExpanded ? '&#9660;' : '&#9654;';
         
         const titleSpan = document.createElement('span');
         titleSpan.textContent = title;
@@ -112,7 +112,7 @@ export class UIManager {
         const toggle = () => {
             isExpanded = !isExpanded;
             content.style.display = isExpanded ? 'block' : 'none';
-            arrow.textContent = isExpanded ? '▼' : '▶';
+            arrow.innerHTML = isExpanded ? '&#9660;' : '&#9654;';
         };
 
         header.addEventListener('click', toggle);
