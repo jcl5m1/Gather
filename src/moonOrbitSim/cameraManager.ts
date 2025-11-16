@@ -423,6 +423,41 @@ export class CameraManager {
         
         return false;
     }
+
+    /**
+     * Switch camera to free camera mode (no target)
+     */
+    switchToFreeCamera(): void {
+        // Store current camera state before switching away
+        if (this.cameraTarget) {
+            const currentBodyName = this.cameraTarget.getName();
+            this.bodyCameraStates.set(currentBodyName, this.cameraOffset.clone());
+        } else {
+            // Already in free camera mode
+            return;
+        }
+
+        // Store current offset before switching
+        const oldTargetPosition = this.cameraTarget ? this.cameraTarget.getPosition() : this.controls.target;
+        const currentCameraOffset = this.camera.position.clone().sub(oldTargetPosition);
+
+        // Switch to free camera
+        this.cameraTarget = null;
+        this.cameraTargetIndex = -1;
+        
+        if (this.freeCameraPosition && this.freeCameraTarget) {
+            // Restore stored free camera state
+            this.camera.position.copy(this.freeCameraPosition);
+            this.controls.target.copy(this.freeCameraTarget);
+            this.controls.update();
+        } else {
+            // First time entering free camera - initialize state from current position
+            this.freeCameraPosition = this.camera.position.clone();
+            this.freeCameraTarget = this.controls.target.clone();
+        }
+        
+        this.notifyTargetChange(null);
+    }
     
     /**
      * Switch camera to a specific body

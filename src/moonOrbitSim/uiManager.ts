@@ -17,10 +17,10 @@ const marked = markedFunction;
 export class UIManager {
     private simulationController: SimulationController;
     private cameraManager?: CameraManager;
-    private orbitTypeDiv!: HTMLDivElement;
-    private cameraTargetDiv!: HTMLDivElement;
-    private timeScaleSlider!: HTMLInputElement;
+    private orbitTypeDiv!: HTMLTableElement; // Changed to table
+    private cameraTargetSelect!: HTMLSelectElement; // Changed to select
     private timeScaleValue!: HTMLSpanElement;
+    private currentTimeScale: number = 1000;
     private posXInput!: HTMLInputElement;
     private posYInput!: HTMLInputElement;
     private posZInput!: HTMLInputElement;
@@ -41,9 +41,7 @@ export class UIManager {
         this.initializeUI();
         this.setupEventListeners();
         
-        // Set initial time scale from config
-        const defaultTimeScale = config.physics.defaultTimeScale;
-        this.simulationController.executeCommand(`SET_TIME_SCALE ${defaultTimeScale}`);
+        // Initial time scale is now set in initializeUI (default 1000, logarithmic)
         
         // Setup camera target change callback
         if (this.cameraManager) {
@@ -63,153 +61,543 @@ export class UIManager {
         // The UI fields are already initialized with Moon parameters
     }
 
+    /**
+     * Create a collapsible section (like Unity's Property Inspector)
+     */
+    private createCollapsibleSection(title: string, defaultExpanded: boolean = false): {
+        container: HTMLDivElement;
+        header: HTMLDivElement;
+        content: HTMLDivElement;
+        toggle: () => void;
+    } {
+        const container = document.createElement('div');
+        container.style.cssText = `
+            border: 1px solid rgba(255,255,255,0.2);
+            margin: 0;
+            background: rgba(0,0,0,0.3);
+        `;
+
+        const header = document.createElement('div');
+        header.style.cssText = `
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+            padding: 0px 0px;
+            background: rgba(255,255,255,0.1);
+            font-weight: bold;
+            font-size: 13px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            margin: 0;
+        `;
+        
+        const arrow = document.createElement('span');
+        arrow.style.cssText = 'margin-right: 6px; font-size: 10px; width: 12px; display: inline-block;';
+        arrow.textContent = defaultExpanded ? '▼' : '▶';
+        
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = title;
+        
+        header.appendChild(arrow);
+        header.appendChild(titleSpan);
+
+        const content = document.createElement('div');
+        content.style.cssText = `
+            display: ${defaultExpanded ? 'block' : 'none'};
+            padding: 0px;
+            margin: 0;
+        `;
+
+        let isExpanded = defaultExpanded;
+        const toggle = () => {
+            isExpanded = !isExpanded;
+            content.style.display = isExpanded ? 'block' : 'none';
+            arrow.textContent = isExpanded ? '▼' : '▶';
+        };
+
+        header.addEventListener('click', toggle);
+
+        container.appendChild(header);
+        container.appendChild(content);
+
+        return { container, header, content, toggle };
+    }
+
+    /**
+     * Create a property row (label + value) for tables
+     */
+    private createPropertyRow(label: string, value: string | HTMLElement, readOnly: boolean = true): HTMLTableRowElement {
+        const row = document.createElement('tr');
+        row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
+        
+        const labelCell = document.createElement('td');
+        labelCell.style.cssText = `
+            padding: 2px 2px;
+            width: 40%;
+            font-size: 11px;
+            color: rgba(255,255,255,0.8);
+            margin: 0;
+        `;
+        labelCell.textContent = label;
+        
+        const valueCell = document.createElement('td');
+        valueCell.style.cssText = `
+            padding: 2px 2px;
+            font-size: 11px;
+            color: rgba(255,255,255,0.95);
+            margin: 0;
+        `;
+        
+        if (typeof value === 'string') {
+            valueCell.textContent = value;
+        } else {
+            valueCell.appendChild(value);
+        }
+        
+        row.appendChild(labelCell);
+        row.appendChild(valueCell);
+        return row;
+    }
+
+    /**
+     * Create a read-only property display
+     */
+    private createReadOnlyProperty(label: string, value: string): HTMLTableRowElement {
+        return this.createPropertyRow(label, value, true);
+    }
+
+    /**
+     * Create a read/write property input
+     */
+    private createReadWriteProperty(label: string, id: string, value: string, step: string): {
+        row: HTMLTableRowElement;
+        input: HTMLInputElement;
+    } {
+        const row = document.createElement('tr');
+        row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
+        
+        const labelCell = document.createElement('td');
+        labelCell.style.cssText = `
+            padding: 2px 2px;
+            width: 40%;
+            font-size: 11px;
+            color: rgba(255,255,255,0.8);
+            margin: 0;
+        `;
+        labelCell.textContent = label;
+        
+        const valueCell = document.createElement('td');
+        valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
+        
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.id = id;
+        input.value = value;
+        input.step = step;
+        input.style.cssText = `
+            width: 100%;
+            padding: 0px 0 px;
+            margin: 0;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            font-size: 11px;
+            font-family: monospace;
+        `;
+        
+        valueCell.appendChild(input);
+        row.appendChild(labelCell);
+        row.appendChild(valueCell);
+        
+        return { row, input };
+    }
+
+    /**
+     * Create a slider property
+     */
+    private createSliderProperty(label: string, id: string, min: string, max: string, step: string, value: string): {
+        row: HTMLTableRowElement;
+        slider: HTMLInputElement;
+        valueDisplay: HTMLSpanElement;
+    } {
+        const row = document.createElement('tr');
+        row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
+        
+        const labelCell = document.createElement('td');
+        labelCell.style.cssText = `
+            padding: 2px 2px;
+            width: 40%;
+            font-size: 11px;
+            color: rgba(255,255,255,0.8);
+            margin: 0;
+        `;
+        labelCell.textContent = label;
+        
+        const valueCell = document.createElement('td');
+        valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
+        
+        const sliderContainer = document.createElement('div');
+        sliderContainer.style.cssText = 'display: flex; align-items: center; gap: 8px; margin: 0;';
+        
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.id = id;
+        slider.min = min;
+        slider.max = max;
+        slider.step = step;
+        slider.value = value;
+        slider.style.cssText = 'flex: 1; margin: 0;';
+        
+        const valueDisplay = document.createElement('span');
+        valueDisplay.style.cssText = `
+            min-width: 50px;
+            text-align: right;
+            font-size: 11px;
+            font-family: monospace;
+            color: rgba(255,255,255,0.95);
+            margin: 0;
+        `;
+        valueDisplay.textContent = value;
+        
+        sliderContainer.appendChild(slider);
+        sliderContainer.appendChild(valueDisplay);
+        valueCell.appendChild(sliderContainer);
+        row.appendChild(labelCell);
+        row.appendChild(valueCell);
+        
+        return { row, slider, valueDisplay };
+    }
+
+    /**
+     * Create a button property
+     */
+    private createButtonProperty(label: string, buttonText: string, onClick: () => void): HTMLTableRowElement {
+        const row = document.createElement('tr');
+        row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
+        
+        const labelCell = document.createElement('td');
+        labelCell.style.cssText = `
+            padding: 2px 2px;
+            width: 40%;
+            font-size: 11px;
+            color: rgba(255,255,255,0.8);
+            margin: 0;
+        `;
+        labelCell.textContent = label;
+        
+        const valueCell = document.createElement('td');
+        valueCell.style.cssText = 'padding: 0; margin: 0; border: 0;';
+        
+        const button = document.createElement('button');
+        button.textContent = buttonText;
+        button.style.cssText = `
+            padding: 2px 8px;
+            margin: 0;
+            background: rgba(100,150,255,0.6);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            cursor: pointer;
+            font-size: 11px;
+        `;
+        button.onclick = onClick;
+        
+        valueCell.appendChild(button);
+        row.appendChild(labelCell);
+        row.appendChild(valueCell);
+        
+        return row;
+    }
+
+    /**
+     * Create a dropdown property
+     */
+    private createDropdownProperty(label: string, id: string, options: string[], value: string, onChange: (value: string) => void): {
+        row: HTMLTableRowElement;
+        select: HTMLSelectElement;
+    } {
+        const row = document.createElement('tr');
+        row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
+        
+        const labelCell = document.createElement('td');
+        labelCell.style.cssText = `
+            padding: 2px 2px;
+            width: 40%;
+            font-size: 11px;
+            color: rgba(255,255,255,0.8);
+            margin: 0;
+        `;
+        labelCell.textContent = label;
+        
+        const valueCell = document.createElement('td');
+        valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
+        
+        const select = document.createElement('select');
+        select.id = id;
+        select.style.cssText = `
+            width: 100%;
+            padding: 0px 0 px;
+            margin: 0;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            font-size: 11px;
+        `;
+        
+        options.forEach(option => {
+            const optionElement = document.createElement('option');
+            optionElement.value = option;
+            optionElement.textContent = option;
+            if (option === value) {
+                optionElement.selected = true;
+            }
+            select.appendChild(optionElement);
+        });
+        
+        select.addEventListener('change', () => onChange(select.value));
+        
+        valueCell.appendChild(select);
+        row.appendChild(labelCell);
+        row.appendChild(valueCell);
+        
+        return { row, select };
+    }
+
     private initializeUI(): void {
-        // Create main controls container
-        const controls = document.createElement('div');
-        controls.id = 'controls';
-        controls.style.cssText = `
+        // Create Property Inspector container
+        const propertyInspector = document.createElement('div');
+        propertyInspector.id = 'propertyInspector';
+        propertyInspector.style.cssText = `
             position: absolute;
             top: 10px;
             left: 10px;
-            background: rgba(0,0,0,0.7);
+            width: 300px;
+            background: rgba(30,30,30,0.95);
             color: white;
-            padding: 10px;
-            font-family: Arial, sans-serif;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 12px;
             max-height: 90vh;
             overflow-y: auto;
+            border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            margin: 0;
         `;
 
-        // Camera target display
-        this.cameraTargetDiv = document.createElement('div');
-        this.cameraTargetDiv.id = 'cameraTarget';
-        this.cameraTargetDiv.style.cssText = `
-            background: rgba(100,150,255,0.3);
-            padding: 5px;
-            margin-bottom: 10px;
-            text-align: center;
+        // Title bar
+        const titleBar = document.createElement('div');
+        titleBar.style.cssText = `
+            padding: 2px;
+            background: rgba(0,0,0,0.5);
+            border-bottom: 1px solid rgba(255,255,255,0.2);
             font-weight: bold;
+            font-size: 13px;
+            margin: 0;
         `;
-        this.cameraTargetDiv.textContent = 'Camera Focus: Free Camera';
-        controls.appendChild(this.cameraTargetDiv);
-
-        // Orbit type display
-        this.orbitTypeDiv = document.createElement('div');
-        this.orbitTypeDiv.id = 'orbitType';
-        this.orbitTypeDiv.style.cssText = `
-            background: rgba(255,255,255,0.2);
-            padding: 5px;
-            margin-bottom: 10px;
-            text-align: center;
-        `;
-        this.orbitTypeDiv.textContent = 'Orbit Type: Unknown';
-        controls.appendChild(this.orbitTypeDiv);
-
-        // Body parameters section
-        const bodyParams = document.createElement('div');
-        bodyParams.className = 'control-group';
-        this.bodyParamsHeading = document.createElement('h3');
-        this.bodyParamsHeading.textContent = 'Body Parameters';
-        bodyParams.appendChild(this.bodyParamsHeading);
-
-        // Create input fields
-        const createInput = (id: string, label: string, value: string, step: string) => {
-            const container = document.createElement('div');
-            const labelElement = document.createElement('label');
-            labelElement.style.cssText = 'display: inline-block; width: 120px;';
-            labelElement.textContent = label;
-            
-            const input = document.createElement('input');
-            input.type = 'number';
-            input.id = id;
-            input.value = value;
-            input.step = step;
-            
-            container.appendChild(labelElement);
-            container.appendChild(input);
-            return { container, input };
-        };
+        titleBar.textContent = 'Property Inspector';
+        propertyInspector.appendChild(titleBar);
 
         // Initialize with Moon parameters from config
         const moonConfig = config.bodies.moon;
         const earthConfig = config.bodies.earth;
         const moonDistance = moonConfig.distance || 384400;
         const moonVelocity = Math.sqrt(G * earthConfig.mass / moonDistance);
+
+        // Section 1: Orbit Stats (read-only table)
+        const orbitSection = this.createCollapsibleSection('Orbit Stats', true);
+        const orbitTable = document.createElement('table');
+        orbitTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
+        this.orbitTypeDiv = orbitTable;
+        orbitSection.content.appendChild(orbitTable);
+        propertyInspector.appendChild(orbitSection.container);
+
+        // Section 3: Initial Parameters (read/write inputs)
+        const paramsSection = this.createCollapsibleSection('Initial Parameters', false);
+        const paramsTable = document.createElement('table');
+        paramsTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
         
-        // Position inputs (Moon starts at distance along x-axis)
-        const { container: posXContainer, input: posX } = createInput('posX', 'Position X:', moonDistance.toString(), '1000');
-        const { container: posYContainer, input: posY } = createInput('posY', 'Position Y:', '0', '1000');
-        const { container: posZContainer, input: posZ } = createInput('posZ', 'Position Z:', '0', '1000');
-        
-        // Velocity inputs (Moon velocity in z-direction for circular orbit in xz plane)
-        const { container: velXContainer, input: velX } = createInput('velX', 'Velocity X:', '0', '0.001');
-        const { container: velYContainer, input: velY } = createInput('velY', 'Velocity Y:', '0', '0.001');
-        const { container: velZContainer, input: velZ } = createInput('velZ', 'Velocity Z:', moonVelocity.toFixed(6), '0.001');
-        
-        // Mass input (Moon mass)
-        const { container: massContainer, input: mass } = createInput('mass', 'Mass:', moonConfig.mass.toString(), '1e20');
+        const posX = this.createReadWriteProperty('Position X', 'posX', moonDistance.toString(), '1000');
+        const posY = this.createReadWriteProperty('Position Y', 'posY', '0', '1000');
+        const posZ = this.createReadWriteProperty('Position Z', 'posZ', '0', '1000');
+        const velX = this.createReadWriteProperty('Velocity X', 'velX', '0', '0.001');
+        const velY = this.createReadWriteProperty('Velocity Y', 'velY', '0', '0.001');
+        const velZ = this.createReadWriteProperty('Velocity Z', 'velZ', moonVelocity.toFixed(6), '0.001');
+        const mass = this.createReadWriteProperty('Mass', 'mass', moonConfig.mass.toString(), '1e20');
 
         // Store input references
-        this.posXInput = posX;
-        this.posYInput = posY;
-        this.posZInput = posZ;
-        this.velXInput = velX;
-        this.velYInput = velY;
-        this.velZInput = velZ;
-        this.massInput = mass;
+        this.posXInput = posX.input;
+        this.posYInput = posY.input;
+        this.posZInput = posZ.input;
+        this.velXInput = velX.input;
+        this.velYInput = velY.input;
+        this.velZInput = velZ.input;
+        this.massInput = mass.input;
 
-        // Add inputs to body parameters section
-        [posXContainer, posYContainer, posZContainer,
-         velXContainer, velYContainer, velZContainer,
-         massContainer].forEach(container => bodyParams.appendChild(container));
+        paramsTable.appendChild(posX.row);
+        paramsTable.appendChild(posY.row);
+        paramsTable.appendChild(posZ.row);
+        paramsTable.appendChild(velX.row);
+        paramsTable.appendChild(velY.row);
+        paramsTable.appendChild(velZ.row);
+        paramsTable.appendChild(mass.row);
+        
+        paramsSection.content.appendChild(paramsTable);
+        propertyInspector.appendChild(paramsSection.container);
 
-        controls.appendChild(bodyParams);
+        // Store heading reference for compatibility
+        this.bodyParamsHeading = document.createElement('h3');
+        this.bodyParamsHeading.textContent = 'Body Parameters';
 
-        // Reset button
-        const resetButton = document.createElement('button');
-        resetButton.textContent = 'Reset Simulation';
-        resetButton.onclick = () => this.resetSimulation();
-        controls.appendChild(resetButton);
-
-        // Time scale slider
-        const sliderContainer = document.createElement('div');
-        sliderContainer.className = 'slider-container';
-        sliderContainer.style.cssText = `
-            margin-top: 10px;
-            padding: 10px;
-            border-top: 1px solid #666;
+        // Section 3: Simulation Controls
+        const controlsSection = this.createCollapsibleSection('Simulation Controls', true);
+        const controlsTable = document.createElement('table');
+        controlsTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
+        
+        // Get available bodies for camera dropdown
+        const getAvailableBodies = (): string[] => {
+            const bodies = ['Free Camera'];
+            // Get all bodies from simulation
+            const result = this.simulationController.executeCommand('LIST_BODIES');
+            if (result.success && result.data && result.data.bodies) {
+                bodies.push(...result.data.bodies);
+            }
+            return bodies;
+        };
+        
+        // Camera Focus Target dropdown
+        const cameraDropdown = this.createDropdownProperty(
+            'Camera Target',
+            'cameraTarget',
+            getAvailableBodies(),
+            'Free Camera',
+            (value) => {
+                if (this.cameraManager) {
+                    if (value === 'Free Camera') {
+                        this.cameraManager.switchToFreeCamera();
+                    } else {
+                        this.cameraManager.switchToBodyByName(value);
+                    }
+                }
+            }
+        );
+        // Store camera dropdown reference
+        this.cameraTargetSelect = cameraDropdown.select;
+        
+        // Time scale control with +/- buttons: 1e-6 to 1e10, default 1000
+        const timeScaleMin = 1e-6;
+        const timeScaleMax = 1e10;
+        const defaultTimeScale = 1000;
+        this.currentTimeScale = defaultTimeScale;
+        
+        // Create time scale control row
+        const timeScaleRow = document.createElement('tr');
+        timeScaleRow.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
+        
+        const labelCell = document.createElement('td');
+        labelCell.style.cssText = `
+            padding: 2px 2px;
+            width: 40%;
+            font-size: 11px;
+            color: rgba(255,255,255,0.8);
+            margin: 0;
         `;
+        labelCell.textContent = 'Time Scale';
+        
+        const valueCell = document.createElement('td');
+        valueCell.style.cssText = 'padding: 0; margin: 0; border: 0;';
+        
+        const timeScaleContainer = document.createElement('div');
+        timeScaleContainer.style.cssText = 'display: flex; align-items: center; gap: 4px; margin: 0; padding: 0;';
+        
+        // Format time scale value for display
+        const formatTimeScale = (value: number): string => {
+            if (value > 1e3 || value < 1e-3) {
+                // Use scientific notation for values >= 1000 or <= 0.001
+                return value.toExponential(1) + 'x';
+            } else if (value < 1) {
+                // Show 3 decimal places for values between 0.001 and 1
+                return value.toFixed(3) + 'x';
+            } else {
+                // Use regular notation (no decimals) for values between 1 and 1000
+                return value.toFixed(0) + 'x';
+            }
+        };
+        
+        // Decrease button (-)
+        const decreaseButton = document.createElement('button');
+        decreaseButton.textContent = '-';
+        decreaseButton.style.cssText = `
+            padding: 2px 6px;
+            margin: 0;
+            background: rgba(100,150,255,0.6);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            min-width: 24px;
+        `;
+        
+        // Value display
+        const valueDisplay = document.createElement('span');
+        valueDisplay.id = 'timeScaleValue';
+        valueDisplay.style.cssText = `
+            min-width: 60px;
+            text-align: center;
+            font-size: 11px;
+            font-family: monospace;
+            color: rgba(255,255,255,0.95);
+            margin: 0;
+        `;
+        valueDisplay.textContent = formatTimeScale(defaultTimeScale);
+        this.timeScaleValue = valueDisplay;
+        
+        // Increase button (+)
+        const increaseButton = document.createElement('button');
+        increaseButton.textContent = '+';
+        increaseButton.style.cssText = `
+            padding: 2px 6px;
+            margin: 0;
+            background: rgba(100,150,255,0.6);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            min-width: 24px;
+        `;
+        
+        // Button click handlers
+        const updateTimeScale = (multiplier: number) => {
+            const newValue = this.currentTimeScale * multiplier;
+            // Clamp to valid range
+            const clampedValue = Math.max(timeScaleMin, Math.min(timeScaleMax, newValue));
+            this.currentTimeScale = clampedValue;
+            this.timeScaleValue.textContent = formatTimeScale(clampedValue);
+            this.executeAndDisplayCommand(`SET_TIME_SCALE ${clampedValue}`);
+        };
+        
+        decreaseButton.onclick = () => updateTimeScale(0.1); // Divide by 10
+        increaseButton.onclick = () => updateTimeScale(10); // Multiply by 10
+        
+        timeScaleContainer.appendChild(decreaseButton);
+        timeScaleContainer.appendChild(valueDisplay);
+        timeScaleContainer.appendChild(increaseButton);
+        valueCell.appendChild(timeScaleContainer);
+        timeScaleRow.appendChild(labelCell);
+        timeScaleRow.appendChild(valueCell);
+        
+        // Set initial time scale
+        this.simulationController.executeCommand(`SET_TIME_SCALE ${defaultTimeScale}`);
+        
+        const resetButton = this.createButtonProperty('Reset', 'Reset Simulation', () => this.resetSimulation());
+        
+        controlsTable.appendChild(cameraDropdown.row);
+        controlsTable.appendChild(timeScaleRow);
+        controlsTable.appendChild(resetButton);
+        
+        controlsSection.content.appendChild(controlsTable);
+        propertyInspector.appendChild(controlsSection.container);
 
-        const sliderLabel = document.createElement('div');
-        sliderLabel.className = 'slider-label';
-        sliderLabel.style.cssText = 'display: flex; justify-content: space-between; margin-bottom: 5px;';
-        
-        const timeScaleSpan = document.createElement('span');
-        timeScaleSpan.textContent = 'Time Scale: ';
-        
-        this.timeScaleValue = document.createElement('span');
-        this.timeScaleValue.id = 'timeScaleValue';
-        // Will be set when slider is created below
-        this.timeScaleValue.textContent = '1.0x';
-        
-        sliderLabel.appendChild(timeScaleSpan);
-        sliderLabel.appendChild(this.timeScaleValue);
-        
-        this.timeScaleSlider = document.createElement('input');
-        this.timeScaleSlider.type = 'range';
-        this.timeScaleSlider.id = 'timeScale';
-        this.timeScaleSlider.min = '1';
-        this.timeScaleSlider.max = '10000';
-        this.timeScaleSlider.step = '10';
-        const defaultTimeScale = config.physics.defaultTimeScale;
-        this.timeScaleSlider.value = defaultTimeScale.toString();
-        this.timeScaleValue.textContent = defaultTimeScale.toFixed(1) + 'x';
-        this.timeScaleSlider.style.width = '100%';
-        
-        sliderContainer.appendChild(sliderLabel);
-        sliderContainer.appendChild(this.timeScaleSlider);
-        controls.appendChild(sliderContainer);
-
-        document.body.appendChild(controls);
+        document.body.appendChild(propertyInspector);
 
         // Command interface (for testing/automation) - separate UI element at bottom
         this.initializeCommandInterface();
@@ -242,7 +630,7 @@ export class UIManager {
         this.commandInput.placeholder = 'Enter command (e.g., RESET position:20,5,3 velocity:2,8.5,0 mass:1.0)';
         this.commandInput.style.cssText = `
             flex: 1;
-            padding: 8px;
+            padding: 2px;
             background: rgba(255,255,255,0.1);
             color: white;
             border: 1px solid #666;
@@ -253,7 +641,7 @@ export class UIManager {
         const commandButton = document.createElement('button');
         commandButton.textContent = 'Execute';
         commandButton.style.cssText = `
-            padding: 8px 16px;
+            padding: 2px 4px;
             background: rgba(100,150,255,0.8);
             color: white;
             border: 1px solid #666;
@@ -269,7 +657,7 @@ export class UIManager {
         this.commandOutput = document.createElement('div');
         this.commandOutput.id = 'commandOutput';
         this.commandOutput.style.cssText = `
-            padding: 8px;
+            padding: 2px;
             background: rgba(0,0,0,0.6);
             font-family: monospace;
             font-size: 11px;
@@ -295,12 +683,7 @@ export class UIManager {
     }
 
     private setupEventListeners(): void {
-        this.timeScaleSlider.addEventListener('input', (e) => {
-            const value = parseFloat((e.target as HTMLInputElement).value);
-            this.timeScaleValue.textContent = value.toFixed(1) + 'x';
-            // Execute command through command interface
-            this.executeAndDisplayCommand(`SET_TIME_SCALE ${value}`);
-        });
+        // Time scale buttons are handled in initializeUI
 
         // Add change listeners to parameter inputs to update the focused body
         const parameterInputs = [
@@ -367,9 +750,19 @@ export class UIManager {
                 // Update time scale display
                 const timeScale = resetResult.data.timeScale;
                 if (timeScale !== undefined) {
-                    this.timeScaleSlider.value = timeScale.toString();
-                    this.timeScaleValue.textContent = timeScale.toFixed(1) + 'x';
+                    this.currentTimeScale = timeScale;
+                    // Format display appropriately
+                    if (timeScale >= 1e3 || timeScale <= 1e-3) {
+                        this.timeScaleValue.textContent = timeScale.toExponential(2) + 'x';
+                    } else if (timeScale < 1) {
+                        this.timeScaleValue.textContent = timeScale.toFixed(3) + 'x';
+                    } else {
+                        this.timeScaleValue.textContent = timeScale.toFixed(0) + 'x';
+                    }
                 }
+                
+                // Update camera dropdown options
+                this.updateCameraDropdownOptions();
                 
                 // Update orbit display if Moon was re-added
                 if (resetResult.data.bodies && resetResult.data.bodies.length > 0) {
@@ -450,46 +843,76 @@ export class UIManager {
         // Store orbit info for real-time updates
         this.currentOrbitInfo = orbitInfo;
         
-        let tableHTML = '<table style="width: 100%; border-collapse: collapse; text-align: left;">';
+        if (!this.orbitTypeDiv) return;
         
+        // Clear existing rows
+        this.orbitTypeDiv.innerHTML = '';
+        
+        // Add rows based on orbit type
         if (orbitInfo.type === 'elliptical' && orbitInfo.parameters) {
-            tableHTML += `
-                <tr><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;"><strong>Orbit Type:</strong></td><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">Elliptical</td></tr>
-                <tr><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">Semi-major axis:</td><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">${this.formatDistance(orbitInfo.parameters.a)}</td></tr>
-                <tr><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">Eccentricity:</td><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">${orbitInfo.parameters.e.toFixed(3)}</td></tr>
-                <tr><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">Periapsis:</td><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">${this.formatDistance(orbitInfo.parameters.periapsis)}</td></tr>
-                <tr><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">Apoapsis:</td><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">${this.formatDistance(orbitInfo.parameters.apoapsis)}</td></tr>`;
-            this.orbitTypeDiv.style.color = '#90EE90'; // Light green
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Orbit Type', 'Elliptical'));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Semi-major axis', this.formatDistance(orbitInfo.parameters.a)));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Eccentricity', orbitInfo.parameters.e.toFixed(3)));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Periapsis', this.formatDistance(orbitInfo.parameters.periapsis)));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Apoapsis', this.formatDistance(orbitInfo.parameters.apoapsis)));
         } else if (orbitInfo.type === 'hyperbolic') {
-            tableHTML += `<tr><td style="padding: 2px 5px; text-align: left;"><strong>Orbit Type:</strong></td><td style="padding: 2px 5px; text-align: left;">Hyperbolic</td></tr>`;
-            this.orbitTypeDiv.style.color = '#FFB6C1'; // Light red
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Orbit Type', 'Hyperbolic'));
         } else {
-            tableHTML += `<tr><td style="padding: 2px 5px; text-align: left;"><strong>Orbit Type:</strong></td><td style="padding: 2px 5px; text-align: left;">Parabolic</td></tr>`;
-            this.orbitTypeDiv.style.color = '#ADD8E6'; // Light blue
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Orbit Type', 'Parabolic'));
         }
         
         // Add current altitude and velocity
         if (currentAltitude !== undefined && currentVelocity !== undefined) {
-            tableHTML += `
-                <tr><td style="padding: 2px 5px; border-top: 1px solid rgba(255,255,255,0.3); border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">Altitude:</td><td style="padding: 2px 5px; border-top: 1px solid rgba(255,255,255,0.3); border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">${this.formatDistance(currentAltitude)}</td></tr>
-                <tr><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">Velocity:</td><td style="padding: 2px 5px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: left;">${this.formatVelocity(currentVelocity)}</td></tr>`;
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Altitude', this.formatDistance(currentAltitude)));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Velocity', this.formatVelocity(currentVelocity)));
         }
-        
-        tableHTML += '</table>';
-        this.orbitTypeDiv.innerHTML = tableHTML;
     }
 
     /**
      * Update camera target display
      */
     updateCameraTargetDisplay(targetName: string | null): void {
-        if (this.cameraTargetDiv) {
-            if (targetName === null) {
-                this.cameraTargetDiv.textContent = 'Camera Focus: Free Camera';
-            } else {
-                this.cameraTargetDiv.textContent = `Camera Focus: ${targetName}`;
+        if (this.cameraTargetSelect) {
+            const value = targetName === null ? 'Free Camera' : targetName;
+            this.cameraTargetSelect.value = value;
+            // If the value doesn't exist in options, add it
+            if (!Array.from(this.cameraTargetSelect.options).some(opt => opt.value === value)) {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = value;
+                this.cameraTargetSelect.appendChild(option);
             }
         }
+    }
+
+    /**
+     * Update available bodies in camera dropdown
+     */
+    private updateCameraDropdownOptions(): void {
+        if (!this.cameraTargetSelect) return;
+        
+        // Get current selection
+        const currentValue = this.cameraTargetSelect.value;
+        
+        // Get all bodies from simulation
+        const result = this.simulationController.executeCommand('LIST_BODIES');
+        const bodies: string[] = ['Free Camera'];
+        
+        if (result.success && result.data && result.data.bodies) {
+            bodies.push(...result.data.bodies);
+        }
+        
+        // Clear and rebuild options
+        this.cameraTargetSelect.innerHTML = '';
+        bodies.forEach(bodyName => {
+            const option = document.createElement('option');
+            option.value = bodyName;
+            option.textContent = bodyName;
+            if (bodyName === currentValue) {
+                option.selected = true;
+            }
+            this.cameraTargetSelect.appendChild(option);
+        });
     }
 
     /**
@@ -663,13 +1086,15 @@ export class UIManager {
      * Update current values display in orbit type div
      */
     private updateCurrentValuesDisplay(): void {
+        if (!this.orbitTypeDiv) return;
+        
         if (!this.currentFocusedBodyName || this.currentFocusedBodyName === config.bodies.earth.name) {
+            this.orbitTypeDiv.innerHTML = '';
             if (this.currentFocusedBodyName === config.bodies.earth.name) {
-                this.orbitTypeDiv.innerHTML = '<table style="width: 100%; border-collapse: collapse;"><tr><td style="padding: 2px 5px;">Central Body (Earth)</td></tr><tr><td style="padding: 2px 5px;">Position and velocity are fixed at origin</td></tr></table>';
-                this.orbitTypeDiv.style.color = '#FFFFFF';
+                this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Body', 'Central Body (Earth)'));
+                this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Status', 'Position and velocity are fixed at origin'));
             } else {
-                this.orbitTypeDiv.textContent = 'No body focused';
-                this.orbitTypeDiv.style.color = '#FFFFFF';
+                this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Status', 'No body focused'));
             }
             return;
         }
