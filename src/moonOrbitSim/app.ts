@@ -16,39 +16,97 @@ export class MoonOrbitSimulation {
             // Initialize simulation controller (command-based interface)
             this.simulationController = new SimulationController(this.gameLoop);
             
+            // Set the initialization callback so RESET command can call it
+            this.simulationController.setInitializeSimulationCallback(() => {
+                this.initializeSimulation();
+            });
+            
             // Initialize UI manager (sends commands to controller)
             // Pass camera manager for target display
             this.uiManager = new UIManager(this.simulationController, this.gameLoop.getCameraManager());
 
-            // Initialize Moon with actual Earth-Moon system parameters from config
-            const moonConfig = config.bodies.moon;
-            const earthConfig = config.bodies.earth;
-            const moonDistance = moonConfig.distance || 384400;
-            
-            // Calculate circular orbital velocity: v = sqrt(G * M_earth / r)
-            // G is in km³/(kg·s²) for consistency with km-based distances
-            // This gives velocity in km/s
-            const moonVelocity = Math.sqrt(G * earthConfig.mass / moonDistance);
-            
-            // Place Moon at distance along x-axis, with velocity in z-direction for circular orbit in xz plane
-            const addResult = this.simulationController.executeCommand(
-                `ADD_BODY position:${moonDistance},0,0 velocity:0,0,${moonVelocity} mass:${moonConfig.mass} id:${moonConfig.name} radius:${moonConfig.radius} color:${moonConfig.color || 'cccccc'} trajectoryColor:${moonConfig.trajectoryColor || 'ffffff'}`
-            );
-            
-            // Update UI to reflect Moon's orbit info
-            if (addResult.success) {
-                const orbitResult = this.simulationController.executeCommand(`GET_ORBIT_INFO ${moonConfig.name}`);
-                if (orbitResult.success && orbitResult.data) {
-                    this.uiManager.updateOrbitTypeDisplay({
-                        type: orbitResult.data.orbitType,
-                        parameters: orbitResult.data.parameters
-                    });
-                }
-            }
+            // Initialize simulation to initial state
+            this.initializeSimulation();
         } catch (error) {
             console.error('Error initializing simulation:', error);
             throw error;
         }
+    }
+
+    /**
+     * Initialize simulation to initial state (fresh start)
+     * This method is called on page load and can be called via RESET command
+     * It completely clears all bodies and starts with a fresh array
+     */
+    initializeSimulation(): void {
+        console.log('[initializeSimulation] Starting full reset...');
+        
+        // Stop the simulation if running
+        this.gameLoop.stop();
+        console.log('[initializeSimulation] Simulation stopped');
+        
+        // Clear all bodies from command processor's tracking map first
+        // This ensures no stale references remain
+        this.simulationController.clearAllBodies();
+        console.log('[initializeSimulation] Command processor body map cleared');
+        
+        // Remove all orbital bodies from the game loop
+        // This frees all resources (trails, meshes, etc.) and clears the array
+        const bodyCountBefore = this.gameLoop.getOrbitalBodies().length;
+        this.gameLoop.removeAllOrbitalBodies();
+        console.log(`[initializeSimulation] Removed ${bodyCountBefore} orbital bodies`);
+        
+        // Verify the array is empty (should be after removeAllOrbitalBodies)
+        const bodies = this.gameLoop.getOrbitalBodies();
+        if (bodies.length !== 0) {
+            console.error(`[initializeSimulation] Error: orbitalBodies array has ${bodies.length} bodies after removeAllOrbitalBodies()`);
+            // Force clear it as a safety measure
+            bodies.length = 0;
+        } else {
+            console.log('[initializeSimulation] Verified: orbitalBodies array is empty');
+        }
+        
+        // Reset time scale to default
+        this.gameLoop.setTimeScale(config.physics.defaultTimeScale);
+        
+        // Reset current time to 0
+        this.gameLoop.resetCurrentTime();
+        
+        // Reset camera to initial position
+        const cameraManager = this.gameLoop.getCameraManager();
+        cameraManager.resetToInitial();
+        
+        // Initialize Moon with actual Earth-Moon system parameters from config
+        const moonConfig = config.bodies.moon;
+        const earthConfig = config.bodies.earth;
+        const moonDistance = moonConfig.distance || 384400;
+        
+        // Calculate circular orbital velocity: v = sqrt(G * M_earth / r)
+        // G is in km³/(kg·s²) for consistency with km-based distances
+        // This gives velocity in km/s
+        const moonVelocity = Math.sqrt(G * earthConfig.mass / moonDistance);
+        
+        // Place Moon at distance along x-axis, with velocity in z-direction for circular orbit in xz plane
+        const addResult = this.simulationController.executeCommand(
+            `ADD_BODY position:${moonDistance},0,0 velocity:0,0,${moonVelocity} mass:${moonConfig.mass} id:${moonConfig.name} radius:${moonConfig.radius} color:${moonConfig.color || 'cccccc'} trajectoryColor:${moonConfig.trajectoryColor || 'ffffff'}`
+        );
+        
+        // Update UI to reflect Moon's orbit info
+        if (addResult.success) {
+            const orbitResult = this.simulationController.executeCommand(`GET_ORBIT_INFO ${moonConfig.name}`);
+            if (orbitResult.success && orbitResult.data) {
+                this.uiManager.updateOrbitTypeDisplay({
+                    type: orbitResult.data.orbitType,
+                    parameters: orbitResult.data.parameters
+                });
+            }
+        }
+        
+        // Restart the simulation after initialization
+        // This ensures the simulation continues running after a reset
+        this.gameLoop.start();
+        console.log('[initializeSimulation] Simulation restarted');
+        console.log(`[initializeSimulation] Reset complete. Bodies: ${this.gameLoop.getOrbitalBodies().length}, Time scale: ${this.gameLoop.getTimeScale()}`);
     }
 
     start(): void {

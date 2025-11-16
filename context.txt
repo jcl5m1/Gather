@@ -1,4 +1,10 @@
 this is a space simulation game written in typescript.  the main code is in src/moonOrbitSim.
-the project has a commandProcessor.ts which allows automated execution of all UI elements without interacting with widgets.  use this to test functionality when you open the webbrowser.
+the main file is in gameLoop.ts
+all of the static values should be stores in config.json and is loaded by config.ts
+open a webbrowser to test the results
+the project has also commandProcessor.ts which allows automated execution of all UI elements without interacting with widgets.  do not click on widgets, use the text commands to test functionality when you open the webbrowser and use console output to report the results.  this is to minimize the need for processing screenshots of the webpage.
+ensure all UI are actually executed through text commands to allow full automation.
 make sure to use the developer console out to help debug behavior.
-all distnace units should be in km
+all distance units should be stored in kilometers, radians, kilograms, seconds, liters, kelvin, newtons, joules, and watts. But, display using the formatters in uiManager
+check the webpage for compilation errors after completing each task ebfore saying you are done.
+if the change impacted command behavior test it before saying you are complete

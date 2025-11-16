@@ -11,10 +11,19 @@ export class SimulationController {
     private commandProcessor: CommandProcessor;
     private commandHistory: string[] = [];
     private maxHistorySize: number = 100;
+    private initializeSimulationCallback?: () => void;
 
     constructor(gameLoop: GameLoop) {
         this.gameLoop = gameLoop;
         this.commandProcessor = new CommandProcessor(gameLoop);
+    }
+
+    /**
+     * Set the callback for initializing the simulation (called by RESET command)
+     */
+    setInitializeSimulationCallback(callback: () => void): void {
+        this.initializeSimulationCallback = callback;
+        this.commandProcessor.setInitializeSimulationCallback(callback);
     }
 
     /**
@@ -54,6 +63,13 @@ export class SimulationController {
      */
     getCommandProcessor(): CommandProcessor {
         return this.commandProcessor;
+    }
+
+    /**
+     * Clear all bodies from the command processor's tracking
+     */
+    clearAllBodies(): void {
+        this.commandProcessor.clearAllBodies();
     }
 
     /**

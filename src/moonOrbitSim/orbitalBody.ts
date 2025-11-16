@@ -51,19 +51,27 @@ export class OrbitalBody {
 
     /**
      * Update position and velocity based on gravitational force
+     * All units: distance in km, velocity in km/s, mass in kg, time in seconds
+     * G must be in km³/(kg·s²)
      */
     update(dt: number, centralBodyPosition: THREE.Vector3, centralBodyMass: number, G: number): void {
         const r = this.position.clone().sub(centralBodyPosition);
-        const distance = r.length();
+        const distance = r.length(); // km
         
         // Prevent division by zero and extreme forces at very small distances
         if (distance >= 2.5) {
+            // Force = -G * m1 * m2 / r²
+            // Units: G (km³/(kg·s²)) * mass (kg) * mass (kg) / distance² (km²) = kg·km/s²
             const force = r.normalize().multiplyScalar(
                 -G * this.mass * centralBodyMass / (distance * distance)
             );
 
-            // Update velocity and position using Euler integration
+            // Update velocity: v += a * dt = (F/m) * dt
+            // Units: (kg·km/s² / kg) * s = km/s
             this.velocity.add(force.multiplyScalar(dt / this.mass));
+            
+            // Update position: r += v * dt
+            // Units: km/s * s = km
             this.position.add(this.velocity.clone().multiplyScalar(dt));
         }
 
@@ -96,6 +104,22 @@ export class OrbitalBody {
     }
 
     /**
+     * Reset to initial conditions (stored when body was created or last reset)
+     * and recompute trajectory
+     */
+    resetToInitial(centralBodyMass: number): void {
+        this.position.copy(this.initialPosition);
+        this.velocity.copy(this.initialVelocity);
+
+        // Clear trail
+        this.trailPoints = [this.initialPosition.clone()];
+
+        // Recompute trajectory
+        this.trajectory.clear();
+        this.trajectory.calculateFromState(this.initialPosition, this.initialVelocity, centralBodyMass);
+    }
+
+    /**
      * Get current position
      */
     getPosition(): THREE.Vector3 {
@@ -107,6 +131,20 @@ export class OrbitalBody {
      */
     getVelocity(): THREE.Vector3 {
         return this.velocity.clone();
+    }
+
+    /**
+     * Get initial position
+     */
+    getInitialPosition(): THREE.Vector3 {
+        return this.initialPosition.clone();
+    }
+
+    /**
+     * Get initial velocity
+     */
+    getInitialVelocity(): THREE.Vector3 {
+        return this.initialVelocity.clone();
     }
 
     /**

@@ -5,6 +5,106 @@ import { G } from './config';
 // Re-export G for backward compatibility
 export { G };
 
+/**
+ * Generate position and velocity vectors from orbital parameters
+ * @param rp Periapsis distance in km
+ * @param ra Apapsis distance in km
+ * @param e Eccentricity (0-1 for elliptical)
+ * @param centralBodyMass Mass of central body in kg
+ * @param trueAnomaly True anomaly at initial position (0 = periapsis, π = apapsis) in radians
+ * @param inclination Orbital inclination in radians (default: 0 = equatorial)
+ * @param longitudeOfAscendingNode Longitude of ascending node in radians (default: 0)
+ * @param argumentOfPeriapsis Argument of periapsis in radians (default: 0)
+ * @returns Object with position and velocity vectors
+ */
+export function generateStateFromOrbitalElements(
+    rp: number,
+    ra: number,
+    e: number,
+    centralBodyMass: number,
+    trueAnomaly: number = 0,
+    inclination: number = 0,
+    longitudeOfAscendingNode: number = 0,
+    argumentOfPeriapsis: number = 0
+): { position: THREE.Vector3; velocity: THREE.Vector3 } {
+    const mu = G * centralBodyMass;
+    
+    // Calculate semi-major axis
+    const a = (rp + ra) / 2;
+    
+    // Calculate semi-latus rectum
+    const p = a * (1 - e * e);
+    
+    // Calculate current radius from true anomaly
+    const r = p / (1 + e * Math.cos(trueAnomaly));
+    
+    // Calculate velocity components in perifocal frame
+    // Radial component: v_r = sqrt(mu/p) * e * sin(ν)
+    // Transverse component: v_t = sqrt(mu/p) * (1 + e * cos(ν))
+    const sqrtMuP = Math.sqrt(mu / p);
+    const vRadial = sqrtMuP * e * Math.sin(trueAnomaly);
+    const vTransverse = sqrtMuP * (1 + e * Math.cos(trueAnomaly));
+    
+    // Position in orbital plane (perifocal frame)
+    const xPerifocal = r * Math.cos(trueAnomaly);
+    const yPerifocal = r * Math.sin(trueAnomaly);
+    
+    // Velocity in orbital plane (perifocal frame)
+    // Radial direction is along position vector, transverse is perpendicular
+    const radialDir = new THREE.Vector3(Math.cos(trueAnomaly), Math.sin(trueAnomaly), 0);
+    const transverseDir = new THREE.Vector3(-Math.sin(trueAnomaly), Math.cos(trueAnomaly), 0);
+    
+    const vxPerifocal = vRadial * radialDir.x + vTransverse * transverseDir.x;
+    const vyPerifocal = vRadial * radialDir.y + vTransverse * transverseDir.y;
+    
+    // Rotation matrices for orbital plane orientation
+    // 1. Rotation around z-axis by argument of periapsis
+    const cosArgPeri = Math.cos(argumentOfPeriapsis);
+    const sinArgPeri = Math.sin(argumentOfPeriapsis);
+    
+    // 2. Rotation around x-axis by inclination
+    const cosInc = Math.cos(inclination);
+    const sinInc = Math.sin(inclination);
+    
+    // 3. Rotation around z-axis by longitude of ascending node
+    const cosLAN = Math.cos(longitudeOfAscendingNode);
+    const sinLAN = Math.sin(longitudeOfAscendingNode);
+    
+    // Combined rotation matrix (Z-X-Z Euler angles)
+    // First apply argument of periapsis rotation
+    let x1 = xPerifocal * cosArgPeri - yPerifocal * sinArgPeri;
+    let y1 = xPerifocal * sinArgPeri + yPerifocal * cosArgPeri;
+    let z1 = 0;
+    
+    // Then apply inclination rotation
+    let x2 = x1;
+    let y2 = y1 * cosInc - z1 * sinInc;
+    let z2 = y1 * sinInc + z1 * cosInc;
+    
+    // Finally apply longitude of ascending node rotation
+    const x = x2 * cosLAN - y2 * sinLAN;
+    const y = x2 * sinLAN + y2 * cosLAN;
+    const z = z2;
+    
+    // Same rotations for velocity
+    let vx1 = vxPerifocal * cosArgPeri - vyPerifocal * sinArgPeri;
+    let vy1 = vxPerifocal * sinArgPeri + vyPerifocal * cosArgPeri;
+    let vz1 = 0;
+    
+    let vx2 = vx1;
+    let vy2 = vy1 * cosInc - vz1 * sinInc;
+    let vz2 = vy1 * sinInc + vz1 * cosInc;
+    
+    const vx = vx2 * cosLAN - vy2 * sinLAN;
+    const vy = vx2 * sinLAN + vy2 * cosLAN;
+    const vz = vz2;
+    
+    return {
+        position: new THREE.Vector3(x, y, z),
+        velocity: new THREE.Vector3(vx, vy, vz)
+    };
+}
+
 export function calculateInitialE(
     initialPos: THREE.Vector3,
     initialVel: THREE.Vector3,

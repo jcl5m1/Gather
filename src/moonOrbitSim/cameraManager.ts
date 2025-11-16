@@ -21,6 +21,15 @@ export class CameraManager {
     // Storage for camera state per body (to restore when switching back)
     private bodyCameraStates: Map<string, THREE.Vector3> = new Map(); // Maps body name to camera offset
     
+    // Storage for free camera state (position and target)
+    private freeCameraPosition: THREE.Vector3 | null = null;
+    private freeCameraTarget: THREE.Vector3 | null = null;
+    
+    // Keyboard state for free camera movement
+    private keysPressed: Set<string> = new Set();
+    private minMovementSpeed: number = 50000; // Minimum movement speed in km per second
+    private lastUpdateTime: number = 0; // Timestamp of last update for delta time calculation
+    
     // References to bodies for target switching
     private centralBody: OrbitalBody;
     private orbitalBodies: OrbitalBody[] = [];
@@ -52,7 +61,7 @@ export class CameraManager {
     }
 
     private setupKeyboardControls(): void {
-        // Add keyboard listeners for camera target switching
+        // Add keyboard listeners for camera target switching and free camera movement
         document.addEventListener('keydown', (event) => {
             // Only handle if not typing in an input field
             if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
@@ -63,7 +72,35 @@ export class CameraManager {
                 this.switchCameraTarget(-1); // Previous body
             } else if (event.key === ']') {
                 this.switchCameraTarget(1); // Next body
+            } else if (!this.cameraTarget) {
+                // Free camera mode - handle movement keys
+                const key = event.key.toLowerCase();
+                if (['w', 'a', 's', 'd', 'r', 'f'].includes(key)) {
+                    this.keysPressed.add(key);
+                    event.preventDefault();
+                }
             }
+        });
+
+        document.addEventListener('keyup', (event) => {
+            // Only handle if not typing in an input field
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+                return;
+            }
+
+            if (!this.cameraTarget) {
+                // Free camera mode - handle movement keys
+                const key = event.key.toLowerCase();
+                if (['w', 'a', 's', 'd', 'r', 'f'].includes(key)) {
+                    this.keysPressed.delete(key);
+                    event.preventDefault();
+                }
+            }
+        });
+
+        // Clear pressed keys when window loses focus to avoid stuck keys
+        window.addEventListener('blur', () => {
+            this.keysPressed.clear();
         });
     }
 
@@ -93,11 +130,17 @@ export class CameraManager {
             newArrayIndex = 0;
         }
 
-        // Store current camera state before switching away from current body
+        // Store current camera state before switching away
         if (this.cameraTarget) {
             const currentBodyName = this.cameraTarget.getName();
             // Store the current camera offset for this body
             this.bodyCameraStates.set(currentBodyName, this.cameraOffset.clone());
+        } else {
+            // Store free camera state before switching away
+            this.freeCameraPosition = this.camera.position.clone();
+            this.freeCameraTarget = this.controls.target.clone();
+            // Clear pressed keys when leaving free camera mode
+            this.keysPressed.clear();
         }
 
         // Store current offset before switching (for immediate use if no stored state exists)
@@ -107,10 +150,21 @@ export class CameraManager {
         // Update camera target
         const newTarget = allBodies[newArrayIndex];
         if (newTarget === null) {
-            // Switching to free camera - preserve current camera position
+            // Switching to free camera - restore stored position and target
             this.cameraTarget = null;
             this.cameraTargetIndex = -1;
-            // Keep controls enabled and don't change camera position
+            
+            if (this.freeCameraPosition && this.freeCameraTarget) {
+                // Restore stored free camera state
+                this.camera.position.copy(this.freeCameraPosition);
+                this.controls.target.copy(this.freeCameraTarget);
+                this.controls.update();
+            } else {
+                // First time entering free camera - initialize state from current position
+                this.freeCameraPosition = this.camera.position.clone();
+                this.freeCameraTarget = this.controls.target.clone();
+            }
+            
             this.notifyTargetChange(null);
         } else if (newTarget === this.centralBody) {
             this.cameraTarget = this.centralBody;
@@ -179,6 +233,13 @@ export class CameraManager {
      * Update camera each frame - call this from the render loop
      */
     update(): void {
+        // Calculate time delta
+        const currentTime = performance.now() / 1000; // Convert to seconds
+        let deltaTime = this.lastUpdateTime === 0 ? 0.016 : currentTime - this.lastUpdateTime; // Default to ~60fps on first frame
+        // Clamp delta time to prevent huge jumps when tab is inactive (max 1/10th of a second)
+        deltaTime = Math.min(deltaTime, 0.1);
+        this.lastUpdateTime = currentTime;
+
         if (this.cameraTarget) {
             const targetPosition = this.cameraTarget.getPosition();
             
@@ -206,8 +267,84 @@ export class CameraManager {
             // Store current target position for next frame
             this.previousTargetPosition.copy(targetPosition);
         } else {
-            // Free camera mode - just update controls normally
+            // Free camera mode - handle keyboard movement and update controls
+            this.handleFreeCameraMovement(deltaTime);
             this.controls.update();
+            
+            // Update stored free camera state
+            this.freeCameraPosition = this.camera.position.clone();
+            this.freeCameraTarget = this.controls.target.clone();
+        }
+    }
+
+    /**
+     * Handle keyboard movement in free camera mode
+     * @param deltaTime - Time elapsed since last frame in seconds
+     */
+    private handleFreeCameraMovement(deltaTime: number): void {
+        if (this.keysPressed.size === 0) {
+            return;
+        }
+
+        // Get camera's forward direction (negative z-axis in camera space)
+        const forward = new THREE.Vector3(0, 0, -1);
+        forward.applyQuaternion(this.camera.quaternion);
+        
+        // Get camera's right direction (positive x-axis in camera space)
+        const right = new THREE.Vector3(1, 0, 0);
+        right.applyQuaternion(this.camera.quaternion);
+        
+        // Get world up direction
+        const up = new THREE.Vector3(0, 1, 0);
+
+        // Project forward onto xz plane (remove y component)
+        const forwardXZ = forward.clone();
+        forwardXZ.y = 0;
+        forwardXZ.normalize();
+
+        // Project right onto xz plane (remove y component)
+        const rightXZ = right.clone();
+        rightXZ.y = 0;
+        rightXZ.normalize();
+
+        // Calculate movement delta
+        const movementDelta = new THREE.Vector3(0, 0, 0);
+        
+        // w, s keys: move forward/backward along xz plane
+        if (this.keysPressed.has('w')) {
+            movementDelta.add(forwardXZ);
+        }
+        if (this.keysPressed.has('s')) {
+            movementDelta.sub(forwardXZ);
+        }
+        
+        // a, d keys: move left/right along xz plane
+        if (this.keysPressed.has('a')) {
+            movementDelta.sub(rightXZ);
+        }
+        if (this.keysPressed.has('d')) {
+            movementDelta.add(rightXZ);
+        }
+        
+        // r, f keys: move up/down along y-axis
+        if (this.keysPressed.has('r')) {
+            movementDelta.add(up);
+        }
+        if (this.keysPressed.has('f')) {
+            movementDelta.sub(up);
+        }
+
+        // Calculate movement speed proportional to absolute y position, with minimum
+        const currentSpeed = Math.max(this.minMovementSpeed, Math.abs(this.camera.position.y));
+        
+        // Normalize and scale by movement speed and actual time delta
+        if (movementDelta.length() > 0) {
+            movementDelta.normalize();
+            movementDelta.multiplyScalar(currentSpeed * deltaTime);
+            
+            // Apply movement to both camera and controls target
+            this.camera.position.add(movementDelta);
+            this.controls.target.add(movementDelta);
         }
     }
 
@@ -239,8 +376,10 @@ export class CameraManager {
 
     /**
      * Update the list of orbital bodies (called when bodies are added/removed)
+     * @param orbitalBodies - New list of orbital bodies
+     * @param newlyAddedBody - Optional newly added body to automatically focus on
      */
-    updateOrbitalBodies(orbitalBodies: OrbitalBody[]): void {
+    updateOrbitalBodies(orbitalBodies: OrbitalBody[], newlyAddedBody?: OrbitalBody): void {
         this.orbitalBodies = orbitalBodies;
         
         // If current target was removed, switch to free camera
@@ -254,6 +393,76 @@ export class CameraManager {
                 this.cameraTargetIndex = this.orbitalBodies.indexOf(this.cameraTarget);
             }
         }
+        
+        // If a new body was added, always switch to it so the user can see its stats
+        // Use setTimeout to ensure the body is registered in the command processor's map first
+        if (newlyAddedBody) {
+            setTimeout(() => {
+                this.switchToBody(newlyAddedBody);
+            }, 0);
+        }
+    }
+    
+    /**
+     * Switch camera to a specific body by name
+     * @param bodyName - Name of the body to switch to
+     */
+    switchToBodyByName(bodyName: string): boolean {
+        // Check if it's the central body
+        if (this.centralBody.getName() === bodyName) {
+            this.switchToBody(this.centralBody);
+            return true;
+        }
+        
+        // Check orbital bodies
+        const body = this.orbitalBodies.find(b => b.getName() === bodyName);
+        if (body) {
+            this.switchToBody(body);
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Switch camera to a specific body
+     * @param body - The body to switch to
+     */
+    private switchToBody(body: OrbitalBody): void {
+        // Store current camera state before switching away
+        if (this.cameraTarget) {
+            const currentBodyName = this.cameraTarget.getName();
+            this.bodyCameraStates.set(currentBodyName, this.cameraOffset.clone());
+        } else {
+            this.freeCameraPosition = this.camera.position.clone();
+            this.freeCameraTarget = this.controls.target.clone();
+            this.keysPressed.clear();
+        }
+        
+        // Store current offset before switching
+        const oldTargetPosition = this.cameraTarget ? this.cameraTarget.getPosition() : this.controls.target;
+        const currentCameraOffset = this.camera.position.clone().sub(oldTargetPosition);
+        
+        // Update camera target
+        if (body === this.centralBody) {
+            this.cameraTarget = this.centralBody;
+            this.cameraTargetIndex = -2;
+            const storedState = this.bodyCameraStates.get(this.centralBody.getName());
+            this.cameraOffset = storedState ? storedState.clone() : currentCameraOffset;
+            this.notifyTargetChange(this.centralBody.getName());
+        } else {
+            const orbitalIndex = this.orbitalBodies.indexOf(body);
+            if (orbitalIndex >= 0) {
+                this.cameraTarget = body;
+                this.cameraTargetIndex = orbitalIndex;
+                const storedState = this.bodyCameraStates.get(body.getName());
+                this.cameraOffset = storedState ? storedState.clone() : currentCameraOffset;
+                this.notifyTargetChange(body.getName());
+            }
+        }
+        
+        // Update camera position immediately
+        this.updateCameraToTarget();
     }
 
     /**
@@ -277,6 +486,30 @@ export class CameraManager {
      */
     getControls(): OrbitControls {
         return this.controls;
+    }
+
+    /**
+     * Reset camera to initial position (as on page load)
+     */
+    resetToInitial(): void {
+        const cameraConfig = config.scene.camera;
+        this.camera.position.set(
+            cameraConfig.position[0],
+            cameraConfig.position[1],
+            cameraConfig.position[2]
+        );
+        this.controls.target.set(0, 0, 0);
+        this.controls.update();
+        
+        // Reset camera target tracking
+        this.cameraTarget = null;
+        this.cameraTargetIndex = -1;
+        this.cameraOffset.set(0, 0, 0);
+        this.freeCameraPosition = this.camera.position.clone();
+        this.freeCameraTarget = this.controls.target.clone();
+        this.bodyCameraStates.clear();
+        
+        this.notifyTargetChange(null);
     }
 }
 
