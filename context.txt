@@ -1,4 +1,5 @@
-this is a space simulation game written in typescript.  the main code is in src/moonOrbitSim.
+this is a space simulation game written in typescript. it is an npm project
+the main code is in src/moonOrbitSim/.
 the main file is in gameLoop.ts
 all of the static values should be stores in config.json and is loaded by config.ts
 open a webbrowser to test the results
@@ -8,3 +9,4 @@ make sure to use the developer console out to help debug behavior.
 all distance units should be stored in kilometers, radians, kilograms, seconds, liters, kelvin, newtons, joules, and watts. But, display using the formatters in uiManager
 check the webpage for compilation errors after completing each task ebfore saying you are done.
 if the change impacted command behavior test it before saying you are complete
+the ui has an inspector that neatly organizes a lot of the UI data.

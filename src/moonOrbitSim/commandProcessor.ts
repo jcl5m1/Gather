@@ -78,6 +78,10 @@ export class CommandProcessor {
                 case 'LIST_BODIES':
                     return this.handleListBodies();
                 
+                case 'SET_CAMERA_FOCUS':
+                case 'CAMERA_FOCUS':
+                    return this.handleSetCameraFocus(parts.slice(1));
+                
                 case 'START':
                     return this.handleStart();
                 
@@ -539,10 +543,54 @@ export class CommandProcessor {
 
     private handleListBodies(): CommandResult {
         const bodies = Array.from(this.orbitalBodyIdMap.keys());
+        // Include Earth (central body) in the list
+        const centralBody = this.gameLoop.getCentralBody();
+        const earthName = centralBody.getName();
+        // Add Earth at the beginning if not already in the list
+        if (!bodies.includes(earthName)) {
+            bodies.unshift(earthName);
+        }
         return {
             success: true,
             data: { bodies }
         };
+    }
+
+    private handleSetCameraFocus(args: string[]): CommandResult {
+        if (args.length === 0) {
+            return {
+                success: false,
+                message: 'Missing target name. Usage: SET_CAMERA_FOCUS <bodyName|Free Camera>'
+            };
+        }
+
+        // Join all arguments to handle multi-word names like "Free Camera"
+        const targetName = args.join(' ');
+        const cameraManager = this.gameLoop.getCameraManager();
+
+        // Check for Free Camera (case-insensitive)
+        const targetLower = targetName.toLowerCase();
+        if (targetLower === 'free camera' || targetLower === 'free') {
+            cameraManager.switchToFreeCamera();
+            return {
+                success: true,
+                message: 'Camera switched to Free Camera mode'
+            };
+        }
+
+        // Try to switch to the body by name
+        const success = cameraManager.switchToBodyByName(targetName);
+        if (success) {
+            return {
+                success: true,
+                message: `Camera switched to focus on '${targetName}'`
+            };
+        } else {
+            return {
+                success: false,
+                message: `Body '${targetName}' not found. Use LIST_BODIES to see available bodies.`
+            };
+        }
     }
 
     private handleStart(): CommandResult {
@@ -574,6 +622,7 @@ GET_STATE [bodyId] - Get current state of a body
 ADD_BODY [position:x,y,z] [velocity:x,y,z] [mass:value] [id:id] [radius:value] [color:hex] [trajectoryColor:hex] - Add a new orbital body (uses random values if no parameters provided)
 REMOVE_BODY <bodyId> - Remove an orbital body
 LIST_BODIES - List all orbital body IDs
+SET_CAMERA_FOCUS <bodyName|Free Camera> - Switch camera focus to a body or free camera mode
 START - Start the simulation
 STOP - Stop the simulation
 HELP - Show this help message`

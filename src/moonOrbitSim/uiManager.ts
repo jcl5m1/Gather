@@ -18,7 +18,7 @@ export class UIManager {
     private simulationController: SimulationController;
     private cameraManager?: CameraManager;
     private orbitTypeDiv!: HTMLTableElement; // Changed to table
-    private cameraTargetSelect!: HTMLSelectElement; // Changed to select
+    private cameraFocusSelect!: HTMLSelectElement; // Changed to select
     private timeScaleValue!: HTMLSpanElement;
     private currentTimeScale: number = 1000;
     private posXInput!: HTMLInputElement;
@@ -157,6 +157,40 @@ export class UIManager {
         row.appendChild(labelCell);
         row.appendChild(valueCell);
         return row;
+    }
+
+    /**
+     * Format a camelCase variable name into a readable label
+     * Examples: "cameraFocus" -> "Camera Focus", "posX" -> "Pos X", "timeScale" -> "Time Scale"
+     */
+    private formatLabelFromVariableName(variableName: string): string {
+        // Handle empty or single character
+        if (!variableName || variableName.length <= 1) {
+            return variableName;
+        }
+        
+        // Split camelCase into words
+        const words: string[] = [];
+        let currentWord = variableName[0].toUpperCase();
+        
+        for (let i = 1; i < variableName.length; i++) {
+            const char = variableName[i];
+            // If uppercase, start a new word
+            if (char === char.toUpperCase() && char !== char.toLowerCase()) {
+                if (currentWord) {
+                    words.push(currentWord);
+                }
+                currentWord = char;
+            } else {
+                currentWord += char;
+            }
+        }
+        
+        if (currentWord) {
+            words.push(currentWord);
+        }
+        
+        return words.join(' ');
     }
 
     /**
@@ -401,8 +435,47 @@ export class UIManager {
         const moonDistance = moonConfig.distance || 384400;
         const moonVelocity = Math.sqrt(G * earthConfig.mass / moonDistance);
 
+        // Section 0: Camera Focus (at the top)
+        const cameraSection = this.createCollapsibleSection('Camera', true);
+        const cameraTable = document.createElement('table');
+        cameraTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
+        
+        // Get available bodies for camera dropdown
+        const getAvailableBodies = (): string[] => {
+            const bodies = ['Free Camera'];
+            // Get all bodies from simulation
+            const result = this.simulationController.executeCommand('LIST_BODIES');
+            if (result.success && result.data && result.data.bodies) {
+                bodies.push(...result.data.bodies);
+            }
+            return bodies;
+        };
+        
+        // Camera Focus Target dropdown
+        const cameraDropdown = this.createDropdownProperty(
+            this.formatLabelFromVariableName('cameraFocus'),
+            'cameraFocus',
+            getAvailableBodies(),
+            'Free Camera',
+            (value) => {
+                if (this.cameraManager) {
+                    if (value === 'Free Camera') {
+                        this.cameraManager.switchToFreeCamera();
+                    } else {
+                        this.cameraManager.switchToBodyByName(value);
+                    }
+                }
+            }
+        );
+        // Store camera dropdown reference
+        this.cameraFocusSelect = cameraDropdown.select;
+        
+        cameraTable.appendChild(cameraDropdown.row);
+        cameraSection.content.appendChild(cameraTable);
+        propertyInspector.appendChild(cameraSection.container);
+
         // Section 1: Orbit Stats (read-only table)
-        const orbitSection = this.createCollapsibleSection('Orbit Stats', true);
+        const orbitSection = this.createCollapsibleSection('Orbit', true);
         const orbitTable = document.createElement('table');
         orbitTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
         this.orbitTypeDiv = orbitTable;
@@ -414,13 +487,13 @@ export class UIManager {
         const paramsTable = document.createElement('table');
         paramsTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
         
-        const posX = this.createReadWriteProperty('Position X', 'posX', moonDistance.toString(), '1000');
-        const posY = this.createReadWriteProperty('Position Y', 'posY', '0', '1000');
-        const posZ = this.createReadWriteProperty('Position Z', 'posZ', '0', '1000');
-        const velX = this.createReadWriteProperty('Velocity X', 'velX', '0', '0.001');
-        const velY = this.createReadWriteProperty('Velocity Y', 'velY', '0', '0.001');
-        const velZ = this.createReadWriteProperty('Velocity Z', 'velZ', moonVelocity.toFixed(6), '0.001');
-        const mass = this.createReadWriteProperty('Mass', 'mass', moonConfig.mass.toString(), '1e20');
+        const posX = this.createReadWriteProperty(this.formatLabelFromVariableName('posX'), 'posX', this.formatNumber(moonDistance), '1000');
+        const posY = this.createReadWriteProperty(this.formatLabelFromVariableName('posY'), 'posY', this.formatNumber(0), '1000');
+        const posZ = this.createReadWriteProperty(this.formatLabelFromVariableName('posZ'), 'posZ', this.formatNumber(0), '1000');
+        const velX = this.createReadWriteProperty(this.formatLabelFromVariableName('velX'), 'velX', this.formatNumber(0), '0.001');
+        const velY = this.createReadWriteProperty(this.formatLabelFromVariableName('velY'), 'velY', this.formatNumber(0), '0.001');
+        const velZ = this.createReadWriteProperty(this.formatLabelFromVariableName('velZ'), 'velZ', this.formatNumber(moonVelocity), '0.001');
+        const mass = this.createReadWriteProperty(this.formatLabelFromVariableName('mass'), 'mass', this.formatNumber(moonConfig.mass), '1e20');
 
         // Store input references
         this.posXInput = posX.input;
@@ -447,39 +520,9 @@ export class UIManager {
         this.bodyParamsHeading.textContent = 'Body Parameters';
 
         // Section 3: Simulation Controls
-        const controlsSection = this.createCollapsibleSection('Simulation Controls', true);
+        const controlsSection = this.createCollapsibleSection('Simulation', true);
         const controlsTable = document.createElement('table');
         controlsTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
-        
-        // Get available bodies for camera dropdown
-        const getAvailableBodies = (): string[] => {
-            const bodies = ['Free Camera'];
-            // Get all bodies from simulation
-            const result = this.simulationController.executeCommand('LIST_BODIES');
-            if (result.success && result.data && result.data.bodies) {
-                bodies.push(...result.data.bodies);
-            }
-            return bodies;
-        };
-        
-        // Camera Focus Target dropdown
-        const cameraDropdown = this.createDropdownProperty(
-            'Camera Target',
-            'cameraTarget',
-            getAvailableBodies(),
-            'Free Camera',
-            (value) => {
-                if (this.cameraManager) {
-                    if (value === 'Free Camera') {
-                        this.cameraManager.switchToFreeCamera();
-                    } else {
-                        this.cameraManager.switchToBodyByName(value);
-                    }
-                }
-            }
-        );
-        // Store camera dropdown reference
-        this.cameraTargetSelect = cameraDropdown.select;
         
         // Time scale control with +/- buttons: 1e-6 to 1e10, default 1000
         const timeScaleMin = 1e-6;
@@ -499,7 +542,7 @@ export class UIManager {
             color: rgba(255,255,255,0.8);
             margin: 0;
         `;
-        labelCell.textContent = 'Time Scale';
+        labelCell.textContent = this.formatLabelFromVariableName('timeScale');
         
         const valueCell = document.createElement('td');
         valueCell.style.cssText = 'padding: 0; margin: 0; border: 0;';
@@ -590,7 +633,6 @@ export class UIManager {
         
         const resetButton = this.createButtonProperty('Reset', 'Reset Simulation', () => this.resetSimulation());
         
-        controlsTable.appendChild(cameraDropdown.row);
         controlsTable.appendChild(timeScaleRow);
         controlsTable.appendChild(resetButton);
         
@@ -685,7 +727,7 @@ export class UIManager {
     private setupEventListeners(): void {
         // Time scale buttons are handled in initializeUI
 
-        // Add change listeners to parameter inputs to update the focused body
+        // Add change listeners to parameter inputs to update the body state
         const parameterInputs = [
             this.posXInput, this.posYInput, this.posZInput,
             this.velXInput, this.velYInput, this.velZInput,
@@ -697,7 +739,7 @@ export class UIManager {
         
         parameterInputs.forEach(input => {
             input.addEventListener('change', () => {
-                this.resetSimulation();
+                this.updateBodyFromInputs();
             });
             // Also update on input for real-time feedback (but debounce to avoid too many updates)
             input.addEventListener('input', () => {
@@ -705,7 +747,7 @@ export class UIManager {
                     clearTimeout(inputDebounceTimer);
                 }
                 inputDebounceTimer = window.setTimeout(() => {
-                    this.resetSimulation();
+                    this.updateBodyFromInputs();
                     inputDebounceTimer = null;
                 }, 500); // Debounce: update 500ms after user stops typing
             });
@@ -722,8 +764,6 @@ export class UIManager {
 
             if (event.key === 'Enter' && event.target === this.commandInput) {
                 this.executeCommand();
-            } else if (event.key === 'Enter') {
-                this.resetSimulation();
             } else if (event.key === ' ') {
                 event.preventDefault();
                 // Space key triggers ADD_BODY (with random values)
@@ -737,6 +777,70 @@ export class UIManager {
                 this.executeCommand();
             }
         });
+    }
+
+    /**
+     * Update the body's initial state from the input fields and recompute orbit
+     */
+    private updateBodyFromInputs(): void {
+        // Don't update if no body is focused or it's the central body
+        if (!this.currentFocusedBodyName || this.currentFocusedBodyName === config.bodies.earth.name) {
+            return;
+        }
+
+        // Get values from input fields
+        const posX = parseFloat(this.posXInput.value);
+        const posY = parseFloat(this.posYInput.value);
+        const posZ = parseFloat(this.posZInput.value);
+        const velX = parseFloat(this.velXInput.value);
+        const velY = parseFloat(this.velYInput.value);
+        const velZ = parseFloat(this.velZInput.value);
+        const mass = parseFloat(this.massInput.value);
+
+        // Validate that all values are valid numbers
+        if (isNaN(posX) || isNaN(posY) || isNaN(posZ) ||
+            isNaN(velX) || isNaN(velY) || isNaN(velZ) ||
+            isNaN(mass)) {
+            return; // Skip update if any value is invalid
+        }
+
+        // Construct RESET command with the new values
+        const command = `RESET position:${posX},${posY},${posZ} velocity:${velX},${velY},${velZ} mass:${mass} bodyId:${this.currentFocusedBodyName}`;
+        
+        // Execute the command
+        const result = this.executeAndDisplayCommand(command);
+        
+        // Update orbit display if successful
+        if (result.success && result.data) {
+            // Get current position and velocity for display
+            const stateResult = this.simulationController.executeCommand(`GET_STATE ${this.currentFocusedBodyName}`);
+            let altitude: number | undefined;
+            let velocity: number | undefined;
+            
+            if (stateResult.success && stateResult.data) {
+                const pos = stateResult.data.position;
+                const vel = stateResult.data.velocity;
+                altitude = Math.sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
+                velocity = Math.sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
+            }
+            
+            // Update orbit display with new parameters
+            if (result.data.orbitType && result.data.orbitParameters) {
+                this.updateOrbitTypeDisplay({
+                    type: result.data.orbitType,
+                    parameters: result.data.orbitParameters
+                }, altitude, velocity);
+            } else {
+                // Fallback: get orbit info if not in result
+                const orbitResult = this.simulationController.executeCommand(`GET_ORBIT_INFO ${this.currentFocusedBodyName}`);
+                if (orbitResult.success && orbitResult.data) {
+                    this.updateOrbitTypeDisplay({
+                        type: orbitResult.data.orbitType,
+                        parameters: orbitResult.data.parameters
+                    }, altitude, velocity);
+                }
+            }
+        }
     }
 
     resetSimulation(): void {
@@ -815,6 +919,30 @@ export class UIManager {
             }
         }
 
+        // If command was ADD_BODY and succeeded, update camera dropdown to include the new body
+        if (command.toUpperCase().startsWith('ADD_BODY') && result.success) {
+            this.updateCameraDropdownOptions();
+            // If a new body was added, the camera should switch to it automatically via cameraManager
+            // Update the dropdown selection to reflect the current camera target
+            if (this.cameraManager) {
+                const currentTarget = this.cameraManager.getCurrentTargetName();
+                this.updateCameraTargetDisplay(currentTarget);
+            }
+        }
+
+        // If command was REMOVE_BODY and succeeded, update camera dropdown
+        if (command.toUpperCase().startsWith('REMOVE_BODY') && result.success) {
+            this.updateCameraDropdownOptions();
+        }
+
+        // If command was SET_CAMERA_FOCUS and succeeded, update camera dropdown selection
+        if (command.toUpperCase().startsWith('SET_CAMERA_FOCUS') || command.toUpperCase().startsWith('CAMERA_FOCUS')) {
+            if (result.success && this.cameraManager) {
+                const currentTarget = this.cameraManager.getCurrentTargetName();
+                this.updateCameraTargetDisplay(currentTarget);
+            }
+        }
+
         return result;
     }
 
@@ -850,21 +978,21 @@ export class UIManager {
         
         // Add rows based on orbit type
         if (orbitInfo.type === 'elliptical' && orbitInfo.parameters) {
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Orbit Type', 'Elliptical'));
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Semi-major axis', this.formatDistance(orbitInfo.parameters.a)));
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Eccentricity', orbitInfo.parameters.e.toFixed(3)));
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Periapsis', this.formatDistance(orbitInfo.parameters.periapsis)));
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Apoapsis', this.formatDistance(orbitInfo.parameters.apoapsis)));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('orbitType'), 'Elliptical'));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('semiMajorAxis'), this.formatDistance(orbitInfo.parameters.a)));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('eccentricity'), this.formatNumber(orbitInfo.parameters.e)));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('periapsis'), this.formatDistance(orbitInfo.parameters.periapsis)));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('apoapsis'), this.formatDistance(orbitInfo.parameters.apoapsis)));
         } else if (orbitInfo.type === 'hyperbolic') {
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Orbit Type', 'Hyperbolic'));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('orbitType'), 'Hyperbolic'));
         } else {
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Orbit Type', 'Parabolic'));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('orbitType'), 'Parabolic'));
         }
         
         // Add current altitude and velocity
         if (currentAltitude !== undefined && currentVelocity !== undefined) {
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Altitude', this.formatDistance(currentAltitude)));
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Velocity', this.formatVelocity(currentVelocity)));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('altitude'), this.formatDistance(currentAltitude)));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('velocity'), this.formatVelocity(currentVelocity)));
         }
     }
 
@@ -872,15 +1000,15 @@ export class UIManager {
      * Update camera target display
      */
     updateCameraTargetDisplay(targetName: string | null): void {
-        if (this.cameraTargetSelect) {
+        if (this.cameraFocusSelect) {
             const value = targetName === null ? 'Free Camera' : targetName;
-            this.cameraTargetSelect.value = value;
+            this.cameraFocusSelect.value = value;
             // If the value doesn't exist in options, add it
-            if (!Array.from(this.cameraTargetSelect.options).some(opt => opt.value === value)) {
+            if (!Array.from(this.cameraFocusSelect.options).some(opt => opt.value === value)) {
                 const option = document.createElement('option');
                 option.value = value;
                 option.textContent = value;
-                this.cameraTargetSelect.appendChild(option);
+                this.cameraFocusSelect.appendChild(option);
             }
         }
     }
@@ -889,10 +1017,10 @@ export class UIManager {
      * Update available bodies in camera dropdown
      */
     private updateCameraDropdownOptions(): void {
-        if (!this.cameraTargetSelect) return;
+        if (!this.cameraFocusSelect) return;
         
         // Get current selection
-        const currentValue = this.cameraTargetSelect.value;
+        const currentValue = this.cameraFocusSelect.value;
         
         // Get all bodies from simulation
         const result = this.simulationController.executeCommand('LIST_BODIES');
@@ -903,7 +1031,7 @@ export class UIManager {
         }
         
         // Clear and rebuild options
-        this.cameraTargetSelect.innerHTML = '';
+        this.cameraFocusSelect.innerHTML = '';
         bodies.forEach(bodyName => {
             const option = document.createElement('option');
             option.value = bodyName;
@@ -911,7 +1039,7 @@ export class UIManager {
             if (bodyName === currentValue) {
                 option.selected = true;
             }
-            this.cameraTargetSelect.appendChild(option);
+            this.cameraFocusSelect.appendChild(option);
         });
     }
 
@@ -921,23 +1049,20 @@ export class UIManager {
     private updateFormForFocusedBody(targetName: string | null): void {
         this.currentFocusedBodyName = targetName;
         
-        // Check if this is the central body (Earth) - central body doesn't orbit, so we can't edit it
+        // Check if this is the central body (Earth) - inputs should be disabled
         const isCentralBody = targetName === config.bodies.earth.name;
         
         // Update heading
         if (this.bodyParamsHeading) {
             if (targetName === null) {
                 this.bodyParamsHeading.textContent = 'Body Parameters (No Focus)';
-            } else if (isCentralBody) {
-                this.bodyParamsHeading.textContent = `${targetName} Parameters (Central Body - Read Only)`;
             } else {
                 this.bodyParamsHeading.textContent = `${targetName} Parameters`;
             }
         }
 
-        // If no body is focused or it's the central body, disable inputs
-        if (targetName === null || isCentralBody) {
-            // Disable inputs when no body is focused or it's the central body
+        // If no body is focused, disable inputs
+        if (targetName === null) {
             this.posXInput.disabled = true;
             this.posYInput.disabled = true;
             this.posZInput.disabled = true;
@@ -945,34 +1070,27 @@ export class UIManager {
             this.velYInput.disabled = true;
             this.velZInput.disabled = true;
             this.massInput.disabled = true;
-            
-            // If it's the central body, show its parameters but don't allow editing
-            if (isCentralBody) {
-                const earthConfig = config.bodies.earth;
-                // Central body is always at origin with zero velocity
-                this.posXInput.value = '0';
-                this.posYInput.value = '0';
-                this.posZInput.value = '0';
-                this.velXInput.value = '0';
-                this.velYInput.value = '0';
-                this.velZInput.value = '0';
-                this.massInput.value = earthConfig.mass.toString();
-                
-                // Clear orbit display for central body
-                this.orbitTypeDiv.textContent = 'Orbit Type: N/A (Central Body)';
-                this.orbitTypeDiv.style.color = '#FFFFFF';
-            }
             return;
         }
 
-        // Enable inputs for orbital bodies
-        this.posXInput.disabled = false;
-        this.posYInput.disabled = false;
-        this.posZInput.disabled = false;
-        this.velXInput.disabled = false;
-        this.velYInput.disabled = false;
-        this.velZInput.disabled = false;
-        this.massInput.disabled = false;
+        // For all bodies (including Earth), disable inputs if it's the central body, otherwise enable
+        if (isCentralBody) {
+            this.posXInput.disabled = true;
+            this.posYInput.disabled = true;
+            this.posZInput.disabled = true;
+            this.velXInput.disabled = true;
+            this.velYInput.disabled = true;
+            this.velZInput.disabled = true;
+            this.massInput.disabled = true;
+        } else {
+            this.posXInput.disabled = false;
+            this.posYInput.disabled = false;
+            this.posZInput.disabled = false;
+            this.velXInput.disabled = false;
+            this.velYInput.disabled = false;
+            this.velZInput.disabled = false;
+            this.massInput.disabled = false;
+        }
 
         // Get current state of the focused body
         const stateResult = this.simulationController.executeCommand(`GET_STATE ${targetName}`);
@@ -982,16 +1100,16 @@ export class UIManager {
             const initialPos = stateResult.data.initialPosition || stateResult.data.position;
             const initialVel = stateResult.data.initialVelocity || stateResult.data.velocity;
             
-            this.posXInput.value = initialPos[0].toString();
-            this.posYInput.value = initialPos[1].toString();
-            this.posZInput.value = initialPos[2].toString();
+            this.posXInput.value = this.formatNumber(initialPos[0]);
+            this.posYInput.value = this.formatNumber(initialPos[1]);
+            this.posZInput.value = this.formatNumber(initialPos[2]);
             
-            this.velXInput.value = initialVel[0].toString();
-            this.velYInput.value = initialVel[1].toString();
-            this.velZInput.value = initialVel[2].toString();
+            this.velXInput.value = this.formatNumber(initialVel[0]);
+            this.velYInput.value = this.formatNumber(initialVel[1]);
+            this.velZInput.value = this.formatNumber(initialVel[2]);
             
             // Update mass field
-            this.massInput.value = stateResult.data.mass.toString();
+            this.massInput.value = this.formatNumber(stateResult.data.mass);
         } else {
             // Log error if state retrieval failed
             console.error(`[UIManager] Failed to get state for body '${targetName}':`, stateResult.message || 'Unknown error');
@@ -1026,6 +1144,17 @@ export class UIManager {
     }
 
     /**
+     * Format a number with 3 decimal places, using exponential notation if > 1e3 or < 1e-3
+     */
+    private formatNumber(value: number): string {
+        const absValue = Math.abs(value);
+        if (absValue > 1e3 || absValue < 1e-3) {
+            return value.toExponential(3);
+        }
+        return value.toFixed(3);
+    }
+
+    /**
      * Format a distance value (in km) with appropriate unit
      */
     private formatDistance(km: number): string {
@@ -1033,34 +1162,34 @@ export class UIManager {
         
         // Light-day: 1 Ld = 2.59e10 km
         if (absKm >= 1.295e10) {
-            return `${(km / 2.59e10).toFixed(2)} Ld`;
+            return `${this.formatNumber(km / 2.59e10)} Ld`;
         }
         // Light-hour: 1 Lh = 1.08e9 km
         if (absKm >= 5.4e8) {
-            return `${(km / 1.08e9).toFixed(2)} Lh`;
+            return `${this.formatNumber(km / 1.08e9)} Lh`;
         }
         // Light-minute: 1 Lm = 1.8e7 km
         if (absKm >= 9e6) {
-            return `${(km / 1.8e7).toFixed(2)} Lm`;
+            return `${this.formatNumber(km / 1.8e7)} Lm`;
         }
         // Light-second: 1 Ls = 299792.458 km (speed of light * 1 second)
         if (absKm >= 149896.229) {
-            return `${(km / 299792.458).toFixed(2)} Ls`;
+            return `${this.formatNumber(km / 299792.458)} Ls`;
         }
         // Megameter: 1 Mm = 1e3 km
         if (absKm >= 500) {
-            return `${(km / 1e3).toFixed(2)} Mm`;
+            return `${this.formatNumber(km / 1e3)} Mm`;
         }
         // Kilometer: 1 km
         if (absKm >= 0.5) {
-            return `${km.toFixed(2)} Km`;
+            return `${this.formatNumber(km)} Km`;
         }
         // Meter: 1 m = 1e-3 km
         if (absKm >= 0.0005) {
-            return `${(km * 1e3).toFixed(2)} m`;
+            return `${this.formatNumber(km * 1e3)} m`;
         }
         // Centimeter: 1 cm = 1e-5 km
-        return `${(km * 1e5).toFixed(2)} cm`;
+        return `${this.formatNumber(km * 1e5)} cm`;
     }
 
     /**
@@ -1072,14 +1201,14 @@ export class UIManager {
         // For velocity, we'll use km/s, m/s, or cm/s
         // km/s
         if (absKmPerS >= 0.5) {
-            return `${kmPerS.toFixed(2)} Km/s`;
+            return `${this.formatNumber(kmPerS)} Km/s`;
         }
         // m/s: 1 m/s = 1e-3 km/s
         if (absKmPerS >= 0.0005) {
-            return `${(kmPerS * 1e3).toFixed(2)} m/s`;
+            return `${this.formatNumber(kmPerS * 1e3)} m/s`;
         }
         // cm/s: 1 cm/s = 1e-5 km/s
-        return `${(kmPerS * 1e5).toFixed(2)} cm/s`;
+        return `${this.formatNumber(kmPerS * 1e5)} cm/s`;
     }
 
     /**
@@ -1088,13 +1217,25 @@ export class UIManager {
     private updateCurrentValuesDisplay(): void {
         if (!this.orbitTypeDiv) return;
         
-        if (!this.currentFocusedBodyName || this.currentFocusedBodyName === config.bodies.earth.name) {
+        if (!this.currentFocusedBodyName) {
             this.orbitTypeDiv.innerHTML = '';
-            if (this.currentFocusedBodyName === config.bodies.earth.name) {
-                this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Body', 'Central Body (Earth)'));
-                this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Status', 'Position and velocity are fixed at origin'));
-            } else {
-                this.orbitTypeDiv.appendChild(this.createReadOnlyProperty('Status', 'No body focused'));
+            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('status'), 'No body focused'));
+            return;
+        }
+        
+        // For Earth (central body), try to get state but orbit info may not be available
+        if (this.currentFocusedBodyName === config.bodies.earth.name) {
+            const stateResult = this.simulationController.executeCommand(`GET_STATE ${this.currentFocusedBodyName}`);
+            if (stateResult.success && stateResult.data) {
+                const pos = stateResult.data.position;
+                const vel = stateResult.data.velocity;
+                const altitude = Math.sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
+                const velocity = Math.sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
+                
+                // Show basic info for Earth
+                this.orbitTypeDiv.innerHTML = '';
+                this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('altitude'), this.formatDistance(altitude)));
+                this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('velocity'), this.formatVelocity(velocity)));
             }
             return;
         }
@@ -1129,8 +1270,8 @@ export class UIManager {
             this.updateInterval = null;
         }
 
-        // Only update if a body is focused (not central body or null)
-        if (targetName && targetName !== config.bodies.earth.name) {
+        // Update if a body is focused
+        if (targetName) {
             // Update immediately
             this.updateCurrentValuesDisplay();
             
@@ -1139,7 +1280,7 @@ export class UIManager {
                 this.updateCurrentValuesDisplay();
             }, 100);
         } else {
-            // Clear display for central body or no focus
+            // Clear display for no focus
             this.updateCurrentValuesDisplay();
         }
     }
