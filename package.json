@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "build": "webpack",
-    "start": "webpack serve"
+    "start": "webpack serve",
+    "build:mine": "webpack --config webpack.mineGather.config.js",
+    "start:mine": "webpack serve --config webpack.mineGather.config.js"
   },
   "keywords": [],
   "author": "",

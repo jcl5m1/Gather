@@ -1,87 +1,75 @@
-import { SceneManager } from './sceneManager';
-import { SimulationManager } from './simulationManager';
+import { GameLoop } from './gameLoop';
+import { SimulationController } from './simulationController';
 import { UIManager } from './uiManager';
-import { generateEllipsePoints, generateBezierOrbitPoints } from './orbitUtils';
-import * as THREE from 'three';
+import { config, G, hexToNumber } from './config';
 
 export class MoonOrbitSimulation {
-    private sceneManager: SceneManager;
-    private simulationManager: SimulationManager;
+    private gameLoop: GameLoop;
+    private simulationController: SimulationController;
     private uiManager: UIManager;
-    private animationFrameId: number = 0;
 
     constructor() {
-        this.simulationManager = new SimulationManager();
-        this.sceneManager = new SceneManager();
-        this.uiManager = new UIManager(this.simulationManager, () => this.updateOrbitVisualizations());
+        try {
+            // Initialize game loop
+            this.gameLoop = new GameLoop();
+            
+            // Initialize simulation controller (command-based interface)
+            this.simulationController = new SimulationController(this.gameLoop);
+            
+            // Initialize UI manager (sends commands to controller)
+            // Pass camera manager for target display
+            this.uiManager = new UIManager(this.simulationController, this.gameLoop.getCameraManager());
 
-        // Initialize simulation with values from UI
-        this.uiManager.resetSimulation();
-
-        this.animate = this.animate.bind(this);
+            // Initialize Moon with actual Earth-Moon system parameters from config
+            const moonConfig = config.bodies.moon;
+            const earthConfig = config.bodies.earth;
+            const moonDistance = moonConfig.distance || 384400;
+            
+            // Calculate circular orbital velocity: v = sqrt(G * M_earth / r)
+            // G is in km³/(kg·s²) for consistency with km-based distances
+            // This gives velocity in km/s
+            const moonVelocity = Math.sqrt(G * earthConfig.mass / moonDistance);
+            
+            // Place Moon at distance along x-axis, with velocity in z-direction for circular orbit in xz plane
+            const addResult = this.simulationController.executeCommand(
+                `ADD_BODY position:${moonDistance},0,0 velocity:0,0,${moonVelocity} mass:${moonConfig.mass} id:${moonConfig.name} radius:${moonConfig.radius} color:${moonConfig.color || 'cccccc'} trajectoryColor:${moonConfig.trajectoryColor || 'ffffff'}`
+            );
+            
+            // Update UI to reflect Moon's orbit info
+            if (addResult.success) {
+                const orbitResult = this.simulationController.executeCommand(`GET_ORBIT_INFO ${moonConfig.name}`);
+                if (orbitResult.success && orbitResult.data) {
+                    this.uiManager.updateOrbitTypeDisplay({
+                        type: orbitResult.data.orbitType,
+                        parameters: orbitResult.data.parameters
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Error initializing simulation:', error);
+            throw error;
+        }
     }
 
     start(): void {
-        this.animate();
+        this.gameLoop.start();
     }
 
     stop(): void {
-        if (this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-        }
+        this.gameLoop.stop();
     }
 
-    private updateOrbitVisualizations(): void {
-        const orbitGeometry = this.simulationManager.calculateOrbitType();
-        const { orbitAnalytical, orbitBezier } = this.simulationManager.getOrbitPoints();
-
-        if (orbitGeometry.type === 'elliptical') {
-            this.sceneManager.showOrbitVisualizations(true);
-            this.sceneManager.updateAnalyticalOrbit(orbitAnalytical);
-            this.sceneManager.updateBezierOrbit(orbitBezier);
-
-            if (orbitGeometry.periapsisPoint && orbitGeometry.apoapsisPoint) {
-                this.sceneManager.updateMarkers(
-                    orbitGeometry.periapsisPoint,
-                    orbitGeometry.apoapsisPoint,
-                    true
-                );
-            }
-        } else {
-            this.sceneManager.showOrbitVisualizations(false);
-            this.sceneManager.updateAnalyticalOrbit([]);
-            this.sceneManager.updateBezierOrbit([]);
-        }
+    /**
+     * Get the simulation controller for command-based control
+     */
+    getController(): SimulationController {
+        return this.simulationController;
     }
 
-    private animate(): void {
-        this.animationFrameId = requestAnimationFrame(this.animate);
-
-        // Update simulation state
-        this.simulationManager.update();
-
-        // Get updated states
-        const { moonIterative, moonAnalytical } = this.simulationManager.getMoonStates();
-        const { orbitIterative } = this.simulationManager.getOrbitPoints();
-
-        // Update scene geometry
-        this.sceneManager.updateMoonPositions(moonIterative, moonAnalytical);
-        this.sceneManager.updateIterativeOrbitTrails(orbitIterative);
-
-        // Update orbit visualizations including markers
-        const orbitGeometry = this.simulationManager.calculateOrbitType();
-        if (orbitGeometry.type === 'elliptical' && orbitGeometry.periapsisPoint && orbitGeometry.apoapsisPoint) {
-            this.sceneManager.updateMarkers(
-                orbitGeometry.periapsisPoint,
-                orbitGeometry.apoapsisPoint,
-                true
-            );
-        }
-
-        // Update UI with simplified orbit info
-        this.uiManager.updateOrbitTypeDisplay(this.simulationManager.getUIOrbitInfo());
-
-        // Render scene
-        this.sceneManager.render();
+    /**
+     * Get the game loop (for advanced usage)
+     */
+    getGameLoop(): GameLoop {
+        return this.gameLoop;
     }
 }

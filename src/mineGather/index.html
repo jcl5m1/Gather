@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MineGather - Resource Collection Game</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .resources {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #fff;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .resource {
+            text-align: center;
+            padding: 10px;
+        }
+        .resource-count {
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        .mines-container {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .mine {
+            aspect-ratio: 1;
+            background-color: #ddd;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+        .mine:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        .mine.depleted {
+            background-color: #aaa;
+            cursor: not-allowed;
+        }
+        .mine-icon {
+            font-size: 24px;
+        }
+        .mine-resource {
+            position: absolute;
+            bottom: 5px;
+            right: 5px;
+            font-size: 12px;
+            background-color: rgba(255,255,255,0.7);
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+        .mine-count {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            font-size: 12px;
+            background-color: rgba(255,255,255,0.7);
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        .mine.depleted .mine-count {
+            color: #d32f2f;
+        }
+        .status {
+            text-align: center;
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #fff;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .offline-indicator {
+            display: none;
+            background-color: #ffcc00;
+            color: #333;
+            text-align: center;
+            padding: 5px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+        }
+        .offline-indicator.visible {
+            display: block;
+        }
+        @media (max-width: 600px) {
+            .mines-container {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+        @media (max-width: 400px) {
+            .mines-container {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>MineGather</h1>
+            <p>Click on mines to collect resources</p>
+        </header>
+
+        <div id="offlineIndicator" class="offline-indicator">
+            You are currently offline. Your progress will be saved locally.
+        </div>
+
+        <div class="resources" id="resourcesDisplay">
+            <!-- Resource counters will be added here dynamically -->
+        </div>
+
+        <div class="mines-container" id="minesContainer">
+            <!-- Mines will be added here dynamically -->
+        </div>
+
+        <div class="status" id="statusMessage">
+            Click on mines to gather resources!
+        </div>
+    </div>
+
+    <script src="bundle.js"></script>
+</body>
+</html>

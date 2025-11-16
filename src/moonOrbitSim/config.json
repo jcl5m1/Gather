@@ -1,0 +1,60 @@
+{
+  "physics": {
+    "gravitationalConstant": 6.67430e-20,
+    "timeStep": 1.0,
+    "defaultTimeScale": 1000.0,
+    "comment": "G in km³/(kg·s²). Converted from SI: 6.67430e-11 m³/(kg·s²) * (1 m / 1000 km)³ = 6.67430e-20. timeStep in seconds, defaultTimeScale speeds up simulation"
+  },
+  "bodies": {
+    "earth": {
+      "name": "Earth",
+      "mass": 5.972e24,
+      "radius": 6371,
+      "color": "3366cc"
+    },
+    "moon": {
+      "name": "Moon",
+      "mass": 7.342e22,
+      "radius": 1737,
+      "distance": 384400,
+      "color": "cccccc",
+      "trajectoryColor": "ffffff"
+    }
+  },
+  "scene": {
+    "camera": {
+      "fov": 75,
+      "near": 0.1,
+      "far": 1000000,
+      "position": [500000, 300000, 500000]
+    },
+    "grid": {
+      "size": 9900000,
+      "divisions": 99,
+      "color": "333333",
+      "comment": "100 lines (99 divisions) with 10,000 km intervals = 990,000 km total size"
+    },
+    "axes": {
+      "size": 100000
+    },
+    "lights": {
+      "ambient": {
+        "color": "404040"
+      },
+      "directional": {
+        "color": "ffffff",
+        "intensity": 1,
+        "position": [5, 3, 5]
+      }
+    },
+    "controls": {
+      "enableDamping": true,
+      "dampingFactor": 0.05
+    }
+  },
+  "trail": {
+    "color": "ffffff",
+    "opacity": 0.5
+  }
+}
+

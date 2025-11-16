@@ -1,0 +1,4 @@
+this is a space simulation game written in typescript.  the main code is in src/moonOrbitSim.
+the project has a commandProcessor.ts which allows automated execution of all UI elements without interacting with widgets.  use this to test functionality when you open the webbrowser.
+make sure to use the developer console out to help debug behavior.
+all distnace units should be in km

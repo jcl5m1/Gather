@@ -1,9 +1,12 @@
-import { SimulationManager } from './simulationManager';
-import * as THREE from 'three';
+import { SimulationController } from './simulationController';
+import { CameraManager } from './cameraManager';
+import { config, G } from './config';
 
 export class UIManager {
-    private simulationManager: SimulationManager;
+    private simulationController: SimulationController;
+    private cameraManager?: CameraManager;
     private orbitTypeDiv!: HTMLDivElement;
+    private cameraTargetDiv!: HTMLDivElement;
     private timeScaleSlider!: HTMLInputElement;
     private timeScaleValue!: HTMLSpanElement;
     private posXInput!: HTMLInputElement;
@@ -13,13 +16,30 @@ export class UIManager {
     private velYInput!: HTMLInputElement;
     private velZInput!: HTMLInputElement;
     private massInput!: HTMLInputElement;
-    private onResetCallback: () => void;
+    private commandInput!: HTMLInputElement;
+    private commandOutput!: HTMLDivElement;
 
-    constructor(simulationManager: SimulationManager, onReset: () => void) {
-        this.simulationManager = simulationManager;
-        this.onResetCallback = onReset;
+    constructor(simulationController: SimulationController, cameraManager?: CameraManager) {
+        this.simulationController = simulationController;
+        this.cameraManager = cameraManager;
         this.initializeUI();
         this.setupEventListeners();
+        
+        // Set initial time scale from config
+        const defaultTimeScale = config.physics.defaultTimeScale;
+        this.simulationController.executeCommand(`SET_TIME_SCALE ${defaultTimeScale}`);
+        
+        // Setup camera target change callback
+        if (this.cameraManager) {
+            this.cameraManager.setOnTargetChange((targetName) => {
+                this.updateCameraTargetDisplay(targetName);
+            });
+            // Set initial display
+            this.updateCameraTargetDisplay(this.cameraManager.getCurrentTargetName());
+        }
+        
+        // Don't reset simulation here - let app.ts initialize the Moon first
+        // The UI fields are already initialized with Moon parameters
     }
 
     private initializeUI(): void {
@@ -34,7 +54,22 @@ export class UIManager {
             color: white;
             padding: 10px;
             font-family: Arial, sans-serif;
+            max-height: 90vh;
+            overflow-y: auto;
         `;
+
+        // Camera target display
+        this.cameraTargetDiv = document.createElement('div');
+        this.cameraTargetDiv.id = 'cameraTarget';
+        this.cameraTargetDiv.style.cssText = `
+            background: rgba(100,150,255,0.3);
+            padding: 5px;
+            margin-bottom: 10px;
+            text-align: center;
+            font-weight: bold;
+        `;
+        this.cameraTargetDiv.textContent = 'Camera Focus: Free Camera';
+        controls.appendChild(this.cameraTargetDiv);
 
         // Orbit type display
         this.orbitTypeDiv = document.createElement('div');
@@ -71,18 +106,24 @@ export class UIManager {
             return { container, input };
         };
 
-        // Position inputs
-        const { container: posXContainer, input: posX } = createInput('posX', 'Position X:', '15', '1');
-        const { container: posYContainer, input: posY } = createInput('posY', 'Position Y:', '5', '1');
-        const { container: posZContainer, input: posZ } = createInput('posZ', 'Position Z:', '3', '1');
+        // Initialize with Moon parameters from config
+        const moonConfig = config.bodies.moon;
+        const earthConfig = config.bodies.earth;
+        const moonDistance = moonConfig.distance || 384400;
+        const moonVelocity = Math.sqrt(G * earthConfig.mass / moonDistance);
         
-        // Velocity inputs
-        const { container: velXContainer, input: velX } = createInput('velX', 'Velocity X:', '2', '0.1');
-        const { container: velYContainer, input: velY } = createInput('velY', 'Velocity Y:', '10.0', '0.1');
-        const { container: velZContainer, input: velZ } = createInput('velZ', 'Velocity Z:', '0', '0.1');
+        // Position inputs (Moon starts at distance along x-axis)
+        const { container: posXContainer, input: posX } = createInput('posX', 'Position X:', moonDistance.toString(), '1000');
+        const { container: posYContainer, input: posY } = createInput('posY', 'Position Y:', '0', '1000');
+        const { container: posZContainer, input: posZ } = createInput('posZ', 'Position Z:', '0', '1000');
         
-        // Mass input
-        const { container: massContainer, input: mass } = createInput('mass', 'Mass:', '1.0', '0.1');
+        // Velocity inputs (Moon velocity in z-direction for circular orbit in xz plane)
+        const { container: velXContainer, input: velX } = createInput('velX', 'Velocity X:', '0', '0.001');
+        const { container: velYContainer, input: velY } = createInput('velY', 'Velocity Y:', '0', '0.001');
+        const { container: velZContainer, input: velZ } = createInput('velZ', 'Velocity Z:', moonVelocity.toFixed(6), '0.001');
+        
+        // Mass input (Moon mass)
+        const { container: massContainer, input: mass } = createInput('mass', 'Mass:', moonConfig.mass.toString(), '1e20');
 
         // Store input references
         this.posXInput = posX;
@@ -124,6 +165,7 @@ export class UIManager {
         
         this.timeScaleValue = document.createElement('span');
         this.timeScaleValue.id = 'timeScaleValue';
+        // Will be set when slider is created below
         this.timeScaleValue.textContent = '1.0x';
         
         sliderLabel.appendChild(timeScaleSpan);
@@ -133,14 +175,56 @@ export class UIManager {
         this.timeScaleSlider.type = 'range';
         this.timeScaleSlider.id = 'timeScale';
         this.timeScaleSlider.min = '1';
-        this.timeScaleSlider.max = '1000';
-        this.timeScaleSlider.step = '0.1';
-        this.timeScaleSlider.value = '1';
+        this.timeScaleSlider.max = '10000';
+        this.timeScaleSlider.step = '10';
+        const defaultTimeScale = config.physics.defaultTimeScale;
+        this.timeScaleSlider.value = defaultTimeScale.toString();
+        this.timeScaleValue.textContent = defaultTimeScale.toFixed(1) + 'x';
         this.timeScaleSlider.style.width = '100%';
         
         sliderContainer.appendChild(sliderLabel);
         sliderContainer.appendChild(this.timeScaleSlider);
         controls.appendChild(sliderContainer);
+
+        // Command interface (for testing/automation)
+        const commandContainer = document.createElement('div');
+        commandContainer.style.cssText = `
+            margin-top: 10px;
+            padding: 10px;
+            border-top: 1px solid #666;
+        `;
+        commandContainer.innerHTML = '<h4 style="margin-top: 0;">Command Interface (for testing)</h4>';
+        
+        const commandInputContainer = document.createElement('div');
+        commandInputContainer.style.cssText = 'display: flex; gap: 5px; margin-bottom: 5px;';
+        
+        this.commandInput = document.createElement('input');
+        this.commandInput.type = 'text';
+        this.commandInput.placeholder = 'Enter command (e.g., RESET position:20,5,3 velocity:2,8.5,0 mass:1.0)';
+        this.commandInput.style.cssText = 'flex: 1; padding: 5px; background: rgba(255,255,255,0.1); color: white; border: 1px solid #666;';
+        
+        const commandButton = document.createElement('button');
+        commandButton.textContent = 'Execute';
+        commandButton.onclick = () => this.executeCommand();
+        
+        commandInputContainer.appendChild(this.commandInput);
+        commandInputContainer.appendChild(commandButton);
+        commandContainer.appendChild(commandInputContainer);
+        
+        this.commandOutput = document.createElement('div');
+        this.commandOutput.id = 'commandOutput';
+        this.commandOutput.style.cssText = `
+            margin-top: 5px;
+            padding: 5px;
+            background: rgba(0,0,0,0.5);
+            font-family: monospace;
+            font-size: 11px;
+            max-height: 100px;
+            overflow-y: auto;
+        `;
+        commandContainer.appendChild(this.commandOutput);
+        
+        controls.appendChild(commandContainer);
 
         document.body.appendChild(controls);
     }
@@ -149,33 +233,92 @@ export class UIManager {
         this.timeScaleSlider.addEventListener('input', (e) => {
             const value = parseFloat((e.target as HTMLInputElement).value);
             this.timeScaleValue.textContent = value.toFixed(1) + 'x';
-            this.simulationManager.setTimeScale(value);
+            // Send command instead of direct call
+            this.simulationController.executeCommand(`SET_TIME_SCALE ${value}`);
         });
 
         document.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter') {
+            if (event.key === 'Enter' && event.target === this.commandInput) {
+                this.executeCommand();
+            } else if (event.key === 'Enter') {
                 this.resetSimulation();
+            }
+        });
+
+        // Allow command input to execute on Enter
+        this.commandInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                this.executeCommand();
             }
         });
     }
 
     resetSimulation(): void {
-        const position = new THREE.Vector3(
-            parseFloat(this.posXInput.value),
-            parseFloat(this.posYInput.value),
-            parseFloat(this.posZInput.value)
-        );
-        
-        const velocity = new THREE.Vector3(
-            parseFloat(this.velXInput.value),
-            parseFloat(this.velYInput.value),
-            parseFloat(this.velZInput.value)
-        );
-        
-        const mass = parseFloat(this.massInput.value);
+        try {
+            const position = {
+                x: parseFloat(this.posXInput.value),
+                y: parseFloat(this.posYInput.value),
+                z: parseFloat(this.posZInput.value)
+            };
+            
+            const velocity = {
+                x: parseFloat(this.velXInput.value),
+                y: parseFloat(this.velYInput.value),
+                z: parseFloat(this.velZInput.value)
+            };
+            
+            const mass = parseFloat(this.massInput.value);
 
-        this.simulationManager.resetSimulation(position, velocity, mass);
-        this.onResetCallback();
+            // Use Moon as the body ID to update the actual Moon body
+            const moonConfig = config.bodies.moon;
+            const result = this.simulationController.executeCommand(
+                `RESET position:${position.x},${position.y},${position.z} velocity:${velocity.x},${velocity.y},${velocity.z} mass:${mass} bodyId:${moonConfig.name}`
+            );
+
+            // Update UI based on command result
+            if (result.success && result.data) {
+                this.updateOrbitTypeDisplay({
+                    type: result.data.orbitType,
+                    parameters: result.data.orbitParameters
+                });
+            }
+        } catch (error) {
+            console.error('Error resetting simulation:', error);
+        }
+    }
+
+    private executeCommand(): void {
+        const command = this.commandInput.value.trim();
+        if (!command) return;
+
+        const result = this.simulationController.executeCommand(command);
+        
+        // Display result
+        const output = this.commandOutput;
+        const timestamp = new Date().toLocaleTimeString();
+        const status = result.success ? '✓' : '✗';
+        const message = result.message || (result.success ? 'Command executed' : 'Command failed');
+        
+        output.innerHTML += `<div style="color: ${result.success ? '#90EE90' : '#FF6B6B'};">
+            [${timestamp}] ${status} ${command}<br>
+            ${message}
+        </div>`;
+        
+        // Auto-scroll to bottom
+        output.scrollTop = output.scrollHeight;
+        
+        // Clear input
+        this.commandInput.value = '';
+
+        // If command was RESET or GET_ORBIT_INFO, update orbit display
+        if (command.toUpperCase().startsWith('RESET') || command.toUpperCase().startsWith('GET_ORBIT_INFO')) {
+            if (result.success && result.data && result.data.orbitType) {
+                this.updateOrbitTypeDisplay({
+                    type: result.data.orbitType,
+                    parameters: result.data.parameters || result.data.orbitParameters
+                });
+            }
+        }
     }
 
     updateOrbitTypeDisplay(orbitInfo: {
@@ -200,6 +343,19 @@ export class UIManager {
         } else {
             this.orbitTypeDiv.textContent = 'Orbit Type: Parabolic';
             this.orbitTypeDiv.style.color = '#ADD8E6'; // Light blue
+        }
+    }
+
+    /**
+     * Update camera target display
+     */
+    updateCameraTargetDisplay(targetName: string | null): void {
+        if (this.cameraTargetDiv) {
+            if (targetName === null) {
+                this.cameraTargetDiv.textContent = 'Camera Focus: Free Camera';
+            } else {
+                this.cameraTargetDiv.textContent = `Camera Focus: ${targetName}`;
+            }
         }
     }
 }

@@ -1,30 +1,9 @@
 import * as THREE from 'three';
-import { BezierCurvePoints } from './types';
+import { BezierCurvePoints, BezierCurve } from './types';
+import { G } from './config';
 
-export const G = 1.0; // Simplified gravitational constant for visualization
-
-export class BezierCurve {
-    private points: BezierCurvePoints;
-
-    constructor(p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, p3: THREE.Vector3) {
-        this.points = { p0, p1, p2, p3 };
-    }
-
-    getPoint(t: number): THREE.Vector3 {
-        const point = new THREE.Vector3();
-        const mt = 1 - t;
-        const mt2 = mt * mt;
-        const mt3 = mt2 * mt;
-        const t2 = t * t;
-        const t3 = t2 * t;
-
-        point.x = mt3 * this.points.p0.x + 3 * mt2 * t * this.points.p1.x + 3 * mt * t2 * this.points.p2.x + t3 * this.points.p3.x;
-        point.y = mt3 * this.points.p0.y + 3 * mt2 * t * this.points.p1.y + 3 * mt * t2 * this.points.p2.y + t3 * this.points.p3.y;
-        point.z = mt3 * this.points.p0.z + 3 * mt2 * t * this.points.p1.z + 3 * mt * t2 * this.points.p2.z + t3 * this.points.p3.z;
-
-        return point;
-    }
-}
+// Re-export G for backward compatibility
+export { G };
 
 export function calculateInitialE(
     initialPos: THREE.Vector3,
@@ -50,6 +29,56 @@ export function calculateInitialE(
     
     // Convert true anomaly to eccentric anomaly
     return 2 * Math.atan(Math.sqrt((1 - e) / (1 + e)) * Math.tan(theta / 2));
+}
+
+export function calculateHyperbolicPosition(
+    time: number,
+    a: number,
+    e: number,
+    startTime: number,
+    initialPos: THREE.Vector3,
+    initialVel: THREE.Vector3,
+    planetMass: number
+): THREE.Vector3 {
+    const mu = G * planetMass;
+    const F0 = calculateInitialE(initialPos, initialVel, a, e, mu); // Using same function but result is hyperbolic anomaly
+    
+    // Mean anomaly at t=0 for hyperbolic orbit
+    const M0 = e * Math.sinh(F0) - F0;
+    
+    // Current mean anomaly
+    const n = Math.sqrt(mu / (-a * a * a)); // Mean motion for hyperbolic orbit
+    const M = M0 + n * (time - startTime);
+    
+    // Solve Kepler's equation iteratively for hyperbolic case (M = e*sinh(F) - F)
+    let F = M; // Initial guess
+    for(let i = 0; i < 10; i++) {
+        const dF = (M - e * Math.sinh(F) + F) / (e * Math.cosh(F) - 1);
+        F += dF;
+        if (Math.abs(dF) < 1e-6) break;
+    }
+    
+    // Calculate position in orbital plane coordinates
+    const x = a * (e - Math.cosh(F));
+    const y = a * Math.sqrt(e*e - 1) * Math.sinh(F);
+    
+    // Calculate orbit orientation vectors
+    const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
+    const hNorm = h.clone().normalize();
+    
+    // Calculate eccentricity vector
+    const vCrossH = new THREE.Vector3().crossVectors(initialVel, h);
+    const eVec = vCrossH.multiplyScalar(1/mu).sub(initialPos.clone().normalize());
+    const eNorm = eVec.clone().normalize();
+    
+    // Calculate orbit plane basis vectors
+    const periapsisDir = eNorm;
+    const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
+    
+    // Transform from orbital plane to 3D space
+    return new THREE.Vector3()
+        .addScaledVector(periapsisDir, x)
+        .addScaledVector(perpDir, y);
 }
 
 export function calculateEllipticalPosition(
@@ -100,6 +129,52 @@ export function calculateEllipticalPosition(
         .addScaledVector(perpDir, y);
 }
 
+export function generateHyperbolicPoints(
+    a: number,
+    e: number,
+    h: THREE.Vector3,
+    eVec: THREE.Vector3,
+    numPoints: number = 100
+): THREE.Vector3[] {
+    const points: THREE.Vector3[] = [];
+    const b = a * Math.sqrt(e * e - 1); // semi-minor axis for hyperbola
+    const c = a * e; // distance from center to focus
+
+    // Normalize vectors
+    const hNorm = h.clone().normalize();
+    const eNorm = eVec.clone().normalize();
+    
+    // Calculate orbit plane basis vectors
+    const periapsisDir = eNorm;
+    const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
+    
+    // Calculate center of hyperbola (offset from focus by -c along periapsis direction)
+    const center = periapsisDir.clone().multiplyScalar(-c);
+    
+    // For hyperbola, we need to calculate the maximum angle based on asymptotes
+    const maxTheta = Math.acos(-1/e); // Angle between asymptote and periapsis direction
+    
+    // Generate hyperbola points in the orbit plane
+    for (let i = 0; i <= numPoints; i++) {
+        // Map i to range [-maxTheta, maxTheta]
+        const theta = -maxTheta + (2 * maxTheta * i / numPoints);
+        
+        // Parametric equations for hyperbola
+        const r = a * (e*e - 1) / (1 + e * Math.cos(theta));
+        const x = r * Math.cos(theta);
+        const y = r * Math.sin(theta);
+        
+        // Calculate point relative to focus
+        const point = new THREE.Vector3()
+            .addScaledVector(periapsisDir, x)
+            .addScaledVector(perpDir, y);
+        
+        points.push(point);
+    }
+    
+    return points;
+}
+
 export function generateEllipsePoints(
     a: number,
     e: number,
@@ -138,12 +213,94 @@ export function generateEllipsePoints(
     return points;
 }
 //TODO store bezier curves in the orbit class
+export function generateHyperbolicBezierPoints(
+    a: number,
+    e: number,
+    h: THREE.Vector3,
+    eVec: THREE.Vector3
+): { points: THREE.Vector3[], curves: BezierCurve[] } {
+    const points: THREE.Vector3[] = [];
+    const numPointsPerCurve = 25;
+    const b = a * Math.sqrt(e * e - 1);
+    const c = a * e;
+
+    // Normalize vectors
+    const hNorm = h.clone().normalize();
+    const eNorm = eVec.clone().normalize();
+    
+    // Calculate orbit plane basis vectors
+    const periapsisDir = eNorm;
+    const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
+    
+    // Calculate center of hyperbola
+    const center = periapsisDir.clone().multiplyScalar(-c);
+
+    // Calculate angle of asymptotes
+    const alpha = Math.acos(-1/e);
+    const tanAlpha = Math.tan(alpha);
+    
+    // Scale factor for control points (can be adjusted for better fit)
+    const scale = 2.0;
+    
+    // Control points for both branches of the hyperbola
+    const controlPoints = [
+        // Right branch (periapsis side)
+        new THREE.Vector3(a * (e - 1), 0, 0), // Periapsis point
+        new THREE.Vector3(a * (e - 1 + scale), b * scale * 0.5, 0),
+        new THREE.Vector3(a * (e - 1 + scale * 2), b * scale, 0),
+        new THREE.Vector3(a * (e - 1 + scale * 3), b * scale * 1.5, 0),
+        // Left branch (mirror of right branch)
+        new THREE.Vector3(a * (-e + 1), 0, 0), // Mirror periapsis point
+        new THREE.Vector3(a * (-e + 1 - scale), -b * scale * 0.5, 0),
+        new THREE.Vector3(a * (-e + 1 - scale * 2), -b * scale, 0),
+        new THREE.Vector3(a * (-e + 1 - scale * 3), -b * scale * 1.5, 0)
+    ];
+
+    // Transform control points to orbit plane
+    const transformedPoints = controlPoints.map(p => {
+        const transformed = new THREE.Vector3();
+        transformed.addScaledVector(periapsisDir, p.x);
+        transformed.addScaledVector(perpDir, p.y);
+        return transformed.add(center);
+    });
+
+    // Create Bezier curves for both branches
+    const rightCurve = new BezierCurve(
+        transformedPoints[0],
+        transformedPoints[1],
+        transformedPoints[2],
+        transformedPoints[3]
+    );
+
+    const leftCurve = new BezierCurve(
+        transformedPoints[4],
+        transformedPoints[5],
+        transformedPoints[6],
+        transformedPoints[7]
+    );
+
+    // Generate points for both curves
+    for (let i = 0; i <= numPointsPerCurve; i++) {
+        const t = i / numPointsPerCurve;
+        points.push(rightCurve.getPoint(t));
+    }
+    for (let i = 0; i <= numPointsPerCurve; i++) {
+        const t = i / numPointsPerCurve;
+        points.push(leftCurve.getPoint(t));
+    }
+
+    return { 
+        points,
+        curves: [rightCurve, leftCurve]  // Return both curves
+    };
+}
+
 export function generateBezierOrbitPoints(
     a: number,
     e: number,
     h: THREE.Vector3,
     eVec: THREE.Vector3
-): THREE.Vector3[] {
+): { points: THREE.Vector3[], curves: BezierCurve[] } {
     const points: THREE.Vector3[] = [];
     const numPointsPerCurve = 25;
     const b = a * Math.sqrt(1 - e * e);
@@ -203,5 +360,5 @@ export function generateBezierOrbitPoints(
         }
     });
 
-    return points;
+    return { points, curves };
 }
