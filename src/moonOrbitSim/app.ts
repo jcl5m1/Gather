@@ -91,15 +91,9 @@ export class MoonOrbitSimulation {
             `ADD_BODY position:${moonDistance},0,0 velocity:0,0,${moonVelocity} mass:${moonConfig.mass} id:${moonConfig.name} radius:${moonConfig.radius} color:${moonConfig.color || 'cccccc'} trajectoryColor:${moonConfig.trajectoryColor || 'ffffff'}`
         );
         
-        // Update UI to reflect Moon's orbit info
+        // Update all UI sections
         if (addResult.success) {
-            const orbitResult = this.simulationController.executeCommand(`GET_ORBIT_INFO ${moonConfig.name}`);
-            if (orbitResult.success && orbitResult.data) {
-                this.uiManager.updateOrbitTypeDisplay({
-                    type: orbitResult.data.orbitType,
-                    parameters: orbitResult.data.parameters
-                });
-            }
+            this.uiManager.updateAllSections();
         }
         
         // Restart the simulation after initialization

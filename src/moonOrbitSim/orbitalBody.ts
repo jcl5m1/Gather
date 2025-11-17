@@ -5,18 +5,18 @@ import { Trajectory } from './trajectory';
  * OrbitalBody class representing a celestial body with position, velocity, mass, and a trajectory
  */
 export class OrbitalBody {
-    private position: THREE.Vector3;
-    private velocity: THREE.Vector3;
-    private initialPosition: THREE.Vector3;
-    private initialVelocity: THREE.Vector3;
-    private mass: number;
-    private radius: number;
-    private name: string;
-    private trajectory: Trajectory;
-    private mesh: THREE.Mesh;
-    private trailPoints: THREE.Vector3[] = [];
-    private maxTrailPoints: number = 500;
-    private scene: THREE.Scene;
+    private _position: THREE.Vector3;      // Private - use underscore prefix
+    private _velocity: THREE.Vector3;      // Private - use underscore prefix
+    public initialPosition: THREE.Vector3;  // Public for UI inspection
+    public initialVelocity: THREE.Vector3;   // Public for UI inspection
+    public mass: number;                     // Public for UI inspection
+    public radius: number;
+    public name: string;
+    private _trajectory: Trajectory;        // Private - use underscore prefix
+    private _mesh: THREE.Mesh;              // Private - use underscore prefix
+    private _trailPoints: THREE.Vector3[] = [];  // Private - use underscore prefix
+    private _maxTrailPoints: number = 500; // Private - use underscore prefix
+    private _scene: THREE.Scene;            // Private - use underscore prefix
 
     constructor(
         scene: THREE.Scene,
@@ -28,9 +28,9 @@ export class OrbitalBody {
         trajectoryColor: number = 0xff6666,
         name: string = 'Unnamed'
     ) {
-        this.scene = scene;
-        this.position = position.clone();
-        this.velocity = velocity.clone();
+        this._scene = scene;
+        this._position = position.clone();
+        this._velocity = velocity.clone();
         this.initialPosition = position.clone();
         this.initialVelocity = velocity.clone();
         this.mass = mass;
@@ -40,13 +40,13 @@ export class OrbitalBody {
         // Create mesh for the body
         const geometry = new THREE.SphereGeometry(radius, 32, 32);
         const material = new THREE.MeshPhongMaterial({ color });
-        this.mesh = new THREE.Mesh(geometry, material);
-        this.mesh.position.copy(this.position);
-        scene.add(this.mesh);
+        this._mesh = new THREE.Mesh(geometry, material);
+        this._mesh.position.copy(this._position);
+        scene.add(this._mesh);
 
         // Create trajectory (one per body)
-        this.trajectory = new Trajectory(scene, trajectoryColor);
-        this.trailPoints = [position.clone()];
+        this._trajectory = new Trajectory(scene, trajectoryColor);
+        this._trailPoints = [position.clone()];
     }
 
     /**
@@ -55,7 +55,7 @@ export class OrbitalBody {
      * G must be in km³/(kg·s²)
      */
     update(dt: number, centralBodyPosition: THREE.Vector3, centralBodyMass: number, G: number): void {
-        const r = this.position.clone().sub(centralBodyPosition);
+        const r = this._position.clone().sub(centralBodyPosition);
         const distance = r.length(); // km
         
         // Prevent division by zero and extreme forces at very small distances
@@ -68,20 +68,23 @@ export class OrbitalBody {
 
             // Update velocity: v += a * dt = (F/m) * dt
             // Units: (kg·km/s² / kg) * s = km/s
-            this.velocity.add(force.multiplyScalar(dt / this.mass));
+            this._velocity.add(force.multiplyScalar(dt / this.mass));
             
             // Update position: r += v * dt
             // Units: km/s * s = km
-            this.position.add(this.velocity.clone().multiplyScalar(dt));
+            this._position.add(this._velocity.clone().multiplyScalar(dt));
         }
 
         // Update mesh position
-        this.mesh.position.copy(this.position);
+        this._mesh.position.copy(this._position);
+
+        // Update trajectory current state (altitude and velocity)
+        this._trajectory.updateCurrentState(this._position, this._velocity);
 
         // Add to trail
-        this.trailPoints.push(this.position.clone());
-        if (this.trailPoints.length > this.maxTrailPoints) {
-            this.trailPoints.shift();
+        this._trailPoints.push(this._position.clone());
+        if (this._trailPoints.length > this._maxTrailPoints) {
+            this._trailPoints.shift();
         }
     }
 
@@ -89,18 +92,18 @@ export class OrbitalBody {
      * Reset to initial conditions and recalculate trajectory
      */
     reset(position: THREE.Vector3, velocity: THREE.Vector3, mass: number, centralBodyMass: number): void {
-        this.position.copy(position);
-        this.velocity.copy(velocity);
+        this._position.copy(position);
+        this._velocity.copy(velocity);
         this.mass = mass;
         this.initialPosition = position.clone();
         this.initialVelocity = velocity.clone();
 
         // Clear trail
-        this.trailPoints = [position.clone()];
+        this._trailPoints = [position.clone()];
 
         // Recalculate trajectory
-        this.trajectory.clear();
-        this.trajectory.calculateFromState(position, velocity, centralBodyMass);
+        this._trajectory.clear();
+        this._trajectory.calculateFromState(position, velocity, centralBodyMass);
     }
 
     /**
@@ -108,29 +111,29 @@ export class OrbitalBody {
      * and recompute trajectory
      */
     resetToInitial(centralBodyMass: number): void {
-        this.position.copy(this.initialPosition);
-        this.velocity.copy(this.initialVelocity);
+        this._position.copy(this.initialPosition);
+        this._velocity.copy(this.initialVelocity);
 
         // Clear trail
-        this.trailPoints = [this.initialPosition.clone()];
+        this._trailPoints = [this.initialPosition.clone()];
 
         // Recompute trajectory
-        this.trajectory.clear();
-        this.trajectory.calculateFromState(this.initialPosition, this.initialVelocity, centralBodyMass);
+        this._trajectory.clear();
+        this._trajectory.calculateFromState(this.initialPosition, this.initialVelocity, centralBodyMass);
     }
 
     /**
      * Get current position
      */
     getPosition(): THREE.Vector3 {
-        return this.position.clone();
+        return this._position.clone();
     }
 
     /**
      * Get current velocity
      */
     getVelocity(): THREE.Vector3 {
-        return this.velocity.clone();
+        return this._velocity.clone();
     }
 
     /**
@@ -172,21 +175,21 @@ export class OrbitalBody {
      * Get trajectory
      */
     getTrajectory(): Trajectory {
-        return this.trajectory;
+        return this._trajectory;
     }
 
     /**
      * Get trail points
      */
     getTrailPoints(): THREE.Vector3[] {
-        return this.trailPoints;
+        return this._trailPoints;
     }
 
     /**
      * Get mesh
      */
     getMesh(): THREE.Mesh {
-        return this.mesh;
+        return this._mesh;
     }
 
     /**
@@ -200,11 +203,11 @@ export class OrbitalBody {
      * Cleanup and remove from scene
      */
     dispose(): void {
-        this.trajectory.clear();
-        this.scene.remove(this.mesh);
-        this.mesh.geometry.dispose();
-        if (this.mesh.material instanceof THREE.Material) {
-            this.mesh.material.dispose();
+        this._trajectory.clear();
+        this._scene.remove(this._mesh);
+        this._mesh.geometry.dispose();
+        if (this._mesh.material instanceof THREE.Material) {
+            this._mesh.material.dispose();
         }
     }
 }

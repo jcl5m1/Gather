@@ -155,10 +155,10 @@ export class CommandProcessor {
                 mass,
                 orbitType: trajectory.getType(),
                 orbitParameters: {
-                    a: params_data.a,
+                    a: params_data._a,
                     e: params_data.e,
-                    periapsis: params_data.a * (1 - params_data.e),
-                    apoapsis: params_data.a * (1 + params_data.e)
+                    periapsis: params_data._a * (1 - params_data.e),
+                    apoapsis: params_data._a * (1 + params_data.e)
                 }
             }
         };
@@ -256,10 +256,10 @@ export class CommandProcessor {
                 bodyId,
                 orbitType: trajectory.getType(),
                 parameters: {
-                    a: params.a,
+                    a: params._a,
                     e: params.e,
-                    periapsis: params.a * (1 - params.e),
-                    apoapsis: params.a * (1 + params.e),
+                    periapsis: params._a * (1 - params.e),
+                    apoapsis: params._a * (1 + params.e),
                     period: params.period
                 }
             }
@@ -468,8 +468,8 @@ export class CommandProcessor {
         const trajectory = body.getTrajectory();
         const orbitParams = trajectory.getParameters();
         const orbitType = trajectory.getType();
-        const computedPeriapsis = orbitParams.a * (1 - orbitParams.e);
-        const computedApoapsis = orbitParams.a * (1 + orbitParams.e);
+        const computedPeriapsis = orbitParams._a * (1 - orbitParams.e);
+        const computedApoapsis = orbitParams._a * (1 + orbitParams.e);
 
         // Build message with random values if they were generated
         let message = `Added body '${bodyId}'`;
@@ -481,7 +481,7 @@ export class CommandProcessor {
         }
 
         // Add computed orbit parameters (these are the actual orbit parameters from the generated position/velocity)
-        message += `\n\nComputed orbit: type=${orbitType}, semi-major axis=${orbitParams.a.toFixed(2)}km, eccentricity=${orbitParams.e.toFixed(3)}\nperiapsis=${computedPeriapsis.toFixed(2)}km, apoapsis=${computedApoapsis.toFixed(2)}km`;
+        message += `\n\nComputed orbit: type=${orbitType}, semi-major axis=${orbitParams._a.toFixed(2)}km, eccentricity=${orbitParams.e.toFixed(3)}\nperiapsis=${computedPeriapsis.toFixed(2)}km, apoapsis=${computedApoapsis.toFixed(2)}km`;
         if (orbitParams.period !== undefined && orbitParams.period !== null) {
             message += `, period=${orbitParams.period.toFixed(2)}s`;
         }
@@ -504,7 +504,7 @@ export class CommandProcessor {
                 randomValues: randomValues || undefined,
                 orbitType,
                 orbitParameters: {
-                    a: orbitParams.a,
+                    a: orbitParams._a,
                     e: orbitParams.e,
                     periapsis: computedPeriapsis,
                     apoapsis: computedApoapsis,

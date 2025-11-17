@@ -40,9 +40,14 @@ module.exports = {
     port: 8000,
     hot: true,
     liveReload: true,
-    open: false,
+    open: true,
     host: '0.0.0.0', // Accept connections from any IP
     allowedHosts: 'all',
+    watchFiles: ['src/**/*'],
+    client: {
+      webSocketURL: 'auto://0.0.0.0:0/ws',
+    },
+    historyApiFallback: true, // Serve index.html for all routes
     // server: {
     //   type: 'https',
     //   options: {

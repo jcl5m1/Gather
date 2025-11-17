@@ -107,5 +107,26 @@ export class SimulationController {
     getState(bodyId: string = 'default'): import('./commandProcessor').CommandResult {
         return this.executeCommand(`GET_STATE ${bodyId}`);
     }
+
+    /**
+     * Get trajectory object for a body (for inspector introspection)
+     */
+    getTrajectory(bodyId: string = 'default'): import('./trajectory').Trajectory | null {
+        const commandProcessor = this.getCommandProcessor();
+        const body = commandProcessor.getBody(bodyId);
+        if (!body) {
+            return null;
+        }
+        return body.getTrajectory();
+    }
+
+    /**
+     * Get orbital body object for a body (for inspector introspection)
+     */
+    getBody(bodyId: string = 'default'): OrbitalBody | null {
+        const commandProcessor = this.getCommandProcessor();
+        const body = commandProcessor.getBody(bodyId);
+        return body || null;
+    }
 }
 

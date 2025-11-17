@@ -3,11 +3,11 @@ import { OrbitGeometry, OrbitGeometryRenderer } from './types';
 import { G, generateEllipsePoints, generateBezierOrbitPoints, generateHyperbolicPoints, generateHyperbolicBezierPoints } from './orbitUtils';
 
 export interface TrajectoryParameters {
-    a: number;        // semi-major axis
+    _a: number;        // semi-major axis
     e: number;        // eccentricity
     period: number;   // orbital period
-    h: THREE.Vector3; // angular momentum vector
-    eVec: THREE.Vector3; // eccentricity vector
+    _h: THREE.Vector3; // angular momentum vector
+    _eVec: THREE.Vector3; // eccentricity vector
 }
 
 export type TrajectoryType = 'elliptical' | 'hyperbolic' | 'parabolic';
@@ -16,28 +16,32 @@ export type TrajectoryType = 'elliptical' | 'hyperbolic' | 'parabolic';
  * Trajectory class that consolidates all data required to represent and render an orbital trajectory
  */
 export class Trajectory {
-    private scene: THREE.Scene;
-    private renderer: OrbitGeometryRenderer;
-    private type: TrajectoryType;
-    private analyticalPoints: THREE.Vector3[] = [];
-    private bezierPoints: THREE.Vector3[] = [];
-    private bezierCurves: any[] = [];
-    private periapsisPoint?: THREE.Vector3;
-    private apoapsisPoint?: THREE.Vector3;
-    private parameters: TrajectoryParameters;
-    private color: number;
+    private _scene: THREE.Scene;              // Private - use underscore prefix
+    private _renderer: OrbitGeometryRenderer; // Private - use underscore prefix
+    public type: TrajectoryType;
+    private _analyticalPoints: THREE.Vector3[] = [];  // Private - use underscore prefix
+    private _bezierPoints: THREE.Vector3[] = [];      // Private - use underscore prefix
+    private _bezierCurves: any[] = [];               // Private - use underscore prefix
+    private _periapsisPoint?: THREE.Vector3;         // Private - use underscore prefix
+    private _apoapsisPoint?: THREE.Vector3;          // Private - use underscore prefix
+    public parameters: TrajectoryParameters;
+    private _color: number;                    // Private - use underscore prefix
+    public periapsis: number = 0;
+    public apoapsis: number = 0;
+    public altitude: number = 0;
+    public velocity: number = 0;
 
     constructor(scene: THREE.Scene, color: number = 0xff6666) {
-        this.scene = scene;
-        this.color = color;
-        this.renderer = new OrbitGeometryRenderer(scene, color);
+        this._scene = scene;
+        this._color = color;
+        this._renderer = new OrbitGeometryRenderer(scene, color);
         this.type = 'elliptical';
         this.parameters = {
-            a: 0,
+            _a: 0,
             e: 0,
             period: 0,
-            h: new THREE.Vector3(),
-            eVec: new THREE.Vector3()
+            _h: new THREE.Vector3(),
+            _eVec: new THREE.Vector3()
         };
     }
 
@@ -46,13 +50,17 @@ export class Trajectory {
      */
     calculateFromState(position: THREE.Vector3, velocity: THREE.Vector3, centralBodyMass: number): void {
         // Clean up old renderer before creating new one
-        if (this.renderer) {
-            this.renderer.cleanup();
+        if (this._renderer) {
+            this._renderer.cleanup();
         }
-        this.renderer = new OrbitGeometryRenderer(this.scene, this.color);
+        this._renderer = new OrbitGeometryRenderer(this._scene, this._color);
         const mu = G * centralBodyMass;
         const r = position.length();
         const v = velocity.length();
+        
+        // Update current altitude and velocity
+        this.altitude = r;
+        this.velocity = v;
 
         // Calculate orbit geometry vectors
         const hVec = new THREE.Vector3().crossVectors(position, velocity);
@@ -102,24 +110,28 @@ export class Trajectory {
             const bezierResult = generateBezierOrbitPoints(a, e, hVec, referenceVec);
 
             this.type = 'elliptical';
-            this.analyticalPoints = ellipsePoints;
-            this.bezierPoints = bezierResult.points;
-            this.bezierCurves = bezierResult.curves;
-            this.periapsisPoint = periapsisPoint;
-            this.apoapsisPoint = apoapsisPoint;
+            this._analyticalPoints = ellipsePoints;
+            this._bezierPoints = bezierResult.points;
+            this._bezierCurves = bezierResult.curves;
+            this._periapsisPoint = periapsisPoint;
+            this._apoapsisPoint = apoapsisPoint;
             this.parameters = {
-                a,
+                _a: a,
                 e,
                 period,
-                h: hVec,
-                eVec: referenceVec
+                _h: hVec,
+                _eVec: referenceVec
             };
+            
+            // Update periapsis and apoapsis for elliptical orbits
+            this.periapsis = a * (1 - e);
+            this.apoapsis = a * (1 + e);
 
             // Update visualization
-            this.renderer.updateOrbitLine(bezierResult.points);
-            this.renderer.updateBezierCurves(bezierResult.curves);
-            this.renderer.updateMarkers(periapsisPoint, apoapsisPoint, true, true);
-            this.renderer.setVisibility(true);
+            this._renderer.updateOrbitLine(bezierResult.points);
+            this._renderer.updateBezierCurves(bezierResult.curves);
+            this._renderer.updateMarkers(periapsisPoint, apoapsisPoint, true, true);
+            this._renderer.setVisibility(true);
 
         } else if (specificEnergy > 0) {
             // Hyperbolic orbit
@@ -141,43 +153,52 @@ export class Trajectory {
             const bezierResult = generateHyperbolicBezierPoints(a, e, hVec, eVec);
 
             this.type = 'hyperbolic';
-            this.analyticalPoints = hyperbolicPoints;
-            this.bezierPoints = bezierResult.points;
-            this.bezierCurves = bezierResult.curves;
-            this.periapsisPoint = periapsisPoint;
-            this.apoapsisPoint = undefined;
+            this._analyticalPoints = hyperbolicPoints;
+            this._bezierPoints = bezierResult.points;
+            this._bezierCurves = bezierResult.curves;
+            this._periapsisPoint = periapsisPoint;
+            this._apoapsisPoint = undefined;
             this.parameters = {
-                a,
+                _a: a,
                 e,
                 period: Infinity,
-                h: hVec,
-                eVec
+                _h: hVec,
+                _eVec: eVec
             };
+            
+            // Update periapsis for hyperbolic orbits (apoapsis is undefined)
+            // For hyperbolic orbits, a is negative, so periapsis = |a| * (e - 1)
+            this.periapsis = Math.abs(a) * (e - 1);
+            this.apoapsis = Infinity;
 
             // Update visualization
-            this.renderer.updateOrbitLine(bezierResult.points);
-            this.renderer.updateBezierCurves(bezierResult.curves);
-            this.renderer.updateMarkers(periapsisPoint, periapsisPoint, true, false);
-            this.renderer.setVisibility(true);
+            this._renderer.updateOrbitLine(bezierResult.points);
+            this._renderer.updateBezierCurves(bezierResult.curves);
+            this._renderer.updateMarkers(periapsisPoint, periapsisPoint, true, false);
+            this._renderer.setVisibility(true);
 
         } else {
             // Parabolic orbit
             this.type = 'parabolic';
-            this.analyticalPoints = [];
-            this.bezierPoints = [];
-            this.bezierCurves = [];
-            this.periapsisPoint = undefined;
-            this.apoapsisPoint = undefined;
+            this._analyticalPoints = [];
+            this._bezierPoints = [];
+            this._bezierCurves = [];
+            this._periapsisPoint = undefined;
+            this._apoapsisPoint = undefined;
             this.parameters = {
-                a: 0,
+                _a: 0,
                 e: 1,
                 period: Infinity,
-                h: hVec,
-                eVec
+                _h: hVec,
+                _eVec: eVec
             };
+            
+            // For parabolic orbits, periapsis is the distance at closest approach
+            this.periapsis = hVec.length() * hVec.length() / (mu * (1 + e));
+            this.apoapsis = Infinity;
 
             // Hide visualization for parabolic orbit
-            this.renderer.setVisibility(false);
+            this._renderer.setVisibility(false);
         }
     }
 
@@ -185,14 +206,26 @@ export class Trajectory {
      * Clear the trajectory (remove from scene and reset)
      */
     clear(): void {
-        if (this.renderer) {
-            this.renderer.cleanup();
+        if (this._renderer) {
+            this._renderer.cleanup();
         }
-        this.analyticalPoints = [];
-        this.bezierPoints = [];
-        this.bezierCurves = [];
-        this.periapsisPoint = undefined;
-        this.apoapsisPoint = undefined;
+        this._analyticalPoints = [];
+        this._bezierPoints = [];
+        this._bezierCurves = [];
+        this._periapsisPoint = undefined;
+        this._apoapsisPoint = undefined;
+        this.periapsis = 0;
+        this.apoapsis = 0;
+        this.altitude = 0;
+        this.velocity = 0;
+    }
+    
+    /**
+     * Update current altitude and velocity (called during simulation updates)
+     */
+    updateCurrentState(position: THREE.Vector3, velocity: THREE.Vector3): void {
+        this.altitude = position.length();
+        this.velocity = velocity.length();
     }
 
     /**
@@ -213,35 +246,35 @@ export class Trajectory {
      * Get periapsis point
      */
     getPeriapsisPoint(): THREE.Vector3 | undefined {
-        return this.periapsisPoint;
+        return this._periapsisPoint;
     }
 
     /**
      * Get apoapsis point
      */
     getApoapsisPoint(): THREE.Vector3 | undefined {
-        return this.apoapsisPoint;
+        return this._apoapsisPoint;
     }
 
     /**
      * Get analytical points
      */
     getAnalyticalPoints(): THREE.Vector3[] {
-        return this.analyticalPoints;
+        return this._analyticalPoints;
     }
 
     /**
      * Get bezier points
      */
     getBezierPoints(): THREE.Vector3[] {
-        return this.bezierPoints;
+        return this._bezierPoints;
     }
 
     /**
      * Set visibility
      */
     setVisibility(visible: boolean): void {
-        this.renderer.setVisibility(visible);
+        this._renderer.setVisibility(visible);
     }
 }
 

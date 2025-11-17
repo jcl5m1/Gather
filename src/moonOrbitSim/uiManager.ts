@@ -1,6 +1,7 @@
 import { SimulationController } from './simulationController';
 import { CameraManager } from './cameraManager';
 import { config, G } from './config';
+import * as THREE from 'three';
 
 // Use require for marked to avoid TypeScript module resolution issues
 const markedModule = require('marked');
@@ -14,26 +15,37 @@ if (markedFunction.setOptions) {
 }
 const marked = markedFunction;
 
+/**
+ * Interface for UI sections in the Property Inspector
+ * Each section is self-contained with all elements needed for rendering
+ */
+interface UISection {
+    id: string;                                    // Unique identifier for the section
+    title: string;                                 // Section title (can be dynamic)
+    container: HTMLDivElement;                     // Main container element
+    header: HTMLDivElement;                        // Header element (for collapsible sections)
+    headerTitle: HTMLSpanElement;                  // Title span within header (for dynamic title updates)
+    content: HTMLDivElement;                       // Content container
+    contentContainer?: HTMLDivElement;             // Optional inner container for dynamic content (e.g., trajectory)
+    getObject?: () => any;                         // Optional function to get the object to display (for dynamic sections)
+    emptyMessage?: string;                        // Optional message to show when object is null/undefined
+    // Section-specific elements (optional, based on section type)
+    cameraFocusSelect?: HTMLSelectElement;        // For Camera section
+    timeScaleValue?: HTMLSpanElement;             // For Simulation section
+    isEditable?: boolean;                         // Whether this section should use editable inputs
+}
+
 export class UIManager {
     private simulationController: SimulationController;
     private cameraManager?: CameraManager;
-    private orbitTypeDiv!: HTMLTableElement; // Changed to table
-    private cameraFocusSelect!: HTMLSelectElement; // Changed to select
-    private timeScaleValue!: HTMLSpanElement;
-    private currentTimeScale: number = 1000;
-    private posXInput!: HTMLInputElement;
-    private posYInput!: HTMLInputElement;
-    private posZInput!: HTMLInputElement;
-    private velXInput!: HTMLInputElement;
-    private velYInput!: HTMLInputElement;
-    private velZInput!: HTMLInputElement;
-    private massInput!: HTMLInputElement;
+    private sections: UISection[] = [];           // Array of all UI sections
+    private currentTimeScale: number = 0; // Will be initialized from gameLoop in initializeUI
     private commandInput!: HTMLInputElement;
     private commandOutput!: HTMLDivElement;
     private bodyParamsHeading!: HTMLHeadingElement;
     private currentFocusedBodyName: string | null = null;
     private updateInterval: number | null = null;
-    private currentOrbitInfo: { type: string; parameters?: any } | null = null;
+    private gameLoopUpdateFrameId: number = 0;
 
     constructor(simulationController: SimulationController, cameraManager?: CameraManager) {
         this.simulationController = simulationController;
@@ -43,22 +55,26 @@ export class UIManager {
         
         // Initial time scale is now set in initializeUI (default 1000, logarithmic)
         
-        // Setup camera target change callback
+        // Setup camera target change callback for focused body updates
+        // Camera section is now auto-generated and will update via updateAllSections()
         if (this.cameraManager) {
             this.cameraManager.setOnTargetChange((targetName) => {
-                this.updateCameraTargetDisplay(targetName);
                 this.updateFormForFocusedBody(targetName);
                 this.startCurrentValuesUpdates(targetName);
+                // Update all sections to refresh camera dropdown
+                this.updateAllSections();
             });
             // Set initial display
             const initialTarget = this.cameraManager.getCurrentTargetName();
-            this.updateCameraTargetDisplay(initialTarget);
             this.updateFormForFocusedBody(initialTarget);
             this.startCurrentValuesUpdates(initialTarget);
         }
         
         // Don't reset simulation here - let app.ts initialize the Moon first
         // The UI fields are already initialized with Moon parameters
+        
+        // Start frame-by-frame updates for GameLoop section
+        this.startGameLoopSectionUpdates();
     }
 
     /**
@@ -121,6 +137,52 @@ export class UIManager {
         container.appendChild(content);
 
         return { container, header, content, toggle };
+    }
+
+    /**
+     * Helper function to create a standard UI section with all common setup
+     * This simplifies the initialization of UI sections in initializeUI
+     * Title is automatically extracted from the object's class name
+     * Empty message is auto-generated from the class name
+     */
+    private createUISection(
+        getObject: () => any,
+        defaultExpanded: boolean,
+        propertyInspector: HTMLDivElement,
+        isEditable: boolean = false
+    ): UISection {
+        // Get the object to determine its class name for the title
+        const obj = getObject();
+        const className = obj ? this.getClassName(obj) : 'Unknown';
+        
+        // Extract ID from class name by normalizing it (lowercase, remove spaces)
+        const id = className.toLowerCase().replace(/\s+/g, '');
+        
+        // Auto-generate empty message from class name
+        const emptyMessage = `No ${className} available`;
+        
+        const section = this.createCollapsibleSection(className, defaultExpanded);
+        const contentContainer = document.createElement('div');
+        contentContainer.style.cssText = 'width: 100%; margin: 0;';
+        section.content.appendChild(contentContainer);
+        propertyInspector.appendChild(section.container);
+        
+        // Extract header title span (second span is the title, first is the arrow)
+        const titleSpans = section.header.querySelectorAll('span');
+        const headerTitle = titleSpans.length > 1 ? titleSpans[1] as HTMLSpanElement : titleSpans[0] as HTMLSpanElement;
+        
+        return {
+            id: id,
+            title: className,
+            container: section.container,
+            header: section.header,
+            headerTitle: headerTitle,
+            content: section.content,
+            contentContainer: contentContainer,
+            getObject: getObject,
+            emptyMessage: emptyMessage,
+            isEditable: isEditable
+        };
     }
 
     /**
@@ -435,209 +497,49 @@ export class UIManager {
         const moonDistance = moonConfig.distance || 384400;
         const moonVelocity = Math.sqrt(G * earthConfig.mass / moonDistance);
 
-        // Section 0: Camera Focus (at the top)
-        const cameraSection = this.createCollapsibleSection('Camera', true);
-        const cameraTable = document.createElement('table');
-        cameraTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
-        
-        // Get available bodies for camera dropdown
-        const getAvailableBodies = (): string[] => {
-            const bodies = ['Free Camera'];
-            // Get all bodies from simulation
-            const result = this.simulationController.executeCommand('LIST_BODIES');
-            if (result.success && result.data && result.data.bodies) {
-                bodies.push(...result.data.bodies);
-            }
-            return bodies;
-        };
-        
-        // Camera Focus Target dropdown
-        const cameraDropdown = this.createDropdownProperty(
-            this.formatLabelFromVariableName('cameraFocus'),
-            'cameraFocus',
-            getAvailableBodies(),
-            'Free Camera',
-            (value) => {
-                if (this.cameraManager) {
-                    if (value === 'Free Camera') {
-                        this.cameraManager.switchToFreeCamera();
-                    } else {
-                        this.cameraManager.switchToBodyByName(value);
-                    }
-                }
-            }
-        );
-        // Store camera dropdown reference
-        this.cameraFocusSelect = cameraDropdown.select;
-        
-        cameraTable.appendChild(cameraDropdown.row);
-        cameraSection.content.appendChild(cameraTable);
-        propertyInspector.appendChild(cameraSection.container);
+        // Section 0: CameraManager (auto-generated from CameraManager object)
+        this.sections.push(this.createUISection(
+            () => this.simulationController.getGameLoop().getCameraManager(),
+            true,
+            propertyInspector,
+            true
+        ));
 
-        // Section 1: Orbit Stats (read-only table)
-        const orbitSection = this.createCollapsibleSection('Orbit', true);
-        const orbitTable = document.createElement('table');
-        orbitTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
-        this.orbitTypeDiv = orbitTable;
-        orbitSection.content.appendChild(orbitTable);
-        propertyInspector.appendChild(orbitSection.container);
+        // Section 1: Dynamically generated from focused object's trajectory property
+        // Title will be updated to the actual class name via introspection
+        this.sections.push(this.createUISection(
+            () => this.currentFocusedBodyName 
+                ? this.simulationController.getTrajectory(this.currentFocusedBodyName)
+                : null,
+            true,
+            propertyInspector
+        ));
 
-        // Section 3: Initial Parameters (read/write inputs)
-        const paramsSection = this.createCollapsibleSection('Initial Parameters', false);
-        const paramsTable = document.createElement('table');
-        paramsTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
-        
-        const posX = this.createReadWriteProperty(this.formatLabelFromVariableName('posX'), 'posX', this.formatNumber(moonDistance), '1000');
-        const posY = this.createReadWriteProperty(this.formatLabelFromVariableName('posY'), 'posY', this.formatNumber(0), '1000');
-        const posZ = this.createReadWriteProperty(this.formatLabelFromVariableName('posZ'), 'posZ', this.formatNumber(0), '1000');
-        const velX = this.createReadWriteProperty(this.formatLabelFromVariableName('velX'), 'velX', this.formatNumber(0), '0.001');
-        const velY = this.createReadWriteProperty(this.formatLabelFromVariableName('velY'), 'velY', this.formatNumber(0), '0.001');
-        const velZ = this.createReadWriteProperty(this.formatLabelFromVariableName('velZ'), 'velZ', this.formatNumber(moonVelocity), '0.001');
-        const mass = this.createReadWriteProperty(this.formatLabelFromVariableName('mass'), 'mass', this.formatNumber(moonConfig.mass), '1e20');
-
-        // Store input references
-        this.posXInput = posX.input;
-        this.posYInput = posY.input;
-        this.posZInput = posZ.input;
-        this.velXInput = velX.input;
-        this.velYInput = velY.input;
-        this.velZInput = velZ.input;
-        this.massInput = mass.input;
-
-        paramsTable.appendChild(posX.row);
-        paramsTable.appendChild(posY.row);
-        paramsTable.appendChild(posZ.row);
-        paramsTable.appendChild(velX.row);
-        paramsTable.appendChild(velY.row);
-        paramsTable.appendChild(velZ.row);
-        paramsTable.appendChild(mass.row);
-        
-        paramsSection.content.appendChild(paramsTable);
-        propertyInspector.appendChild(paramsSection.container);
+        // Section 2: Initial Parameters (dynamically generated from orbital body)
+        this.sections.push(this.createUISection(
+            () => this.currentFocusedBodyName 
+                ? this.simulationController.getBody(this.currentFocusedBodyName)
+                : null,
+            false,
+            propertyInspector,
+            true
+        ));
 
         // Store heading reference for compatibility
         this.bodyParamsHeading = document.createElement('h3');
         this.bodyParamsHeading.textContent = 'Body Parameters';
 
-        // Section 3: Simulation Controls
-        const controlsSection = this.createCollapsibleSection('Simulation', true);
-        const controlsTable = document.createElement('table');
-        controlsTable.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
+        // Section 3: GameLoop (auto-generated from GameLoop object)
+        this.sections.push(this.createUISection(
+            () => this.simulationController.getGameLoop(),
+            true,
+            propertyInspector,
+            true
+        ));
         
-        // Time scale control with +/- buttons: 1e-6 to 1e10, default 1000
-        const timeScaleMin = 1e-6;
-        const timeScaleMax = 1e10;
-        const defaultTimeScale = 1000;
-        this.currentTimeScale = defaultTimeScale;
-        
-        // Create time scale control row
-        const timeScaleRow = document.createElement('tr');
-        timeScaleRow.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
-        
-        const labelCell = document.createElement('td');
-        labelCell.style.cssText = `
-            padding: 2px 2px;
-            width: 40%;
-            font-size: 11px;
-            color: rgba(255,255,255,0.8);
-            margin: 0;
-        `;
-        labelCell.textContent = this.formatLabelFromVariableName('timeScale');
-        
-        const valueCell = document.createElement('td');
-        valueCell.style.cssText = 'padding: 0; margin: 0; border: 0;';
-        
-        const timeScaleContainer = document.createElement('div');
-        timeScaleContainer.style.cssText = 'display: flex; align-items: center; gap: 4px; margin: 0; padding: 0;';
-        
-        // Format time scale value for display
-        const formatTimeScale = (value: number): string => {
-            if (value > 1e3 || value < 1e-3) {
-                // Use scientific notation for values >= 1000 or <= 0.001
-                return value.toExponential(1) + 'x';
-            } else if (value < 1) {
-                // Show 3 decimal places for values between 0.001 and 1
-                return value.toFixed(3) + 'x';
-            } else {
-                // Use regular notation (no decimals) for values between 1 and 1000
-                return value.toFixed(0) + 'x';
-            }
-        };
-        
-        // Decrease button (-)
-        const decreaseButton = document.createElement('button');
-        decreaseButton.textContent = '-';
-        decreaseButton.style.cssText = `
-            padding: 2px 6px;
-            margin: 0;
-            background: rgba(100,150,255,0.6);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.3);
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: bold;
-            min-width: 24px;
-        `;
-        
-        // Value display
-        const valueDisplay = document.createElement('span');
-        valueDisplay.id = 'timeScaleValue';
-        valueDisplay.style.cssText = `
-            min-width: 60px;
-            text-align: center;
-            font-size: 11px;
-            font-family: monospace;
-            color: rgba(255,255,255,0.95);
-            margin: 0;
-        `;
-        valueDisplay.textContent = formatTimeScale(defaultTimeScale);
-        this.timeScaleValue = valueDisplay;
-        
-        // Increase button (+)
-        const increaseButton = document.createElement('button');
-        increaseButton.textContent = '+';
-        increaseButton.style.cssText = `
-            padding: 2px 6px;
-            margin: 0;
-            background: rgba(100,150,255,0.6);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.3);
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: bold;
-            min-width: 24px;
-        `;
-        
-        // Button click handlers
-        const updateTimeScale = (multiplier: number) => {
-            const newValue = this.currentTimeScale * multiplier;
-            // Clamp to valid range
-            const clampedValue = Math.max(timeScaleMin, Math.min(timeScaleMax, newValue));
-            this.currentTimeScale = clampedValue;
-            this.timeScaleValue.textContent = formatTimeScale(clampedValue);
-            this.executeAndDisplayCommand(`SET_TIME_SCALE ${clampedValue}`);
-        };
-        
-        decreaseButton.onclick = () => updateTimeScale(0.1); // Divide by 10
-        increaseButton.onclick = () => updateTimeScale(10); // Multiply by 10
-        
-        timeScaleContainer.appendChild(decreaseButton);
-        timeScaleContainer.appendChild(valueDisplay);
-        timeScaleContainer.appendChild(increaseButton);
-        valueCell.appendChild(timeScaleContainer);
-        timeScaleRow.appendChild(labelCell);
-        timeScaleRow.appendChild(valueCell);
-        
-        // Set initial time scale
-        this.simulationController.executeCommand(`SET_TIME_SCALE ${defaultTimeScale}`);
-        
-        const resetButton = this.createButtonProperty('Reset', 'Reset Simulation', () => this.resetSimulation());
-        
-        controlsTable.appendChild(timeScaleRow);
-        controlsTable.appendChild(resetButton);
-        
-        controlsSection.content.appendChild(controlsTable);
-        propertyInspector.appendChild(controlsSection.container);
+        // Initialize time scale from gameLoop (which loads from config.json)
+        const gameLoop = this.simulationController.getGameLoop();
+        this.currentTimeScale = gameLoop.getTimeScale();
 
         document.body.appendChild(propertyInspector);
 
@@ -726,32 +628,7 @@ export class UIManager {
 
     private setupEventListeners(): void {
         // Time scale buttons are handled in initializeUI
-
-        // Add change listeners to parameter inputs to update the body state
-        const parameterInputs = [
-            this.posXInput, this.posYInput, this.posZInput,
-            this.velXInput, this.velYInput, this.velZInput,
-            this.massInput
-        ];
-        
-        // Debounce timer for input events (shared across all inputs)
-        let inputDebounceTimer: number | null = null;
-        
-        parameterInputs.forEach(input => {
-            input.addEventListener('change', () => {
-                this.updateBodyFromInputs();
-            });
-            // Also update on input for real-time feedback (but debounce to avoid too many updates)
-            input.addEventListener('input', () => {
-                if (inputDebounceTimer !== null) {
-                    clearTimeout(inputDebounceTimer);
-                }
-                inputDebounceTimer = window.setTimeout(() => {
-                    this.updateBodyFromInputs();
-                    inputDebounceTimer = null;
-                }, 500); // Debounce: update 500ms after user stops typing
-            });
-        });
+        // Input field listeners are now handled directly in generateEditablePropertySection
 
         document.addEventListener('keydown', (event) => {
             // Only handle if not typing in an input field (except command input)
@@ -779,70 +656,6 @@ export class UIManager {
         });
     }
 
-    /**
-     * Update the body's initial state from the input fields and recompute orbit
-     */
-    private updateBodyFromInputs(): void {
-        // Don't update if no body is focused or it's the central body
-        if (!this.currentFocusedBodyName || this.currentFocusedBodyName === config.bodies.earth.name) {
-            return;
-        }
-
-        // Get values from input fields
-        const posX = parseFloat(this.posXInput.value);
-        const posY = parseFloat(this.posYInput.value);
-        const posZ = parseFloat(this.posZInput.value);
-        const velX = parseFloat(this.velXInput.value);
-        const velY = parseFloat(this.velYInput.value);
-        const velZ = parseFloat(this.velZInput.value);
-        const mass = parseFloat(this.massInput.value);
-
-        // Validate that all values are valid numbers
-        if (isNaN(posX) || isNaN(posY) || isNaN(posZ) ||
-            isNaN(velX) || isNaN(velY) || isNaN(velZ) ||
-            isNaN(mass)) {
-            return; // Skip update if any value is invalid
-        }
-
-        // Construct RESET command with the new values
-        const command = `RESET position:${posX},${posY},${posZ} velocity:${velX},${velY},${velZ} mass:${mass} bodyId:${this.currentFocusedBodyName}`;
-        
-        // Execute the command
-        const result = this.executeAndDisplayCommand(command);
-        
-        // Update orbit display if successful
-        if (result.success && result.data) {
-            // Get current position and velocity for display
-            const stateResult = this.simulationController.executeCommand(`GET_STATE ${this.currentFocusedBodyName}`);
-            let altitude: number | undefined;
-            let velocity: number | undefined;
-            
-            if (stateResult.success && stateResult.data) {
-                const pos = stateResult.data.position;
-                const vel = stateResult.data.velocity;
-                altitude = Math.sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
-                velocity = Math.sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
-            }
-            
-            // Update orbit display with new parameters
-            if (result.data.orbitType && result.data.orbitParameters) {
-                this.updateOrbitTypeDisplay({
-                    type: result.data.orbitType,
-                    parameters: result.data.orbitParameters
-                }, altitude, velocity);
-            } else {
-                // Fallback: get orbit info if not in result
-                const orbitResult = this.simulationController.executeCommand(`GET_ORBIT_INFO ${this.currentFocusedBodyName}`);
-                if (orbitResult.success && orbitResult.data) {
-                    this.updateOrbitTypeDisplay({
-                        type: orbitResult.data.orbitType,
-                        parameters: orbitResult.data.parameters
-                    }, altitude, velocity);
-                }
-            }
-        }
-    }
-
     resetSimulation(): void {
         try {
             // Execute RESET command with no parameters to reset to initial state
@@ -855,30 +668,10 @@ export class UIManager {
                 const timeScale = resetResult.data.timeScale;
                 if (timeScale !== undefined) {
                     this.currentTimeScale = timeScale;
-                    // Format display appropriately
-                    if (timeScale >= 1e3 || timeScale <= 1e-3) {
-                        this.timeScaleValue.textContent = timeScale.toExponential(2) + 'x';
-                    } else if (timeScale < 1) {
-                        this.timeScaleValue.textContent = timeScale.toFixed(3) + 'x';
-                    } else {
-                        this.timeScaleValue.textContent = timeScale.toFixed(0) + 'x';
-                    }
                 }
                 
-                // Update camera dropdown options
-                this.updateCameraDropdownOptions();
-                
-                // Update orbit display if Moon was re-added
-                if (resetResult.data.bodies && resetResult.data.bodies.length > 0) {
-                    const moonName = resetResult.data.bodies[0];
-                    const orbitResult = this.executeAndDisplayCommand(`GET_ORBIT_INFO ${moonName}`);
-                    if (orbitResult.success && orbitResult.data) {
-                        this.updateOrbitTypeDisplay({
-                            type: orbitResult.data.orbitType,
-                            parameters: orbitResult.data.parameters
-                        });
-                    }
-                }
+                // Update all UI sections (camera dropdown and game loop will refresh automatically)
+                this.updateAllSections();
             }
         } catch (error) {
             console.error('Error resetting simulation:', error);
@@ -909,37 +702,21 @@ export class UIManager {
         // Auto-scroll to bottom
         output.scrollTop = output.scrollHeight;
 
-        // If command was RESET or GET_ORBIT_INFO, update orbit display
-        if (command.toUpperCase().startsWith('RESET') || command.toUpperCase().startsWith('GET_ORBIT_INFO')) {
-            if (result.success && result.data && result.data.orbitType) {
-                this.updateOrbitTypeDisplay({
-                    type: result.data.orbitType,
-                    parameters: result.data.parameters || result.data.orbitParameters
-                });
+        // If command was RESET, update all UI sections
+        if (command.toUpperCase().startsWith('RESET')) {
+            if (result.success) {
+                this.updateAllSections();
             }
         }
 
-        // If command was ADD_BODY and succeeded, update camera dropdown to include the new body
-        if (command.toUpperCase().startsWith('ADD_BODY') && result.success) {
-            this.updateCameraDropdownOptions();
-            // If a new body was added, the camera should switch to it automatically via cameraManager
-            // Update the dropdown selection to reflect the current camera target
-            if (this.cameraManager) {
-                const currentTarget = this.cameraManager.getCurrentTargetName();
-                this.updateCameraTargetDisplay(currentTarget);
-            }
-        }
-
-        // If command was REMOVE_BODY and succeeded, update camera dropdown
-        if (command.toUpperCase().startsWith('REMOVE_BODY') && result.success) {
-            this.updateCameraDropdownOptions();
-        }
-
-        // If command was SET_CAMERA_FOCUS and succeeded, update camera dropdown selection
-        if (command.toUpperCase().startsWith('SET_CAMERA_FOCUS') || command.toUpperCase().startsWith('CAMERA_FOCUS')) {
-            if (result.success && this.cameraManager) {
-                const currentTarget = this.cameraManager.getCurrentTargetName();
-                this.updateCameraTargetDisplay(currentTarget);
+        // If command was ADD_BODY, REMOVE_BODY, or camera-related, update all sections
+        // This will refresh the auto-generated camera dropdown with new options
+        if (command.toUpperCase().startsWith('ADD_BODY') || 
+            command.toUpperCase().startsWith('REMOVE_BODY') ||
+            command.toUpperCase().startsWith('SET_CAMERA_FOCUS') || 
+            command.toUpperCase().startsWith('CAMERA_FOCUS')) {
+            if (result.success) {
+                this.updateAllSections();
             }
         }
 
@@ -959,89 +736,743 @@ export class UIManager {
         this.commandInput.value = '';
     }
 
-    updateOrbitTypeDisplay(orbitInfo: {
-        type: string;
-        parameters?: {
-            a: number;
-            e: number;
-            periapsis: number;
-            apoapsis: number;
-        };
-    }, currentAltitude?: number, currentVelocity?: number): void {
-        // Store orbit info for real-time updates
-        this.currentOrbitInfo = orbitInfo;
+    /**
+     * Get public properties from an object using property descriptor introspection
+     * This method uses introspection to discover all public properties of an object
+     * Properties starting with underscore are considered private and are excluded
+     */
+    private getPublicProperties(obj: any): { [key: string]: any } {
+        const props: { [key: string]: any } = {};
         
-        if (!this.orbitTypeDiv) return;
+        if (!obj) return props;
         
-        // Clear existing rows
-        this.orbitTypeDiv.innerHTML = '';
+        // Get ALL own property names (including non-enumerable)
+        const allPropertyNames = Object.getOwnPropertyNames(obj);
         
-        // Add rows based on orbit type
-        if (orbitInfo.type === 'elliptical' && orbitInfo.parameters) {
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('orbitType'), 'Elliptical'));
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('semiMajorAxis'), this.formatDistance(orbitInfo.parameters.a)));
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('eccentricity'), this.formatNumber(orbitInfo.parameters.e)));
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('periapsis'), this.formatDistance(orbitInfo.parameters.periapsis)));
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('apoapsis'), this.formatDistance(orbitInfo.parameters.apoapsis)));
-        } else if (orbitInfo.type === 'hyperbolic') {
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('orbitType'), 'Hyperbolic'));
-        } else {
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('orbitType'), 'Parabolic'));
+        // Also get enumerable properties from Object.keys
+        const enumerableKeys = Object.keys(obj);
+        
+        // Combine and deduplicate
+        const allKeys = [...new Set([...allPropertyNames, ...enumerableKeys])];
+        
+        for (const key of allKeys) {
+            // Skip functions
+            if (typeof obj[key] === 'function') {
+                continue;
+            }
+            
+            // Skip properties starting with underscore (convention for private members)
+            if (key.startsWith('_')) {
+                continue;
+            }
+            
+            // Get property descriptor to analyze the property
+            let descriptor: PropertyDescriptor | undefined;
+            try {
+                descriptor = Object.getOwnPropertyDescriptor(obj, key);
+            } catch (e) {
+                continue;
+            }
+            
+            // Skip if property doesn't exist or can't be accessed
+            if (!descriptor) {
+                continue;
+            }
+            
+            // Skip non-enumerable properties that are likely internal
+            // Exception: allow enumerable data properties
+            if (!descriptor.enumerable) {
+                // If it's a getter/setter without enumerable flag, likely private
+                if (descriptor.get || descriptor.set) {
+                    continue;
+                }
+                // If it's a non-enumerable data property, it might be intentionally hidden
+                if (descriptor.value === undefined) {
+                    continue;
+                }
+            }
+            
+            // Skip if it's a getter-only property without a setter (might be read-only/internal)
+            if (descriptor.get && !descriptor.set && descriptor.enumerable === false) {
+                continue;
+            }
+            
+            try {
+                const value = obj[key];
+                
+                // Skip if it's a THREE.js internal object
+                if (value !== null && typeof value === 'object') {
+                    if (value.isObject3D || value.isScene || value.isMesh || value.isLine || 
+                        value.isMaterial || value.isGeometry || value.isBufferGeometry) {
+                        continue;
+                    }
+                }
+                
+                // Skip common internal properties that shouldn't be displayed
+                const commonInternalProps = [
+                    'constructor', 'prototype', '__proto__', 'toString', 'valueOf',
+                    'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable',
+                    'toLocaleString', 'toJSON'
+                ];
+                if (commonInternalProps.includes(key)) {
+                    continue;
+                }
+                
+                props[key] = value;
+            } catch (e) {
+                // If we can't access the property, skip it
+                continue;
+            }
         }
         
-        // Add current altitude and velocity
-        if (currentAltitude !== undefined && currentVelocity !== undefined) {
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('altitude'), this.formatDistance(currentAltitude)));
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('velocity'), this.formatVelocity(currentVelocity)));
-        }
+        return props;
     }
 
     /**
-     * Update camera target display
+     * Get class name from an object instance
      */
-    updateCameraTargetDisplay(targetName: string | null): void {
-        if (this.cameraFocusSelect) {
-            const value = targetName === null ? 'Free Camera' : targetName;
-            this.cameraFocusSelect.value = value;
-            // If the value doesn't exist in options, add it
-            if (!Array.from(this.cameraFocusSelect.options).some(opt => opt.value === value)) {
-                const option = document.createElement('option');
-                option.value = value;
-                option.textContent = value;
-                this.cameraFocusSelect.appendChild(option);
-            }
+    private getClassName(obj: any): string {
+        if (obj && obj.constructor && obj.constructor.name) {
+            return obj.constructor.name;
         }
+        return 'Unknown';
     }
 
     /**
-     * Update available bodies in camera dropdown
+     * Generate input fields for editable properties (Vector3 and number types)
+     * This creates input fields that directly update the object's properties
      */
-    private updateCameraDropdownOptions(): void {
-        if (!this.cameraFocusSelect) return;
+    private generateEditablePropertySection(obj: any, container: HTMLDivElement): void {
+        if (!obj || !container) return;
+
+        // Check if this is the central body or no body is focused
+        const isCentralBody = this.currentFocusedBodyName === config.bodies.earth.name;
+        const shouldDisable = !this.currentFocusedBodyName || isCentralBody;
+
+        // Check if any input in the container has focus - if so, don't regenerate
+        const activeElement = document.activeElement;
+        const hasFocusedInput = container.contains(activeElement) && 
+                                 (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLSelectElement);
         
-        // Get current selection
-        const currentValue = this.cameraFocusSelect.value;
+        if (hasFocusedInput) {
+            // Don't regenerate if user is typing - just update non-focused inputs
+            // Update existing input values without recreating them
+            const existingInputs = container.querySelectorAll('input[type="number"]');
+            existingInputs.forEach((input: Element) => {
+                const htmlInput = input as HTMLInputElement;
+                if (htmlInput !== activeElement && htmlInput.id) {
+                    // Extract property name from id (might be "key" or "key.x", "key.y", "key.z")
+                    const idParts = htmlInput.id.split('.');
+                    const key = idParts[0];
+                    if (key in obj) {
+                        if (idParts.length === 1) {
+                            // Simple property
+                            const currentValue = obj[key];
+                            if (typeof currentValue === 'number' && parseFloat(htmlInput.value) !== currentValue) {
+                                htmlInput.value = this.formatNumber(currentValue);
+                            }
+                        } else if (idParts.length === 2 && obj[key] instanceof THREE.Vector3) {
+                            // Vector3 component
+                            const vec = obj[key] as THREE.Vector3;
+                            const component = idParts[1] as 'x' | 'y' | 'z';
+                            const currentValue = vec[component];
+                            if (parseFloat(htmlInput.value) !== currentValue) {
+                                htmlInput.value = this.formatNumber(currentValue);
+                            }
+                        }
+                    }
+                }
+            });
+            return; // Don't regenerate the section
+        }
+
+        // Clear existing content
+        container.innerHTML = '';
+
+        // Create table for property rows
+        const table = document.createElement('table');
+        table.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
+
+        // Get public properties using introspection
+        const publicProps = this.getPublicProperties(obj);
+
+        // Sort keys for consistent display order
+        const sortedKeys = Object.keys(publicProps).sort();
+
+        // Generate input fields for each editable property
+        for (const key of sortedKeys) {
+            const value = publicProps[key];
+            
+            // Handle dropdown properties: object with { value, options } structure
+            if (value !== null && typeof value === 'object' && 
+                'value' in value && 'options' in value && 
+                Array.isArray(value.options)) {
+                const dropdownValue = value as { value: any; options: any[] };
+                
+                // Create a single row with label and dropdown
+                const row = document.createElement('tr');
+                row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
+                
+                // Label cell
+                const labelCell = document.createElement('td');
+                labelCell.style.cssText = `
+                    padding: 2px 2px;
+                    width: 40%;
+                    font-size: 11px;
+                    color: rgba(255,255,255,0.8);
+                    margin: 0;
+                `;
+                labelCell.textContent = this.formatLabelFromVariableName(key);
+                
+                // Value cell with dropdown
+                const valueCell = document.createElement('td');
+                valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
+                
+                const select = document.createElement('select');
+                select.id = key;
+                select.disabled = shouldDisable;
+                select.style.cssText = `
+                    width: 100%;
+                    padding: 0px 2px;
+                    margin: 0;
+                    background: rgba(255,255,255,0.1);
+                    color: white;
+                    border: 1px solid rgba(255,255,255,0.2);
+                    font-size: 11px;
+                    font-family: monospace;
+                `;
+                
+                // Populate dropdown with options
+                dropdownValue.options.forEach((option, index) => {
+                    const optionElement = document.createElement('option');
+                    // Handle different option types
+                    let optionText: string;
+                    let optionValue: string;
+                    
+                    if (option === null) {
+                        optionText = 'Free Camera';
+                        optionValue = String(index);
+                    } else if (typeof option === 'object' && option !== null) {
+                        // If it's an object (like OrbitalBody), try to get a name property or use getName()
+                        if (typeof (option as any).getName === 'function') {
+                            optionText = (option as any).getName();
+                        } else if ('name' in option) {
+                            optionText = String((option as any).name);
+                        } else {
+                            optionText = `Body ${index}`;
+                        }
+                        optionValue = String(index);
+                    } else {
+                        // Primitive value
+                        optionText = String(option);
+                        optionValue = String(option);
+                    }
+                    
+                    optionElement.value = optionValue;
+                    optionElement.textContent = optionText;
+                    
+                    // Check if this option matches the current value
+                    // Value can be a number (index) or the option itself
+                    const currentValue = dropdownValue.value;
+                    if (typeof currentValue === 'number') {
+                        if (index === currentValue) {
+                            optionElement.selected = true;
+                        }
+                    } else if (option === currentValue || String(option) === String(currentValue)) {
+                        optionElement.selected = true;
+                    }
+                    
+                    select.appendChild(optionElement);
+                });
+                
+                // Handle change event
+                select.addEventListener('change', () => {
+                    // Get the selected index from the option value
+                    const selectedIndex = parseInt(select.value, 10);
+                    const newValue = isNaN(selectedIndex) ? select.value : selectedIndex;
+                    
+                    // Update the property - preserve options and update value
+                    try {
+                        // Get fresh options in case they've changed (e.g., new bodies added)
+                        const currentProperty = obj[key];
+                        const updatedOptions = (currentProperty && currentProperty.options) ? currentProperty.options : dropdownValue.options;
+                        obj[key] = { value: newValue, options: updatedOptions };
+                        
+                        // If this is CameraManager's cameraFocus property, apply the change
+                        const className = this.getClassName(obj);
+                        if (className === 'CameraManager' && key === 'cameraFocus' && typeof obj.applyCameraFocusChange === 'function') {
+                            obj.applyCameraFocusChange();
+                        }
+                    } catch (e) {
+                        // If direct assignment fails, try calling a setter
+                        console.warn(`Could not set ${key} property:`, e);
+                    }
+                });
+                
+                valueCell.appendChild(select);
+                row.appendChild(labelCell);
+                row.appendChild(valueCell);
+                table.appendChild(row);
+                continue;
+            }
+            
+            // Handle THREE.Vector3 - create inputs for x, y, z on a single row
+            if (value instanceof THREE.Vector3) {
+                const vec = value as THREE.Vector3;
+                const step = key.includes('velocity') || key.includes('vel') ? '0.001' : '1000';
+                
+                // Create a single row with label and three inputs (X, Y, Z) side by side
+                const row = document.createElement('tr');
+                row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
+                
+                // Label cell
+                const labelCell = document.createElement('td');
+                labelCell.style.cssText = `
+                    padding: 2px 2px;
+                    width: 40%;
+                    font-size: 11px;
+                    color: rgba(255,255,255,0.8);
+                    margin: 0;
+                `;
+                labelCell.textContent = this.formatLabelFromVariableName(key);
+                
+                // Value cell with three inputs
+                const valueCell = document.createElement('td');
+                valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
+                
+                const inputsContainer = document.createElement('div');
+                inputsContainer.style.cssText = 'display: flex; gap: 4px; align-items: center; margin: 0;';
+                
+                // X input
+                const xInput = document.createElement('input');
+                xInput.type = 'number';
+                xInput.id = `${key}.x`;
+                xInput.value = this.formatNumber(vec.x);
+                xInput.step = step;
+                xInput.disabled = shouldDisable;
+                xInput.placeholder = 'X';
+                xInput.style.cssText = `
+                    flex: 1;
+                    padding: 0px 2px;
+                    margin: 0;
+                    background: rgba(255,255,255,0.1);
+                    color: white;
+                    border: 1px solid rgba(255,255,255,0.2);
+                    font-size: 11px;
+                    font-family: monospace;
+                `;
+                xInput.addEventListener('change', () => {
+                    const numValue = parseFloat(xInput.value);
+                    if (!isNaN(numValue)) {
+                        vec.x = numValue;
+                        this.updateBodyFromObject(obj);
+                    }
+                });
+                
+                // Y input
+                const yInput = document.createElement('input');
+                yInput.type = 'number';
+                yInput.id = `${key}.y`;
+                yInput.value = this.formatNumber(vec.y);
+                yInput.step = step;
+                yInput.disabled = shouldDisable;
+                yInput.placeholder = 'Y';
+                yInput.style.cssText = `
+                    flex: 1;
+                    padding: 0px 2px;
+                    margin: 0;
+                    background: rgba(255,255,255,0.1);
+                    color: white;
+                    border: 1px solid rgba(255,255,255,0.2);
+                    font-size: 11px;
+                    font-family: monospace;
+                `;
+                yInput.addEventListener('change', () => {
+                    const numValue = parseFloat(yInput.value);
+                    if (!isNaN(numValue)) {
+                        vec.y = numValue;
+                        this.updateBodyFromObject(obj);
+                    }
+                });
+                
+                // Z input
+                const zInput = document.createElement('input');
+                zInput.type = 'number';
+                zInput.id = `${key}.z`;
+                zInput.value = this.formatNumber(vec.z);
+                zInput.step = step;
+                zInput.disabled = shouldDisable;
+                zInput.placeholder = 'Z';
+                zInput.style.cssText = `
+                    flex: 1;
+                    padding: 0px 2px;
+                    margin: 0;
+                    background: rgba(255,255,255,0.1);
+                    color: white;
+                    border: 1px solid rgba(255,255,255,0.2);
+                    font-size: 11px;
+                    font-family: monospace;
+                `;
+                zInput.addEventListener('change', () => {
+                    const numValue = parseFloat(zInput.value);
+                    if (!isNaN(numValue)) {
+                        vec.z = numValue;
+                        this.updateBodyFromObject(obj);
+                    }
+                });
+                
+                inputsContainer.appendChild(xInput);
+                inputsContainer.appendChild(yInput);
+                inputsContainer.appendChild(zInput);
+                valueCell.appendChild(inputsContainer);
+                
+                row.appendChild(labelCell);
+                row.appendChild(valueCell);
+                table.appendChild(row);
+            }
+            // Handle number types
+            else if (typeof value === 'number') {
+                const className = this.getClassName(obj);
+                const step = key === 'mass' ? '1e20' : (key === 'timeScale' ? '1' : '0.001');
+                
+                const numInput = this.createReadWriteProperty(
+                    this.formatLabelFromVariableName(key),
+                    key,
+                    this.formatNumber(value),
+                    step
+                );
+                numInput.input.disabled = shouldDisable;
+                numInput.input.addEventListener('change', () => {
+                    const numValue = parseFloat(numInput.input.value);
+                    if (!isNaN(numValue)) {
+                        // Handle different object types
+                        if (className === 'GameLoop' && key === 'timeScale') {
+                            // Update time scale via command (don't set property directly)
+                            this.executeAndDisplayCommand(`SET_TIME_SCALE ${numValue}`);
+                        } else {
+                            // For other objects, set the property directly
+                            obj[key] = numValue;
+                            if (className === 'OrbitalBody') {
+                                this.updateBodyFromObject(obj);
+                            }
+                        }
+                    }
+                });
+                table.appendChild(numInput.row);
+            }
+            // Handle string types
+            else if (typeof value === 'string') {
+                const className = this.getClassName(obj);
+                
+                const row = document.createElement('tr');
+                row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
+                
+                const labelCell = document.createElement('td');
+                labelCell.style.cssText = `
+                    padding: 2px 2px;
+                    width: 40%;
+                    font-size: 11px;
+                    color: rgba(255,255,255,0.8);
+                    margin: 0;
+                `;
+                labelCell.textContent = this.formatLabelFromVariableName(key);
+                
+                const valueCell = document.createElement('td');
+                valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
+                
+                const textInput = document.createElement('input');
+                textInput.type = 'text';
+                textInput.id = key;
+                textInput.value = value;
+                textInput.disabled = shouldDisable;
+                textInput.style.cssText = `
+                    width: 100%;
+                    padding: 0px 2px;
+                    margin: 0;
+                    background: rgba(255,255,255,0.1);
+                    color: white;
+                    border: 1px solid rgba(255,255,255,0.2);
+                    font-size: 11px;
+                    font-family: monospace;
+                `;
+                textInput.addEventListener('change', () => {
+                    obj[key] = textInput.value;
+                    if (className === 'OrbitalBody') {
+                        this.updateBodyFromObject(obj);
+                    }
+                });
+                
+                valueCell.appendChild(textInput);
+                row.appendChild(labelCell);
+                row.appendChild(valueCell);
+                table.appendChild(row);
+            }
+        }
+
+        container.appendChild(table);
+    }
+
+    /**
+     * Update the body in the simulation when object properties change
+     */
+    private updateBodyFromObject(body: any): void {
+        if (!this.currentFocusedBodyName || !body) return;
         
-        // Get all bodies from simulation
-        const result = this.simulationController.executeCommand('LIST_BODIES');
-        const bodies: string[] = ['Free Camera'];
+        // Get the central body mass for trajectory recalculation
+        const centralBody = this.simulationController.getGameLoop().getCentralBody();
+        const centralMass = centralBody.getMass();
         
-        if (result.success && result.data && result.data.bodies) {
-            bodies.push(...result.data.bodies);
+        // Update the body using RESET command with new values
+        const pos = body.initialPosition;
+        const vel = body.initialVelocity;
+        const mass = body.mass;
+        
+        const command = `RESET position:${pos.x},${pos.y},${pos.z} velocity:${vel.x},${vel.y},${vel.z} mass:${mass} bodyId:${this.currentFocusedBodyName}`;
+        this.executeAndDisplayCommand(command);
+    }
+
+    /**
+     * Generate a property section table from any object using introspection
+     * This is the core method for dynamically generating property inspector sections
+     */
+    private generatePropertySectionFromObject(obj: any, container: HTMLDivElement): void {
+        if (!obj || !container) return;
+
+        // Clear existing content
+        container.innerHTML = '';
+
+        // Create table for property rows
+        const table = document.createElement('table');
+        table.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
+
+        // Get public properties using introspection
+        const publicProps = this.getPublicProperties(obj);
+
+        // Sort keys for consistent display order
+        const sortedKeys = Object.keys(publicProps).sort();
+
+        // Generate property rows for each public property
+        for (const key of sortedKeys) {
+            const value = publicProps[key];
+            
+            // Handle nested objects (like parameters)
+            if (typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof THREE.Vector3)) {
+                // For nested objects, display their properties individually
+                const nestedProps = this.getPublicProperties(value);
+                const nestedKeys = Object.keys(nestedProps).sort();
+                
+                for (const nestedKey of nestedKeys) {
+                    const nestedValue = nestedProps[nestedKey];
+                    // Skip THREE.Vector3 objects (they're complex and handled specially if needed)
+                    if (nestedValue instanceof THREE.Vector3) {
+                        const vec = nestedValue as THREE.Vector3;
+                        const formattedValue = `(${this.formatNumber(vec.x)}, ${this.formatNumber(vec.y)}, ${this.formatNumber(vec.z)})`;
+                        table.appendChild(this.createReadOnlyProperty(
+                            this.formatLabelFromVariableName(`${key}.${nestedKey}`),
+                            formattedValue
+                        ));
+                    } else {
+                        const formattedValue = this.formatValueForDisplay(nestedKey, nestedValue);
+                        table.appendChild(this.createReadOnlyProperty(
+                            this.formatLabelFromVariableName(`${key}.${nestedKey}`),
+                            formattedValue
+                        ));
+                    }
+                }
+            } else {
+                // Display simple properties
+                const formattedValue = this.formatValueForDisplay(key, value);
+                table.appendChild(this.createReadOnlyProperty(
+                    this.formatLabelFromVariableName(key),
+                    formattedValue
+                ));
+            }
+        }
+
+        container.appendChild(table);
+    }
+
+    /**
+     * Format a value for display based on its type
+     */
+    private formatValueForDisplay(key: string, value: any): string {
+        if (value === null || value === undefined) {
+            return 'N/A';
         }
         
-        // Clear and rebuild options
-        this.cameraFocusSelect.innerHTML = '';
-        bodies.forEach(bodyName => {
-            const option = document.createElement('option');
-            option.value = bodyName;
-            option.textContent = bodyName;
-            if (bodyName === currentValue) {
-                option.selected = true;
+        // Handle numbers
+        if (typeof value === 'number') {
+            if (isNaN(value) || !isFinite(value)) {
+                return value === Infinity ? '∞' : 'NaN';
             }
-            this.cameraFocusSelect.appendChild(option);
+            // Use appropriate formatter based on property name
+            if (key === 'altitude' || key === 'periapsis' || key === 'apoapsis' || 
+                key === 'a' || key.endsWith('.a')) {
+                return this.formatDistance(value);
+            } else if (key === 'velocity' || key === 'v' || key.endsWith('.v')) {
+                return this.formatVelocity(value);
+            } else if (key === 'period' || key.endsWith('.period')) {
+                return value === Infinity ? '∞' : this.formatNumber(value) + ' s';
+            } else {
+                return this.formatNumber(value);
+            }
+        }
+        
+        // Handle strings
+        if (typeof value === 'string') {
+            return value;
+        }
+        
+        // Handle objects (should be handled by caller, but fallback here)
+        if (typeof value === 'object') {
+            if (value instanceof THREE.Vector3) {
+                const vec = value as THREE.Vector3;
+                return `(${this.formatNumber(vec.x)}, ${this.formatNumber(vec.y)}, ${this.formatNumber(vec.z)})`;
+            }
+            return JSON.stringify(value);
+        }
+        
+        // Handle booleans
+        if (typeof value === 'boolean') {
+            return value ? 'true' : 'false';
+        }
+        
+        return String(value);
+    }
+
+    /**
+     * Update all UI sections with current simulation state
+     * This is the main method to call when the UI needs to be refreshed
+     */
+    updateAllSections(): void {
+        // Update all sections that have getObject functions (dynamic sections)
+        this.sections.forEach(section => {
+            if (section.getObject && section.contentContainer) {
+                const obj = section.getObject();
+                this.updateSectionForUISection(section, obj);
+            }
         });
     }
+
+    /**
+     * Helper method to get a section by ID
+     */
+    private getSection(id: string): UISection | undefined {
+        return this.sections.find(s => s.id === id);
+    }
+
+    /**
+     * Helper methods to get section-specific elements
+     * IDs are normalized from class names (lowercase, spaces removed)
+     */
+    private getInitialParametersSection(): UISection | undefined {
+        return this.getSection('orbitalbody');
+    }
+
+    private getTrajectorySection(): UISection | undefined {
+        // Try to find by ID first
+        let section = this.getSection('trajectory');
+        if (section) return section;
+        
+        // If not found by ID, try to find by checking if getObject returns a Trajectory
+        // This handles the case where the section was created with null object and got ID 'unknown'
+        section = this.sections.find(s => {
+            if (s.getObject) {
+                const obj = s.getObject();
+                return obj && this.getClassName(obj) === 'Trajectory';
+            }
+            return false;
+        });
+        
+        // If still not found, use section index 1 (trajectory is always section 1)
+        if (!section && this.sections.length > 1) {
+            section = this.sections[1];
+        }
+        
+        return section;
+    }
+
+    private getCameraSection(): UISection | undefined {
+        return this.getSection('cameramanager');
+    }
+
+    private getGameLoopSection(): UISection | undefined {
+        return this.getSection('gameloop');
+    }
+
+
+    /**
+     * Update a UI section from a UISection object
+     * @param section - The UI section to update
+     * @param obj - The object to display (can be any object type)
+     */
+    private updateSectionForUISection(section: UISection, obj: any): void {
+        if (!section.contentContainer) return;
+        
+        const emptyMessage = section.emptyMessage || 'No object available';
+        
+        if (!obj) {
+            // If no object available, show a message
+            section.contentContainer.innerHTML = '';
+            const table = document.createElement('table');
+            table.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
+            table.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('status'), emptyMessage));
+            section.contentContainer.appendChild(table);
+            return;
+        }
+        
+        // Update section header with class name from introspection
+        const className = this.getClassName(obj);
+        section.headerTitle.textContent = className;
+        section.title = className; // Update stored title
+        
+        // Update section ID if it was set to 'unknown' initially (when object was null)
+        const correctId = className.toLowerCase().replace(/\s+/g, '');
+        if (section.id === 'unknown' && correctId !== 'unknown') {
+            section.id = correctId;
+        }
+        
+        // Use editable property section if this is an editable section, otherwise use read-only
+        if (section.isEditable) {
+            this.generateEditablePropertySection(obj, section.contentContainer);
+        } else {
+            // Dynamically generate property section from object using introspection
+            this.generatePropertySectionFromObject(obj, section.contentContainer);
+        }
+    }
+
+    /**
+     * Generic method to update a UI section from any object using introspection
+     * This method dynamically generates the display from the object's properties
+     * @param obj - The object to display (can be any object type)
+     * @param container - The HTML container element to populate
+     * @param header - Optional header element to update with the object's class name
+     * @param emptyMessage - Optional message to show when object is null/undefined
+     * @deprecated Use updateSectionForUISection instead
+     */
+    private updateSection(obj: any, container: HTMLDivElement, header?: HTMLSpanElement, emptyMessage: string = 'No object available'): void {
+        if (!container) return;
+        
+        if (!obj) {
+            // If no object available, show a message
+            container.innerHTML = '';
+            const table = document.createElement('table');
+            table.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
+            table.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('status'), emptyMessage));
+            container.appendChild(table);
+            return;
+        }
+        
+        // Update section header with class name from introspection
+        if (header) {
+            const className = this.getClassName(obj);
+            header.textContent = className;
+        }
+        
+        // Dynamically generate property section from object using introspection
+        this.generatePropertySectionFromObject(obj, container);
+    }
+
 
     /**
      * Update form fields to show the currently focused body's parameters
@@ -1061,86 +1492,11 @@ export class UIManager {
             }
         }
 
-        // If no body is focused, disable inputs
-        if (targetName === null) {
-            this.posXInput.disabled = true;
-            this.posYInput.disabled = true;
-            this.posZInput.disabled = true;
-            this.velXInput.disabled = true;
-            this.velYInput.disabled = true;
-            this.velZInput.disabled = true;
-            this.massInput.disabled = true;
-            return;
-        }
+        // Input field enabling/disabling is now handled dynamically in generateEditablePropertySection
+        // No need to manually manage input states here
 
-        // For all bodies (including Earth), disable inputs if it's the central body, otherwise enable
-        if (isCentralBody) {
-            this.posXInput.disabled = true;
-            this.posYInput.disabled = true;
-            this.posZInput.disabled = true;
-            this.velXInput.disabled = true;
-            this.velYInput.disabled = true;
-            this.velZInput.disabled = true;
-            this.massInput.disabled = true;
-        } else {
-            this.posXInput.disabled = false;
-            this.posYInput.disabled = false;
-            this.posZInput.disabled = false;
-            this.velXInput.disabled = false;
-            this.velYInput.disabled = false;
-            this.velZInput.disabled = false;
-            this.massInput.disabled = false;
-        }
-
-        // Get current state of the focused body
-        const stateResult = this.simulationController.executeCommand(`GET_STATE ${targetName}`);
-        
-        if (stateResult.success && stateResult.data) {
-            // Update form fields with INITIAL values (for editing)
-            const initialPos = stateResult.data.initialPosition || stateResult.data.position;
-            const initialVel = stateResult.data.initialVelocity || stateResult.data.velocity;
-            
-            this.posXInput.value = this.formatNumber(initialPos[0]);
-            this.posYInput.value = this.formatNumber(initialPos[1]);
-            this.posZInput.value = this.formatNumber(initialPos[2]);
-            
-            this.velXInput.value = this.formatNumber(initialVel[0]);
-            this.velYInput.value = this.formatNumber(initialVel[1]);
-            this.velZInput.value = this.formatNumber(initialVel[2]);
-            
-            // Update mass field
-            this.massInput.value = this.formatNumber(stateResult.data.mass);
-        } else {
-            // Log error if state retrieval failed
-            console.error(`[UIManager] Failed to get state for body '${targetName}':`, stateResult.message || 'Unknown error');
-        }
-
-        // Get orbit info for the focused body
-        const orbitResult = this.simulationController.executeCommand(`GET_ORBIT_INFO ${targetName}`);
-        
-        if (orbitResult.success && orbitResult.data) {
-            // Get current position and velocity for display
-            const stateResult = this.simulationController.executeCommand(`GET_STATE ${targetName}`);
-            let altitude: number | undefined;
-            let velocity: number | undefined;
-            
-            if (stateResult.success && stateResult.data) {
-                // Use current position/velocity
-                const pos = stateResult.data.position;
-                const vel = stateResult.data.velocity;
-                altitude = Math.sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
-                velocity = Math.sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
-            }
-            
-            this.updateOrbitTypeDisplay({
-                type: orbitResult.data.orbitType,
-                parameters: orbitResult.data.parameters
-            }, altitude, velocity);
-        } else {
-            // Clear orbit display if we can't get info
-            this.orbitTypeDiv.textContent = 'Orbit Type: Unknown';
-            this.orbitTypeDiv.style.color = '#FFFFFF';
-        }
+        // Update all sections (including initial parameters and trajectory)
+        this.updateAllSections();
     }
 
     /**
@@ -1212,51 +1568,17 @@ export class UIManager {
     }
 
     /**
-     * Update current values display in orbit type div
+     * Update current values display using introspection from Trajectory object
+     * This is a duplicate method that should be removed - keeping for now to avoid breaking changes
+     * @deprecated This method is a duplicate and should be removed
      */
     private updateCurrentValuesDisplay(): void {
-        if (!this.orbitTypeDiv) return;
-        
-        if (!this.currentFocusedBodyName) {
-            this.orbitTypeDiv.innerHTML = '';
-            this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('status'), 'No body focused'));
-            return;
-        }
-        
-        // For Earth (central body), try to get state but orbit info may not be available
-        if (this.currentFocusedBodyName === config.bodies.earth.name) {
-            const stateResult = this.simulationController.executeCommand(`GET_STATE ${this.currentFocusedBodyName}`);
-            if (stateResult.success && stateResult.data) {
-                const pos = stateResult.data.position;
-                const vel = stateResult.data.velocity;
-                const altitude = Math.sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
-                const velocity = Math.sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
-                
-                // Show basic info for Earth
-                this.orbitTypeDiv.innerHTML = '';
-                this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('altitude'), this.formatDistance(altitude)));
-                this.orbitTypeDiv.appendChild(this.createReadOnlyProperty(this.formatLabelFromVariableName('velocity'), this.formatVelocity(velocity)));
-            }
-            return;
-        }
-
-        const stateResult = this.simulationController.executeCommand(`GET_STATE ${this.currentFocusedBodyName}`);
-        
-        if (stateResult.success && stateResult.data) {
-            // Use current position/velocity
-            const pos = stateResult.data.position;
-            const vel = stateResult.data.velocity;
-            
-            // Calculate altitude (distance from origin/central body)
-            const altitude = Math.sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
-            
-            // Calculate velocity magnitude
-            const velocity = Math.sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
-            
-            // Update orbit display with current values
-            if (this.currentOrbitInfo) {
-                this.updateOrbitTypeDisplay(this.currentOrbitInfo, altitude, velocity);
-            }
+        // This method is now handled by updateAllSections and updateSectionForUISection
+        // Keeping stub to avoid breaking existing code
+        const trajectorySection = this.getTrajectorySection();
+        if (trajectorySection && trajectorySection.getObject && trajectorySection.contentContainer) {
+            const obj = trajectorySection.getObject();
+            this.updateSectionForUISection(trajectorySection, obj);
         }
     }
 
@@ -1283,5 +1605,23 @@ export class UIManager {
             // Clear display for no focus
             this.updateCurrentValuesDisplay();
         }
+    }
+
+    /**
+     * Start frame-by-frame updates for GameLoop section
+     * This ensures currentTime and dt are updated every frame
+     */
+    private startGameLoopSectionUpdates(): void {
+        const updateGameLoopSection = () => {
+            const gameLoopSection = this.getGameLoopSection();
+            if (gameLoopSection && gameLoopSection.getObject && gameLoopSection.contentContainer) {
+                const obj = gameLoopSection.getObject();
+                this.updateSectionForUISection(gameLoopSection, obj);
+            }
+            this.gameLoopUpdateFrameId = requestAnimationFrame(updateGameLoopSection);
+        };
+        
+        // Start the update loop
+        this.gameLoopUpdateFrameId = requestAnimationFrame(updateGameLoopSection);
     }
 }

@@ -8,22 +8,23 @@ import { generateStateFromOrbitalElements } from './orbitUtils';
  * Main game loop class that manages the simulation, rendering, and update cycle
  */
 export class GameLoop {
-    private scene!: THREE.Scene;
-    private camera!: THREE.PerspectiveCamera;
-    private renderer!: THREE.WebGLRenderer;
-    private cameraManager!: CameraManager;
-    private animationFrameId: number = 0;
+    private _scene!: THREE.Scene;
+    private _camera!: THREE.PerspectiveCamera;
+    private _renderer!: THREE.WebGLRenderer;
+    private _cameraManager!: CameraManager;
+    private _animationFrameId: number = 0;
     
-    // Simulation state
-    private centralBody!: OrbitalBody;
-    private orbitalBodies: OrbitalBody[] = [];
-    private currentTime: number = 0;
-    private timeScale: number = config.physics.defaultTimeScale;
-    private dt: number = config.physics.timeStep;
-    private isRunning: boolean = false;
+    // Simulation state - properties with underscores are not shown in inspector
+    private _centralBody!: OrbitalBody;
+    private _orbitalBodies: OrbitalBody[] = [];
+    public currentTime: number = 0;  // Shown in inspector
+    public timeScale: number = config.physics.defaultTimeScale;  // Shown in inspector
+    private _dt: number = 0;  // Calculated from real-world time, initialized on first frame
+    private _lastFrameTime: number = 0;
+    private _isRunning: boolean = false;
 
     // Trail rendering
-    private trailLines: Map<OrbitalBody, THREE.Line> = new Map();
+    private _trailLines: Map<OrbitalBody, THREE.Line> = new Map();
 
     constructor() {
         this.initScene();
@@ -34,55 +35,58 @@ export class GameLoop {
     }
 
     private initScene(): void {
-        this.scene = new THREE.Scene();
+        this._scene = new THREE.Scene();
         const cameraConfig = config.scene.camera;
-        this.camera = new THREE.PerspectiveCamera(
+        this._camera = new THREE.PerspectiveCamera(
             cameraConfig.fov,
             window.innerWidth / window.innerHeight,
             cameraConfig.near,
             cameraConfig.far
         );
-        this.renderer = new THREE.WebGLRenderer();
-        this.renderer.setSize(window.innerWidth, window.innerHeight);
-        document.body.appendChild(this.renderer.domElement);
+        this._renderer = new THREE.WebGLRenderer();
+        this._renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(this._renderer.domElement);
 
         // Camera and controls are initialized in CameraManager
-        this.camera.position.set(
+        this._camera.position.set(
             cameraConfig.position[0],
             cameraConfig.position[1],
             cameraConfig.position[2]
         );
-        this.camera.lookAt(this.scene.position);
+        this._camera.lookAt(this._scene.position);
 
         // Add axes helper
         const axesHelper = new THREE.AxesHelper(config.scene.axes.size);
-        this.scene.add(axesHelper);
+        this._scene.add(axesHelper);
 
         // Add dark grey grid on xz plane with 1000km intervals
         const gridConfig = config.scene.grid;
         const gridColor = hexToNumber(gridConfig.color);
         const gridHelper = new THREE.GridHelper(gridConfig.size, gridConfig.divisions, gridColor, gridColor);
-        this.scene.add(gridHelper);
+        this._scene.add(gridHelper);
     }
 
     private initCameraManager(): void {
-        this.cameraManager = new CameraManager(
-            this.camera,
-            this.renderer,
-            this.centralBody,
-            this.orbitalBodies
+        this._cameraManager = new CameraManager(
+            this._camera,
+            this._renderer,
+            this._centralBody,
+            this._orbitalBodies
         );
+
+        // Set GameLoop reference so CameraManager can access all bodies
+        this._cameraManager.setGameLoop(this);
 
         // Handle window resize (after camera manager is initialized)
         window.addEventListener('resize', () => {
-            this.cameraManager.handleResize();
+            this._cameraManager.handleResize();
         });
     }
 
     private initLights(): void {
         const lightsConfig = config.scene.lights;
         const ambientLight = new THREE.AmbientLight(hexToNumber(lightsConfig.ambient.color));
-        this.scene.add(ambientLight);
+        this._scene.add(ambientLight);
 
         const dirConfig = lightsConfig.directional;
         const directionalLight = new THREE.DirectionalLight(hexToNumber(dirConfig.color), dirConfig.intensity);
@@ -91,7 +95,7 @@ export class GameLoop {
             dirConfig.position[1],
             dirConfig.position[2]
         );
-        this.scene.add(directionalLight);
+        this._scene.add(directionalLight);
     }
 
     private initCentralBody(): void {
@@ -100,8 +104,8 @@ export class GameLoop {
         const centralVelocity = new THREE.Vector3(0, 0, 0);
         const earthConfig = config.bodies.earth;
         
-        this.centralBody = new OrbitalBody(
-            this.scene,
+        this._centralBody = new OrbitalBody(
+            this._scene,
             centralPosition,
             centralVelocity,
             earthConfig.mass,
@@ -125,7 +129,7 @@ export class GameLoop {
         name: string = 'Unnamed'
     ): OrbitalBody {
         const body = new OrbitalBody(
-            this.scene,
+            this._scene,
             position,
             velocity,
             mass,
@@ -136,7 +140,7 @@ export class GameLoop {
         );
 
         // Calculate initial trajectory
-        body.getTrajectory().calculateFromState(position, velocity, this.centralBody.getMass());
+        body.getTrajectory().calculateFromState(position, velocity, this._centralBody.getMass());
 
         // Create trail line
         const trailConfig = config.trail;
@@ -148,14 +152,14 @@ export class GameLoop {
                 opacity: trailConfig.opacity 
             })
         );
-        this.scene.add(trailLine);
-        this.trailLines.set(body, trailLine);
+        this._scene.add(trailLine);
+        this._trailLines.set(body, trailLine);
 
-        this.orbitalBodies.push(body);
+        this._orbitalBodies.push(body);
         
         // Update camera manager with new body list and pass the newly added body
         // This will automatically switch camera to the new body if no orbital body is currently focused
-        this.cameraManager.updateOrbitalBodies(this.orbitalBodies, body);
+        this._cameraManager.updateOrbitalBodies(this._orbitalBodies, body);
         
         return body;
     }
@@ -164,36 +168,36 @@ export class GameLoop {
      * Remove an orbital body from the simulation
      */
     removeOrbitalBody(body: OrbitalBody): void {
-        const index = this.orbitalBodies.indexOf(body);
+        const index = this._orbitalBodies.indexOf(body);
         if (index > -1) {
-            this.orbitalBodies.splice(index, 1);
+            this._orbitalBodies.splice(index, 1);
             
             // Remove trail line
-            const trailLine = this.trailLines.get(body);
+            const trailLine = this._trailLines.get(body);
             if (trailLine) {
-                this.scene.remove(trailLine);
+                this._scene.remove(trailLine);
                 trailLine.geometry.dispose();
                 if (trailLine.material instanceof THREE.Material) {
                     trailLine.material.dispose();
                 }
-                this.trailLines.delete(body);
+                this._trailLines.delete(body);
             }
             
             body.dispose();
         }
         
         // Update camera manager with new body list
-        this.cameraManager.updateOrbitalBodies(this.orbitalBodies);
+        this._cameraManager.updateOrbitalBodies(this._orbitalBodies);
     }
 
     /**
      * Reset an orbital body with new parameters
      */
     resetOrbitalBody(body: OrbitalBody, position: THREE.Vector3, velocity: THREE.Vector3, mass: number): void {
-        body.reset(position, velocity, mass, this.centralBody.getMass());
+        body.reset(position, velocity, mass, this._centralBody.getMass());
         
         // Clear trail
-        const trailLine = this.trailLines.get(body);
+        const trailLine = this._trailLines.get(body);
         if (trailLine) {
             trailLine.geometry.setFromPoints([]);
         }
@@ -204,7 +208,7 @@ export class GameLoop {
      */
     setTimeScale(scale: number): void {
         this.timeScale = scale;
-        this.orbitalBodies.forEach(body => body.setTimeScale(scale));
+        this._orbitalBodies.forEach(body => body.setTimeScale(scale));
     }
 
     /**
@@ -218,12 +222,12 @@ export class GameLoop {
         this.currentTime = 0;
         
         // Reset all orbital bodies to their initial conditions
-        const centralMass = this.centralBody.getMass();
-        this.orbitalBodies.forEach(body => {
+        const centralMass = this._centralBody.getMass();
+        this._orbitalBodies.forEach(body => {
             body.resetToInitial(centralMass);
             
             // Clear trail
-            const trailLine = this.trailLines.get(body);
+            const trailLine = this._trailLines.get(body);
             if (trailLine) {
                 trailLine.geometry.setFromPoints([]);
             }
@@ -236,17 +240,17 @@ export class GameLoop {
      */
     removeAllOrbitalBodies(): void {
         // Create a copy of the array to avoid modification during iteration
-        const bodiesToRemove = [...this.orbitalBodies];
+        const bodiesToRemove = [...this._orbitalBodies];
         bodiesToRemove.forEach(body => {
             this.removeOrbitalBody(body);
         });
         
         // Explicitly clear the array to ensure it's empty
         // (removeOrbitalBody should have removed all, but this ensures it)
-        this.orbitalBodies.length = 0;
+        this._orbitalBodies.length = 0;
         
         // Verify the array is empty
-        if (this.orbitalBodies.length !== 0) {
+        if (this._orbitalBodies.length !== 0) {
             console.warn('Warning: orbitalBodies array is not empty after removeAllOrbitalBodies()');
         }
     }
@@ -255,9 +259,10 @@ export class GameLoop {
      * Start the game loop
      */
     start(): void {
-        if (this.isRunning) return;
-        this.isRunning = true;
+        if (this._isRunning) return;
+        this._isRunning = true;
         this.currentTime = 0;
+        this._lastFrameTime = performance.now() / 1000; // Convert to seconds
         this.gameLoop();
     }
 
@@ -265,20 +270,22 @@ export class GameLoop {
      * Stop the game loop
      */
     stop(): void {
-        this.isRunning = false;
-        if (this.animationFrameId) {
-            cancelAnimationFrame(this.animationFrameId);
-            this.animationFrameId = 0;
+        this._isRunning = false;
+        if (this._animationFrameId) {
+            cancelAnimationFrame(this._animationFrameId);
+            this._animationFrameId = 0;
         }
+        // Reset lastFrameTime so it's recalculated on next start
+        this._lastFrameTime = 0;
     }
 
     /**
      * Main game loop
      */
     private gameLoop = (): void => {
-        if (!this.isRunning) return;
+        if (!this._isRunning) return;
 
-        this.animationFrameId = requestAnimationFrame(this.gameLoop);
+        this._animationFrameId = requestAnimationFrame(this.gameLoop);
 
         try {
             // Update simulation
@@ -295,18 +302,28 @@ export class GameLoop {
      * Update simulation state
      */
     private update(): void {
-        const scaledDt = this.dt * this.timeScale;
+        // Calculate dt from real-world time elapsed since last frame
+        const currentTime = performance.now() / 1000; // Convert to seconds
+        if (this._lastFrameTime > 0) {
+            this._dt = currentTime - this._lastFrameTime;
+        } else {
+            // First frame - use a reasonable default (typically ~16ms for 60fps)
+            this._dt = 0.016; // Fallback for first frame
+        }
+        this._lastFrameTime = currentTime;
+        
+        const scaledDt = this._dt * this.timeScale;
         this.currentTime += scaledDt;
 
-        const centralPosition = this.centralBody.getPosition();
-        const centralMass = this.centralBody.getMass();
+        const centralPosition = this._centralBody.getPosition();
+        const centralMass = this._centralBody.getMass();
 
         // Update all orbital bodies
-        this.orbitalBodies.forEach(body => {
+        this._orbitalBodies.forEach(body => {
             body.update(scaledDt, centralPosition, centralMass, G);
 
             // Update trail
-            const trailLine = this.trailLines.get(body);
+            const trailLine = this._trailLines.get(body);
             if (trailLine) {
                 trailLine.geometry.setFromPoints(body.getTrailPoints());
             }
@@ -318,30 +335,30 @@ export class GameLoop {
      */
     private render(): void {
         // Update camera (handles target tracking, mouse input, zoom, etc.)
-        this.cameraManager.update();
+        this._cameraManager.update();
         
-        this.renderer.render(this.scene, this.camera);
+        this._renderer.render(this._scene, this._camera);
     }
 
     /**
      * Get the scene (for UI integration)
      */
     getScene(): THREE.Scene {
-        return this.scene;
+        return this._scene;
     }
 
     /**
      * Get all orbital bodies
      */
     getOrbitalBodies(): OrbitalBody[] {
-        return this.orbitalBodies;
+        return this._orbitalBodies;
     }
 
     /**
      * Get central body
      */
     getCentralBody(): OrbitalBody {
-        return this.centralBody;
+        return this._centralBody;
     }
 
     /**
@@ -359,6 +376,13 @@ export class GameLoop {
     }
 
     /**
+     * Get current dt (time step in seconds)
+     */
+    getDt(): number {
+        return this._dt;
+    }
+
+    /**
      * Reset current simulation time to 0
      */
     resetCurrentTime(): void {
@@ -369,7 +393,7 @@ export class GameLoop {
      * Get camera manager (for UI integration)
      */
     getCameraManager(): CameraManager {
-        return this.cameraManager;
+        return this._cameraManager;
     }
 
     /**
@@ -424,7 +448,7 @@ export class GameLoop {
      * Create an orbital body from orbital parameters using the command interface
      */
     private createBodyFromOrbitalParams(rp: number, ra: number, e: number): void {
-        const centralMass = this.centralBody.getMass();
+        const centralMass = this._centralBody.getMass();
         
         // Generate random orbital orientation
         const trueAnomaly = Math.random() * 2 * Math.PI; // Random position along orbit
@@ -458,7 +482,7 @@ export class GameLoop {
         const radius = 10; // 10 km radius
         
         // Create body name
-        const bodyName = `RandomBody_${this.orbitalBodies.length + 1}`;
+        const bodyName = `RandomBody_${this._orbitalBodies.length + 1}`;
         
         // Use command interface to add the body (same code path as text commands)
         const simulationController = (window as any).simulationController;

@@ -2,7 +2,6 @@ import configData from './config.json';
 
 export interface PhysicsConfig {
     gravitationalConstant: number;
-    timeStep: number;
     defaultTimeScale: number;
 }
 
@@ -83,6 +82,5 @@ export const config: SimulationConfig = configData as SimulationConfig;
 
 // Export commonly used values for convenience
 export const G = config.physics.gravitationalConstant;
-export const DT = config.physics.timeStep;
 export const DEFAULT_TIME_SCALE = config.physics.defaultTimeScale;
 
