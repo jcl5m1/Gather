@@ -5,8 +5,11 @@ all of the static values should be stores in config.json and is loaded by config
 open a webbrowser to test the results
 the project has also commandProcessor.ts which allows automated execution of all UI elements without interacting with widgets.  do not click on widgets, use the text commands to test functionality when you open the webbrowser and use console output to report the results.  this is to minimize the need for processing screenshots of the webpage.
 ensure all UI are actually executed through text commands to allow full automation.
+ the UI should not makes changes directly. the UI should always use commands to make changes to the game state
 make sure to use the developer console out to help debug behavior.
 all distance units should be stored in kilometers, radians, kilograms, seconds, liters, kelvin, newtons, joules, and watts. But, display using the formatters in uiManager
 check the webpage for compilation errors after completing each task ebfore saying you are done.
 if the change impacted command behavior test it before saying you are complete
 the ui has an inspector that neatly organizes a lot of the UI data.
+don't run npm build unless absolutely necessary.  the server auto updates the changes.
+

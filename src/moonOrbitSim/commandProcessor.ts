@@ -3,6 +3,7 @@ import { GameLoop } from './gameLoop';
 import { OrbitalBody } from './orbitalBody';
 import { generateStateFromOrbitalElements } from './orbitUtils';
 import { G, config } from './config';
+import { kilograms, kilometers, seconds, gravitationalConstantUnit } from './units';
 
 export interface CommandResult {
     success: boolean;
@@ -116,12 +117,13 @@ export class CommandProcessor {
         const position = this.parseVector3(params.position || '15,5,3');
         const velocity = this.parseVector3(params.velocity || '2,10,0');
         const mass = parseFloat(params.mass || '1.0');
+        const radius = params.radius ? parseFloat(params.radius) : undefined;
         const bodyId = params.bodyid || params.bodyId || 'default';
 
         if (!position || !velocity || isNaN(mass)) {
             return {
                 success: false,
-                message: 'Invalid parameters. Expected: position:x,y,z velocity:x,y,z mass:value [bodyId:id]'
+                message: 'Invalid parameters. Expected: position:x,y,z velocity:x,y,z mass:value [radius:value] [bodyId:id]'
             };
         }
 
@@ -132,18 +134,22 @@ export class CommandProcessor {
                 position,
                 velocity,
                 mass,
-                1.0,
+                radius !== undefined ? radius : 1.0,
                 0xff6666,
                 0xff6666,
                 bodyId
             );
             this.orbitalBodyIdMap.set(bodyId, body);
         } else {
-            this.gameLoop.resetOrbitalBody(body, position, velocity, mass);
+            this.gameLoop.resetOrbitalBody(body, position, velocity, mass, radius);
         }
 
         const trajectory = body.getTrajectory();
         const params_data = trajectory.getParameters();
+
+        // Extract numeric values from Measure types
+        const aValue = params_data._a.over(kilometers).value;
+        const periodValue = params_data.period.over(seconds).value;
 
         return {
             success: true,
@@ -155,10 +161,11 @@ export class CommandProcessor {
                 mass,
                 orbitType: trajectory.getType(),
                 orbitParameters: {
-                    a: params_data._a,
+                    a: aValue,
                     e: params_data.e,
-                    periapsis: params_data._a * (1 - params_data.e),
-                    apoapsis: params_data._a * (1 + params_data.e)
+                    periapsis: aValue * (1 - params_data.e),
+                    apoapsis: aValue * (1 + params_data.e),
+                    period: periodValue
                 }
             }
         };
@@ -256,11 +263,11 @@ export class CommandProcessor {
                 bodyId,
                 orbitType: trajectory.getType(),
                 parameters: {
-                    a: params._a,
+                    a: params._a.over(kilometers).value,
                     e: params.e,
-                    periapsis: params._a * (1 - params.e),
-                    apoapsis: params._a * (1 + params.e),
-                    period: params.period
+                    periapsis: params._a.over(kilometers).value * (1 - params.e),
+                    apoapsis: params._a.over(kilometers).value * (1 + params.e),
+                    period: params.period.over(seconds).value
                 }
             }
         };
@@ -295,7 +302,8 @@ export class CommandProcessor {
      * Compute orbit parameters from position and velocity
      */
     private computeOrbitParameters(position: THREE.Vector3, velocity: THREE.Vector3, centralBodyMass: number): { a: number; e: number; periapsis: number; apoapsis: number; type: string } | null {
-        const mu = G * centralBodyMass;
+        const GValue = (G as any).over(gravitationalConstantUnit).value;
+        const mu = GValue * centralBodyMass;
         const r = position.length();
         const v = velocity.length();
 
@@ -344,7 +352,7 @@ export class CommandProcessor {
         if (!hasParams || !params.position || !params.velocity || !params.mass) {
             // Generate random position and velocity, then compute orbit parameters
             // Keep trying until we get valid orbit parameters
-            const centralMass = config.bodies.earth.mass;
+            const centralMass = config.bodies.earth.mass.over(kilograms).value;
             let validOrbit = false;
             let attempts = 0;
             const maxAttempts = 1000;
@@ -382,7 +390,8 @@ export class CommandProcessor {
                 // Velocity magnitude should be reasonable for orbit (not too fast, not too slow)
                 // For circular orbit at distance r: v = sqrt(G*M/r)
                 // Use a range around this
-                const circularVel = Math.sqrt(G * centralMass / distance);
+                const GValue = (G as any).over(gravitationalConstantUnit).value;
+                const circularVel = Math.sqrt(GValue * centralMass / distance);
                 const velMagnitude = circularVel * (0.5 + Math.random() * 1.5); // 0.5x to 2x circular velocity
                 
                 const velTheta = Math.random() * 2 * Math.PI;
@@ -468,8 +477,12 @@ export class CommandProcessor {
         const trajectory = body.getTrajectory();
         const orbitParams = trajectory.getParameters();
         const orbitType = trajectory.getType();
-        const computedPeriapsis = orbitParams._a * (1 - orbitParams.e);
-        const computedApoapsis = orbitParams._a * (1 + orbitParams.e);
+        
+        // Extract numeric values from Measure types
+        const aValue = orbitParams._a.over(kilometers).value;
+        const periodValue = orbitParams.period.over(seconds).value;
+        const computedPeriapsis = aValue * (1 - orbitParams.e);
+        const computedApoapsis = aValue * (1 + orbitParams.e);
 
         // Build message with random values if they were generated
         let message = `Added body '${bodyId}'`;
@@ -481,9 +494,9 @@ export class CommandProcessor {
         }
 
         // Add computed orbit parameters (these are the actual orbit parameters from the generated position/velocity)
-        message += `\n\nComputed orbit: type=${orbitType}, semi-major axis=${orbitParams._a.toFixed(2)}km, eccentricity=${orbitParams.e.toFixed(3)}\nperiapsis=${computedPeriapsis.toFixed(2)}km, apoapsis=${computedApoapsis.toFixed(2)}km`;
-        if (orbitParams.period !== undefined && orbitParams.period !== null) {
-            message += `, period=${orbitParams.period.toFixed(2)}s`;
+        message += `\n\nComputed orbit: type=${orbitType}, semi-major axis=${aValue.toFixed(2)}km, eccentricity=${orbitParams.e.toFixed(3)}\nperiapsis=${computedPeriapsis.toFixed(2)}km, apoapsis=${computedApoapsis.toFixed(2)}km`;
+        if (periodValue !== undefined && periodValue !== null && isFinite(periodValue)) {
+            message += `, period=${periodValue.toFixed(2)}s`;
         }
         
         // Verify orbit meets requirements
@@ -614,7 +627,7 @@ export class CommandProcessor {
             success: true,
             message: `Available commands:
 RESET - Reset simulation to initial state (same as page refresh)
-RESET [position:x,y,z] [velocity:x,y,z] [mass:value] [bodyId:id] - Reset a body with new parameters
+RESET [position:x,y,z] [velocity:x,y,z] [mass:value] [radius:value] [bodyId:id] - Reset a body with new parameters
 RESET_ALL - Reset all simulation parameters and all orbital bodies to initial conditions
 SET_TIME_SCALE <value> - Set simulation time scale
 GET_ORBIT_INFO [bodyId] - Get orbit information for a body

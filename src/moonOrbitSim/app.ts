@@ -2,6 +2,8 @@ import { GameLoop } from './gameLoop';
 import { SimulationController } from './simulationController';
 import { UIManager } from './uiManager';
 import { config, G, hexToNumber } from './config';
+import { gravitationalConstantUnit } from './units';
+import { kilometers, kilograms } from './units';
 
 export class MoonOrbitSimulation {
     private gameLoop: GameLoop;
@@ -79,16 +81,20 @@ export class MoonOrbitSimulation {
         // Initialize Moon with actual Earth-Moon system parameters from config
         const moonConfig = config.bodies.moon;
         const earthConfig = config.bodies.earth;
-        const moonDistance = moonConfig.distance || 384400;
+        const moonDistance = moonConfig.distance ? moonConfig.distance.over(kilometers).value : 384400;
+        const earthMass = earthConfig.mass.over(kilograms).value;
+        const moonMass = moonConfig.mass.over(kilograms).value;
+        const moonRadius = moonConfig.radius.over(kilometers).value;
         
         // Calculate circular orbital velocity: v = sqrt(G * M_earth / r)
         // G is in km³/(kg·s²) for consistency with km-based distances
         // This gives velocity in km/s
-        const moonVelocity = Math.sqrt(G * earthConfig.mass / moonDistance);
+        const GValue = (G as any).over(gravitationalConstantUnit).value;
+        const moonVelocity = Math.sqrt(GValue * earthMass / moonDistance);
         
         // Place Moon at distance along x-axis, with velocity in z-direction for circular orbit in xz plane
         const addResult = this.simulationController.executeCommand(
-            `ADD_BODY position:${moonDistance},0,0 velocity:0,0,${moonVelocity} mass:${moonConfig.mass} id:${moonConfig.name} radius:${moonConfig.radius} color:${moonConfig.color || 'cccccc'} trajectoryColor:${moonConfig.trajectoryColor || 'ffffff'}`
+            `ADD_BODY position:${moonDistance},0,0 velocity:0,0,${moonVelocity} mass:${moonMass} id:${moonConfig.name} radius:${moonRadius} color:${moonConfig.color || 'cccccc'} trajectoryColor:${moonConfig.trajectoryColor || 'ffffff'}`
         );
         
         // Update all UI sections

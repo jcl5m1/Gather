@@ -3,6 +3,8 @@ import { OrbitalBody } from './orbitalBody';
 import { CameraManager } from './cameraManager';
 import { G, config, hexToNumber } from './config';
 import { generateStateFromOrbitalElements } from './orbitUtils';
+import { kilometers, kilograms, seconds, Mass, Measure, Length, Velocity } from './units';
+import { MeasureVector3, LengthVector3, VelocityVector3 } from './unitsVector3';
 
 /**
  * Main game loop class that manages the simulation, rendering, and update cycle
@@ -37,33 +39,43 @@ export class GameLoop {
     private initScene(): void {
         this._scene = new THREE.Scene();
         const cameraConfig = config.scene.camera;
+        // Extract numeric values from Measure types
+        const near = cameraConfig.near.over(kilometers).value;
+        const far = cameraConfig.far.over(kilometers).value;
         this._camera = new THREE.PerspectiveCamera(
             cameraConfig.fov,
             window.innerWidth / window.innerHeight,
-            cameraConfig.near,
-            cameraConfig.far
+            near,
+            far
         );
         this._renderer = new THREE.WebGLRenderer();
         this._renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(this._renderer.domElement);
 
         // Camera and controls are initialized in CameraManager
-        this._camera.position.set(
-            cameraConfig.position[0],
-            cameraConfig.position[1],
-            cameraConfig.position[2]
-        );
+        this._camera.position.copy(cameraConfig.position);
         this._camera.lookAt(this._scene.position);
 
         // Add axes helper
-        const axesHelper = new THREE.AxesHelper(config.scene.axes.size);
+        const axesSize = config.scene.axes.size.over(kilometers).value;
+        const axesHelper = new THREE.AxesHelper(axesSize);
         this._scene.add(axesHelper);
 
         // Add dark grey grid on xz plane with 1000km intervals
         const gridConfig = config.scene.grid;
         const gridColor = hexToNumber(gridConfig.color);
-        const gridHelper = new THREE.GridHelper(gridConfig.size, gridConfig.divisions, gridColor, gridColor);
+        const gridSize = gridConfig.size.over(kilometers).value;
+        const gridHelper = new THREE.GridHelper(gridSize, gridConfig.divisions, gridColor, gridColor);
         this._scene.add(gridHelper);
+
+        // Add fog if configured
+        if (config.scene.fog) {
+            const fogConfig = config.scene.fog;
+            const fogColor = hexToNumber(fogConfig.color);
+            const fogNear = fogConfig.near.over(kilometers).value;
+            const fogFar = fogConfig.far.over(kilometers).value;
+            this._scene.fog = new THREE.Fog(fogColor, fogNear, fogFar);
+        }
     }
 
     private initCameraManager(): void {
@@ -90,11 +102,7 @@ export class GameLoop {
 
         const dirConfig = lightsConfig.directional;
         const directionalLight = new THREE.DirectionalLight(hexToNumber(dirConfig.color), dirConfig.intensity);
-        directionalLight.position.set(
-            dirConfig.position[0],
-            dirConfig.position[1],
-            dirConfig.position[2]
-        );
+        directionalLight.position.copy(dirConfig.position);
         this._scene.add(directionalLight);
     }
 
@@ -104,12 +112,16 @@ export class GameLoop {
         const centralVelocity = new THREE.Vector3(0, 0, 0);
         const earthConfig = config.bodies.earth;
         
+        // Extract numeric values from Measure types
+        const earthMass = earthConfig.mass.over(kilograms).value;
+        const earthRadius = earthConfig.radius.over(kilometers).value;
+        
         this._centralBody = new OrbitalBody(
             this._scene,
             centralPosition,
             centralVelocity,
-            earthConfig.mass,
-            earthConfig.radius,
+            earthMass,
+            earthRadius,
             hexToNumber(earthConfig.color || '3366cc'),
             0x000000, // no trajectory color (central body doesn't orbit)
             earthConfig.name
@@ -140,7 +152,10 @@ export class GameLoop {
         );
 
         // Calculate initial trajectory
-        body.getTrajectory().calculateFromState(position, velocity, this._centralBody.getMass());
+        const positionVec = MeasureVector3.fromVector3<Length>(position, kilometers);
+        const velocityVec = MeasureVector3.fromVector3<Velocity>(velocity, kilometers.per(seconds));
+        const centralMass = Measure.of(this._centralBody.getMass(), kilograms);
+        body.getTrajectory().calculateFromState(positionVec, velocityVec, centralMass);
 
         // Create trail line
         const trailConfig = config.trail;
@@ -193,8 +208,8 @@ export class GameLoop {
     /**
      * Reset an orbital body with new parameters
      */
-    resetOrbitalBody(body: OrbitalBody, position: THREE.Vector3, velocity: THREE.Vector3, mass: number): void {
-        body.reset(position, velocity, mass, this._centralBody.getMass());
+    resetOrbitalBody(body: OrbitalBody, position: THREE.Vector3, velocity: THREE.Vector3, mass: number, radius?: number): void {
+        body.reset(position, velocity, mass, this._centralBody.getMass(), radius);
         
         // Clear trail
         const trailLine = this._trailLines.get(body);
@@ -336,6 +351,14 @@ export class GameLoop {
     private render(): void {
         // Update camera (handles target tracking, mouse input, zoom, etc.)
         this._cameraManager.update();
+        
+        // Update rendering mode for all orbital bodies based on camera distance
+        this._orbitalBodies.forEach(body => {
+            body.updateRenderingMode(this._camera);
+        });
+        
+        // Also update rendering mode for central body
+        this._centralBody.updateRenderingMode(this._camera);
         
         this._renderer.render(this._scene, this._camera);
     }

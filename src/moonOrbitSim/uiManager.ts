@@ -1,6 +1,8 @@
 import { SimulationController } from './simulationController';
 import { CameraManager } from './cameraManager';
 import { config, G } from './config';
+import { gravitationalConstantUnit } from './units';
+import { kilometers, kilograms, Length, Velocity, Time, Mass, formatDistanceWithAstronomicalUnits, formatVelocity, formatTime, GenericMeasure } from './units';
 import * as THREE from 'three';
 
 // Use require for marked to avoid TypeScript module resolution issues
@@ -494,8 +496,10 @@ export class UIManager {
         // Initialize with Moon parameters from config
         const moonConfig = config.bodies.moon;
         const earthConfig = config.bodies.earth;
-        const moonDistance = moonConfig.distance || 384400;
-        const moonVelocity = Math.sqrt(G * earthConfig.mass / moonDistance);
+        const moonDistance = moonConfig.distance ? moonConfig.distance.over(kilometers).value : 384400;
+        const earthMass = earthConfig.mass.over(kilograms).value;
+        const GValue = (G as any).over(gravitationalConstantUnit).value;
+        const moonVelocity = Math.sqrt(GValue * earthMass / moonDistance);
 
         // Section 0: CameraManager (auto-generated from CameraManager object)
         this.sections.push(this.createUISection(
@@ -1149,12 +1153,13 @@ export class UIManager {
                         if (className === 'GameLoop' && key === 'timeScale') {
                             // Update time scale via command (don't set property directly)
                             this.executeAndDisplayCommand(`SET_TIME_SCALE ${numValue}`);
+                        } else if (className === 'OrbitalBody') {
+                            // For OrbitalBody, send RESET command with the new value
+                            // This ensures proper updates including mesh regeneration for radius
+                            this.updateBodyFromObjectWithValue(obj, key, numValue);
                         } else {
                             // For other objects, set the property directly
                             obj[key] = numValue;
-                            if (className === 'OrbitalBody') {
-                                this.updateBodyFromObject(obj);
-                            }
                         }
                     }
                 });
@@ -1226,8 +1231,26 @@ export class UIManager {
         const pos = body.initialPosition;
         const vel = body.initialVelocity;
         const mass = body.mass;
+        const radius = body.radius;
         
-        const command = `RESET position:${pos.x},${pos.y},${pos.z} velocity:${vel.x},${vel.y},${vel.z} mass:${mass} bodyId:${this.currentFocusedBodyName}`;
+        const command = `RESET position:${pos.x},${pos.y},${pos.z} velocity:${vel.x},${vel.y},${vel.z} mass:${mass} radius:${radius} bodyId:${this.currentFocusedBodyName}`;
+        this.executeAndDisplayCommand(command);
+    }
+
+    /**
+     * Update a specific property of the body in the simulation
+     * Used when a single property is changed in the UI
+     */
+    private updateBodyFromObjectWithValue(body: any, propertyKey: string, newValue: number): void {
+        if (!this.currentFocusedBodyName || !body) return;
+        
+        // Get current values, but use newValue for the changed property
+        const pos = body.initialPosition;
+        const vel = body.initialVelocity;
+        const mass = propertyKey === 'mass' ? newValue : body.mass;
+        const radius = propertyKey === 'radius' ? newValue : body.radius;
+        
+        const command = `RESET position:${pos.x},${pos.y},${pos.z} velocity:${vel.x},${vel.y},${vel.z} mass:${mass} radius:${radius} bodyId:${this.currentFocusedBodyName}`;
         this.executeAndDisplayCommand(command);
     }
 
@@ -1257,26 +1280,43 @@ export class UIManager {
             
             // Handle nested objects (like parameters)
             if (typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof THREE.Vector3)) {
-                // For nested objects, display their properties individually
-                const nestedProps = this.getPublicProperties(value);
-                const nestedKeys = Object.keys(nestedProps).sort();
-                
-                for (const nestedKey of nestedKeys) {
-                    const nestedValue = nestedProps[nestedKey];
-                    // Skip THREE.Vector3 objects (they're complex and handled specially if needed)
-                    if (nestedValue instanceof THREE.Vector3) {
-                        const vec = nestedValue as THREE.Vector3;
-                        const formattedValue = `(${this.formatNumber(vec.x)}, ${this.formatNumber(vec.y)}, ${this.formatNumber(vec.z)})`;
-                        table.appendChild(this.createReadOnlyProperty(
-                            this.formatLabelFromVariableName(`${key}.${nestedKey}`),
-                            formattedValue
-                        ));
-                    } else {
-                        const formattedValue = this.formatValueForDisplay(nestedKey, nestedValue);
-                        table.appendChild(this.createReadOnlyProperty(
-                            this.formatLabelFromVariableName(`${key}.${nestedKey}`),
-                            formattedValue
-                        ));
+                // Check if the value itself is a Measure - if so, format it directly instead of recursing
+                if (this.isMeasure(value)) {
+                    const formattedValue = this.formatValueForDisplay(key, value);
+                    table.appendChild(this.createReadOnlyProperty(
+                        this.formatLabelFromVariableName(key),
+                        formattedValue
+                    ));
+                } else {
+                    // For nested objects, display their properties individually
+                    const nestedProps = this.getPublicProperties(value);
+                    const nestedKeys = Object.keys(nestedProps).sort();
+                    
+                    for (const nestedKey of nestedKeys) {
+                        const nestedValue = nestedProps[nestedKey];
+                        // Check if nested value is a Measure - format it directly
+                        if (this.isMeasure(nestedValue)) {
+                            const formattedValue = this.formatValueForDisplay(nestedKey, nestedValue);
+                            table.appendChild(this.createReadOnlyProperty(
+                                this.formatLabelFromVariableName(`${key}.${nestedKey}`),
+                                formattedValue
+                            ));
+                        }
+                        // Skip THREE.Vector3 objects (they're complex and handled specially if needed)
+                        else if (nestedValue instanceof THREE.Vector3) {
+                            const vec = nestedValue as THREE.Vector3;
+                            const formattedValue = `(${this.formatNumber(vec.x)}, ${this.formatNumber(vec.y)}, ${this.formatNumber(vec.z)})`;
+                            table.appendChild(this.createReadOnlyProperty(
+                                this.formatLabelFromVariableName(`${key}.${nestedKey}`),
+                                formattedValue
+                            ));
+                        } else {
+                            const formattedValue = this.formatValueForDisplay(nestedKey, nestedValue);
+                            table.appendChild(this.createReadOnlyProperty(
+                                this.formatLabelFromVariableName(`${key}.${nestedKey}`),
+                                formattedValue
+                            ));
+                        }
                     }
                 }
             } else {
@@ -1293,29 +1333,79 @@ export class UIManager {
     }
 
     /**
+     * Check if a value is a safe-units Measure type
+     */
+    private isMeasure(value: any): value is GenericMeasure<number, any, any> {
+        return value !== null && 
+               value !== undefined && 
+               typeof value === 'object' && 
+               'value' in value && 
+               'unit' in value &&
+               'unitSystem' in value;
+    }
+
+    /**
+     * Get unit dimensions from a measure
+     */
+    private getUnitDimensions(measure: GenericMeasure<number, any, any>): { length: number; mass: number; time: number } {
+        const unit = measure.unit as any;
+        return {
+            length: unit?.length || 0,
+            mass: unit?.mass || 0,
+            time: unit?.time || 0
+        };
+    }
+
+    /**
      * Format a value for display based on its type
+     * Uses safe-units type introspection instead of hardcoded key names
      */
     private formatValueForDisplay(key: string, value: any): string {
         if (value === null || value === undefined) {
             return 'N/A';
         }
         
-        // Handle numbers
+        // Check if value is a safe-units Measure type
+        if (this.isMeasure(value)) {
+            const measure: GenericMeasure<number, any, any> = value;
+            const dims = this.getUnitDimensions(measure);
+            
+            // Use unit dimensions to determine formatting
+            // Length: length=1, mass=0, time=0
+            if (dims.length === 1 && dims.mass === 0 && dims.time === 0) {
+                return formatDistanceWithAstronomicalUnits(measure as Length);
+            }
+            // Velocity: length=1, mass=0, time=-1
+            if (dims.length === 1 && dims.mass === 0 && dims.time === -1) {
+                return formatVelocity(measure as Velocity);
+            }
+            // Time: length=0, mass=0, time=1
+            if (dims.length === 0 && dims.mass === 0 && dims.time === 1) {
+                return formatTime(measure as Time);
+            }
+            // For other measure types, format with 3 decimal places
+            if (!isFinite(measure.value)) {
+                return measure.value === Infinity ? '∞' : 'NaN';
+            }
+            // Use toString() to get the formatted string with units, then replace the number part
+            const str = measure.toString();
+            const absValue = Math.abs(measure.value);
+            let formattedNumber: string;
+            if (absValue >= 0.001 && absValue < 1e6) {
+                formattedNumber = measure.value.toFixed(3);
+            } else {
+                formattedNumber = measure.value.toExponential(3);
+            }
+            // Replace the number part in the string (handles both "123.456 unit" and "123.456unit" formats)
+            return str.replace(/^[\d.e+-]+/, formattedNumber);
+        }
+        
+        // Handle plain numbers (backward compatibility)
         if (typeof value === 'number') {
             if (isNaN(value) || !isFinite(value)) {
                 return value === Infinity ? '∞' : 'NaN';
             }
-            // Use appropriate formatter based on property name
-            if (key === 'altitude' || key === 'periapsis' || key === 'apoapsis' || 
-                key === 'a' || key.endsWith('.a')) {
-                return this.formatDistance(value);
-            } else if (key === 'velocity' || key === 'v' || key.endsWith('.v')) {
-                return this.formatVelocity(value);
-            } else if (key === 'period' || key.endsWith('.period')) {
-                return value === Infinity ? '∞' : this.formatNumber(value) + ' s';
-            } else {
-                return this.formatNumber(value);
-            }
+            return this.formatNumber(value);
         }
         
         // Handle strings

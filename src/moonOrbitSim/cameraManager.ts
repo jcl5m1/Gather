@@ -661,11 +661,7 @@ export class CameraManager {
      */
     resetToInitial(): void {
         const cameraConfig = config.scene.camera;
-        this._camera.position.set(
-            cameraConfig.position[0],
-            cameraConfig.position[1],
-            cameraConfig.position[2]
-        );
+        this._camera.position.copy(cameraConfig.position);
         this._controls.target.set(0, 0, 0);
         this._controls.update();
         

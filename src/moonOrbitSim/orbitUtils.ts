@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BezierCurvePoints, BezierCurve } from './types';
 import { G } from './config';
+import { gravitationalConstantUnit } from './units';
 
 // Re-export G for backward compatibility
 export { G };
@@ -27,7 +28,8 @@ export function generateStateFromOrbitalElements(
     longitudeOfAscendingNode: number = 0,
     argumentOfPeriapsis: number = 0
 ): { position: THREE.Vector3; velocity: THREE.Vector3 } {
-    const mu = G * centralBodyMass;
+    const GValue = (G as any).over(gravitationalConstantUnit).value;
+    const mu = GValue * centralBodyMass;
     
     // Calculate semi-major axis
     const a = (rp + ra) / 2;
@@ -140,7 +142,8 @@ export function calculateHyperbolicPosition(
     initialVel: THREE.Vector3,
     planetMass: number
 ): THREE.Vector3 {
-    const mu = G * planetMass;
+    const GValue = (G as any).over(gravitationalConstantUnit).value;
+    const mu = GValue * planetMass;
     const F0 = calculateInitialE(initialPos, initialVel, a, e, mu); // Using same function but result is hyperbolic anomaly
     
     // Mean anomaly at t=0 for hyperbolic orbit
@@ -191,7 +194,8 @@ export function calculateEllipticalPosition(
     initialVel: THREE.Vector3,
     planetMass: number
 ): THREE.Vector3 {
-    const mu = G * planetMass;
+    const GValue = (G as any).over(gravitationalConstantUnit).value;
+    const mu = GValue * planetMass;
     const E0 = calculateInitialE(initialPos, initialVel, a, e, mu);
     
     // Mean anomaly at t=0
