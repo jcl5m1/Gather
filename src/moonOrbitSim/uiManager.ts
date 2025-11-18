@@ -647,8 +647,17 @@ export class UIManager {
                 this.executeCommand();
             } else if (event.key === ' ') {
                 event.preventDefault();
-                // Space key triggers ADD_BODY (with random values)
-                this.executeAndDisplayCommand('ADD_BODY');
+                // Space key triggers ADD_BODY 50 times (with random values)
+                for (let i = 0; i < 50; i++) {
+                    this.executeAndDisplayCommand('ADD_BODY');
+                }
+            } else if (event.key === 'h' || event.key === 'H') {
+                event.preventDefault();
+                // H key toggles trajectory visibility
+                const gameLoop = this.simulationController.getGameLoop();
+                gameLoop.toggleTrajectoryVisibility();
+                const visible = gameLoop.getTrajectoriesVisible();
+                console.log(`Trajectories ${visible ? 'shown' : 'hidden'}`);
             }
         });
 

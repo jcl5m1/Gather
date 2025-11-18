@@ -19,7 +19,7 @@ export class OrbitalBody {
     private _dotSprite: THREE.Sprite;       // Private - use underscore prefix for 2D dot rendering
     private _useDotRendering: boolean = false;  // Private - use underscore prefix
     private _trailPoints: THREE.Vector3[] = [];  // Private - use underscore prefix
-    private _maxTrailPoints: number = 500; // Private - use underscore prefix
+    private _maxTrailPoints: number = 100; // Private - use underscore prefix
     private _scene: THREE.Scene;            // Private - use underscore prefix
 
     constructor(
@@ -56,7 +56,7 @@ export class OrbitalBody {
             depthTest: true
         });
         this._dotSprite = new THREE.Sprite(spriteMaterial);
-        this._dotSprite.scale.set(0.02, 0.02, 1);  // 20x20 pixel scale for screen-space size
+        this._dotSprite.scale.set(0.01, 0.01, 1);  // 10x10 pixel scale for screen-space size
         this._dotSprite.position.copy(this._position);
         // Don't add to scene yet - will be added when needed
 
@@ -119,7 +119,7 @@ export class OrbitalBody {
      */
     updateRenderingMode(camera: THREE.Camera): void {
         const screenSize = this.calculateScreenSize(camera);
-        const shouldUseDot = screenSize < 20;  // Use dot if body is less than 20 pixels
+        const shouldUseDot = screenSize < 10;  // Use dot if body is less than 10 pixels
         
         if (shouldUseDot !== this._useDotRendering) {
             this._useDotRendering = shouldUseDot;
@@ -300,10 +300,23 @@ export class OrbitalBody {
     }
 
     /**
-     * Get trail points
+     * Get trail points (sub-sampled to 10 segments for rendering)
      */
     getTrailPoints(): THREE.Vector3[] {
-        return this._trailPoints;
+        if (this._trailPoints.length <= 11) {
+            return this._trailPoints;
+        }
+        
+        // Sub-sample to approximately 10 line segments (11 points)
+        const sampledPoints: THREE.Vector3[] = [];
+        const step = (this._trailPoints.length - 1) / 10;
+        
+        for (let i = 0; i < 11; i++) {
+            const index = Math.floor(i * step);
+            sampledPoints.push(this._trailPoints[index]);
+        }
+        
+        return sampledPoints;
     }
 
     /**

@@ -21,12 +21,17 @@ export class GameLoop {
     private _orbitalBodies: OrbitalBody[] = [];
     public currentTime: number = 0;  // Shown in inspector
     public timeScale: number = config.physics.defaultTimeScale;  // Shown in inspector
+    public fps: number = 0;  // Shown in inspector
+    public bodyCount: number = 0;  // Shown in inspector
     private _dt: number = 0;  // Calculated from real-world time, initialized on first frame
     private _lastFrameTime: number = 0;
     private _isRunning: boolean = false;
+    private _frameCount: number = 0;
+    private _fpsUpdateTime: number = 0;
 
     // Trail rendering
     private _trailLines: Map<OrbitalBody, THREE.Line> = new Map();
+    private _trajectoriesVisible: boolean = true;
 
     constructor() {
         this.initScene();
@@ -48,8 +53,14 @@ export class GameLoop {
             near,
             far
         );
-        this._renderer = new THREE.WebGLRenderer();
+        this._renderer = new THREE.WebGLRenderer({
+            antialias: true,
+            powerPreference: 'high-performance',
+            stencil: false,
+            depth: true
+        });
         this._renderer.setSize(window.innerWidth, window.innerHeight);
+        this._renderer.setPixelRatio(window.devicePixelRatio);
         document.body.appendChild(this._renderer.domElement);
 
         // Camera and controls are initialized in CameraManager
@@ -327,6 +338,17 @@ export class GameLoop {
         }
         this._lastFrameTime = currentTime;
         
+        // Update FPS counter every second
+        this._frameCount++;
+        if (currentTime - this._fpsUpdateTime >= 1.0) {
+            this.fps = Math.round(this._frameCount / (currentTime - this._fpsUpdateTime));
+            this._frameCount = 0;
+            this._fpsUpdateTime = currentTime;
+        }
+        
+        // Update body count
+        this.bodyCount = this._orbitalBodies.length;
+        
         const scaledDt = this._dt * this.timeScale;
         this.currentTime += scaledDt;
 
@@ -417,6 +439,23 @@ export class GameLoop {
      */
     getCameraManager(): CameraManager {
         return this._cameraManager;
+    }
+
+    /**
+     * Toggle trajectory visibility for all orbital bodies
+     */
+    toggleTrajectoryVisibility(): void {
+        this._trajectoriesVisible = !this._trajectoriesVisible;
+        this._orbitalBodies.forEach(body => {
+            body.getTrajectory().setVisibility(this._trajectoriesVisible);
+        });
+    }
+
+    /**
+     * Get trajectory visibility state
+     */
+    getTrajectoriesVisible(): boolean {
+        return this._trajectoriesVisible;
     }
 
     /**
