@@ -74,6 +74,7 @@ function parseGravitationalConstant(obj: any): GenericMeasure<number, any, any> 
 export interface PhysicsConfig {
     gravitationalConstant: GenericMeasure<number, any, any>; // G in km³/(kg·s²)
     defaultTimeScale: number; // Dimensionless
+    orbitUpdateMethod: 'analytical' | 'numerical'; // Method for updating orbital body positions
 }
 
 export interface BodiesConfig {
@@ -177,7 +178,8 @@ function parseConfig(data: any): SimulationConfig {
     return {
         physics: {
             gravitationalConstant: parseGravitationalConstant(data.physics.gravitationalConstant),
-            defaultTimeScale: parseValueWithUnit(data.physics.defaultTimeScale)
+            defaultTimeScale: parseValueWithUnit(data.physics.defaultTimeScale),
+            orbitUpdateMethod: (data.physics.orbitUpdateMethod?.value || 'analytical') as 'analytical' | 'numerical'
         },
         bodies: {
             earth: createBodyFromConfig(data.bodies.earth),
@@ -234,3 +236,4 @@ export const config: SimulationConfig = parseConfig(configData);
 // Export commonly used values for convenience (extract numeric values)
 export const G = config.physics.gravitationalConstant;
 export const DEFAULT_TIME_SCALE = config.physics.defaultTimeScale;
+export const ORBIT_UPDATE_METHOD = config.physics.orbitUpdateMethod;

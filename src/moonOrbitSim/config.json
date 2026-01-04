@@ -8,6 +8,11 @@
       "value": 10000.0,
       "unit": "dimensionless"
     },
+    "orbitUpdateMethod": {
+      "value": "analytical",
+      "unit": "dimensionless",
+      "comment": "Options: 'analytical' (uses Kepler's equation) or 'numerical' (uses numerical integration)"
+    },
     "comment": "G in km³/(kg·s²). Converted from SI: 6.67430e-11 m³/(kg·s²) * (1 m / 1000 km)³ = 6.67430e-20. defaultTimeScale speeds up simulation"
   },
   "bodies": {

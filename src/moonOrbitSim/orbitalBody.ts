@@ -3,6 +3,8 @@ import { Trajectory } from './trajectory';
 import { MeasureVector3, LengthVector3, VelocityVector3 } from './unitsVector3';
 import { Mass, Measure, Length, Velocity, kilograms, kilometers, seconds, GenericMeasure, gravitationalConstantUnit } from './units';
 import { Body } from './types';
+import { calculateEllipticalPosition, calculateEllipticalVelocity, calculateHyperbolicPosition, calculateHyperbolicVelocity } from './orbitUtils';
+import { ORBIT_UPDATE_METHOD } from './config';
 
 // ============================================================================
 // OrbitalBody Rendering
@@ -235,6 +237,15 @@ export class OrbitalBody extends Body {
     public initialVelocity: THREE.Vector3;   // Public for UI inspection
     private _trajectory: Trajectory;        // Private - use underscore prefix
     private _render: OrbitalBodyRender;     // Private - rendering delegate
+    
+    // Orbital parameters for analytical updates
+    private _orbitalParams: {
+        semiMajorAxis: number;      // a (km)
+        eccentricity: number;       // e (dimensionless)
+        period: number;             // T (seconds) - only for elliptical orbits
+        startTime: number;          // t0 (seconds) - simulation time when orbit was calculated
+        isElliptical: boolean;      // true for elliptical, false for hyperbolic
+    } | null = null;
 
     constructor(
         scene: THREE.Scene,
@@ -318,11 +329,49 @@ export class OrbitalBody extends Body {
     }
 
     /**
-     * Update position and velocity based on gravitational force
+     * Calculate orbital parameters from current state for analytical updates
+     */
+    private calculateOrbitalParameters(centralBodyMass: number, G: GenericMeasure<number, any, any>, currentTime: number): void {
+        const GValue = (G as any).over(gravitationalConstantUnit).value;
+        const mu = GValue * centralBodyMass;
+        
+        const r = this.position.length();
+        const v = this.velocity.length();
+        
+        // Calculate specific orbital energy: ε = v²/2 - μ/r
+        const specificEnergy = (v * v) / 2 - mu / r;
+        
+        // Calculate semi-major axis: a = -μ/(2ε)
+        const a = -mu / (2 * specificEnergy);
+        
+        // Calculate specific angular momentum vector
+        const h = new THREE.Vector3().crossVectors(this.position, this.velocity);
+        const hMag = h.length();
+        
+        // Calculate eccentricity: e = sqrt(1 + (2εh²)/μ²)
+        const e = Math.sqrt(1 + (2 * specificEnergy * hMag * hMag) / (mu * mu));
+        
+        // Determine if orbit is elliptical or hyperbolic
+        const isElliptical = e < 1.0;
+        
+        // Calculate period (only for elliptical orbits)
+        const period = isElliptical ? 2 * Math.PI * Math.sqrt((a * a * a) / mu) : 0;
+        
+        this._orbitalParams = {
+            semiMajorAxis: a,
+            eccentricity: e,
+            period: period,
+            startTime: currentTime,
+            isElliptical: isElliptical
+        };
+    }
+
+    /**
+     * Update position and velocity using numerical integration
      * All units: distance in km, velocity in km/s, mass in kg, time in seconds
      * G must be in km³/(kg·s²) as a Measure
      */
-    update(dt: number, centralBodyPosition: THREE.Vector3, centralBodyMass: number, G: GenericMeasure<number, any, any>): void {
+    private updateNumerical(dt: number, centralBodyPosition: THREE.Vector3, centralBodyMass: number, G: GenericMeasure<number, any, any>): void {
         const r = this.position.clone().sub(centralBodyPosition);
         const distance = r.length(); // km
         
@@ -342,6 +391,89 @@ export class OrbitalBody extends Body {
             // Update position: r += v * dt
             // Units: km/s * s = km
             this.position.add(this.velocity.clone().multiplyScalar(dt));
+        }
+    }
+
+    /**
+     * Update position and velocity using analytical orbital mechanics (Kepler's equations)
+     * All units: distance in km, velocity in km/s, mass in kg, time in seconds
+     * G must be in km³/(kg·s²) as a Measure
+     */
+    private updateAnalytical(currentTime: number, centralBodyPosition: THREE.Vector3, centralBodyMass: number, G: GenericMeasure<number, any, any>): void {
+        // Calculate orbital parameters if not yet computed
+        if (!this._orbitalParams) {
+            this.calculateOrbitalParameters(centralBodyMass, G, currentTime);
+        }
+        
+        if (!this._orbitalParams) return;
+        
+        const { semiMajorAxis, eccentricity, period, startTime, isElliptical } = this._orbitalParams;
+        
+        // Calculate new position and velocity using Kepler's equations
+        if (isElliptical) {
+            const newPos = calculateEllipticalPosition(
+                currentTime,
+                semiMajorAxis,
+                eccentricity,
+                period,
+                startTime,
+                this.initialPosition,
+                this.initialVelocity,
+                centralBodyMass
+            );
+            
+            const newVel = calculateEllipticalVelocity(
+                currentTime,
+                semiMajorAxis,
+                eccentricity,
+                period,
+                startTime,
+                this.initialPosition,
+                this.initialVelocity,
+                centralBodyMass
+            );
+            
+            this.position.copy(newPos).add(centralBodyPosition);
+            this.velocity.copy(newVel);
+        } else {
+            // Hyperbolic orbit
+            const newPos = calculateHyperbolicPosition(
+                currentTime,
+                semiMajorAxis,
+                eccentricity,
+                startTime,
+                this.initialPosition,
+                this.initialVelocity,
+                centralBodyMass
+            );
+            
+            const newVel = calculateHyperbolicVelocity(
+                currentTime,
+                semiMajorAxis,
+                eccentricity,
+                startTime,
+                this.initialPosition,
+                this.initialVelocity,
+                centralBodyMass
+            );
+            
+            this.position.copy(newPos).add(centralBodyPosition);
+            this.velocity.copy(newVel);
+        }
+    }
+
+    /**
+     * Update position and velocity based on gravitational force
+     * Supports both numerical integration and analytical (Kepler's equations) methods
+     * All units: distance in km, velocity in km/s, mass in kg, time in seconds
+     * G must be in km³/(kg·s²) as a Measure
+     */
+    update(dt: number, centralBodyPosition: THREE.Vector3, centralBodyMass: number, G: GenericMeasure<number, any, any>, currentTime: number = 0): void {
+        // Choose update method based on configuration
+        if (ORBIT_UPDATE_METHOD === 'analytical') {
+            this.updateAnalytical(currentTime, centralBodyPosition, centralBodyMass, G);
+        } else {
+            this.updateNumerical(dt, centralBodyPosition, centralBodyMass, G);
         }
 
         // Note: mesh/sprite position is updated in updateRenderingMode(), called from game loop
@@ -364,6 +496,9 @@ export class OrbitalBody extends Body {
         this.mass = mass;
         this.initialPosition = position.clone();
         this.initialVelocity = velocity.clone();
+        
+        // Clear orbital parameters to force recalculation
+        this._orbitalParams = null;
 
         // Update radius and regenerate mesh if radius is provided
         if (radius !== undefined && radius !== this.radius) {
@@ -391,6 +526,9 @@ export class OrbitalBody extends Body {
     resetToInitial(centralBodyMass: number): void {
         this.position.copy(this.initialPosition);
         this.velocity.copy(this.initialVelocity);
+        
+        // Clear orbital parameters to force recalculation
+        this._orbitalParams = null;
 
         // Clear trail
         this._render.clearTrail(this.initialPosition);

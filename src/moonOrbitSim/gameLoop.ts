@@ -355,7 +355,7 @@ export class GameLoop {
 
         // Update all orbital bodies
         this._orbitalBodies.forEach(body => {
-            body.update(scaledDt, centralPosition, centralMass, G);
+            body.update(scaledDt, centralPosition, centralMass, G, this.currentTime);
 
             // Update trail
             const trailLine = this._trailLines.get(body);

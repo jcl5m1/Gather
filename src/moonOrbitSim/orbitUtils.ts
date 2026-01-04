@@ -233,6 +233,113 @@ export function calculateEllipticalPosition(
         .addScaledVector(perpDir, y);
 }
 
+export function calculateEllipticalVelocity(
+    time: number,
+    a: number,
+    e: number,
+    period: number,
+    startTime: number,
+    initialPos: THREE.Vector3,
+    initialVel: THREE.Vector3,
+    planetMass: number
+): THREE.Vector3 {
+    const GValue = (G as any).over(gravitationalConstantUnit).value;
+    const mu = GValue * planetMass;
+    const E0 = calculateInitialE(initialPos, initialVel, a, e, mu);
+    
+    // Mean anomaly at t=0
+    const M0 = E0 - e * Math.sin(E0);
+    
+    // Current mean anomaly
+    const M = M0 + 2 * Math.PI * ((time - startTime) / period);
+    
+    // Solve Kepler's equation iteratively (M = E - e*sin(E))
+    let E = M; // Initial guess
+    for(let i = 0; i < 10; i++) {
+        E = M + e * Math.sin(E);
+    }
+    
+    // Mean motion
+    const n = 2 * Math.PI / period;
+    
+    // Calculate velocity in orbital plane coordinates
+    // vx = -a*n*sin(E) / (1 - e*cos(E))
+    // vy = a*n*sqrt(1-e²)*cos(E) / (1 - e*cos(E))
+    const denominator = 1 - e * Math.cos(E);
+    const vx = -a * n * Math.sin(E) / denominator;
+    const vy = a * n * Math.sqrt(1 - e*e) * Math.cos(E) / denominator;
+    
+    // Calculate orbit orientation vectors
+    const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
+    const hNorm = h.clone().normalize();
+    
+    // Calculate eccentricity vector
+    const vCrossH = new THREE.Vector3().crossVectors(initialVel, h);
+    const eVec = vCrossH.multiplyScalar(1/mu).sub(initialPos.clone().normalize());
+    const eNorm = eVec.clone().normalize();
+    
+    // Calculate orbit plane basis vectors
+    const periapsisDir = eNorm;
+    const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
+    
+    // Transform from orbital plane to 3D space
+    return new THREE.Vector3()
+        .addScaledVector(periapsisDir, vx)
+        .addScaledVector(perpDir, vy);
+}
+
+export function calculateHyperbolicVelocity(
+    time: number,
+    a: number,
+    e: number,
+    startTime: number,
+    initialPos: THREE.Vector3,
+    initialVel: THREE.Vector3,
+    planetMass: number
+): THREE.Vector3 {
+    const GValue = (G as any).over(gravitationalConstantUnit).value;
+    const mu = GValue * planetMass;
+    const F0 = calculateInitialE(initialPos, initialVel, a, e, mu);
+    
+    // Mean anomaly at t=0 for hyperbolic orbit
+    const M0 = e * Math.sinh(F0) - F0;
+    
+    // Current mean anomaly
+    const n = Math.sqrt(mu / (-a * a * a)); // Mean motion for hyperbolic orbit
+    const M = M0 + n * (time - startTime);
+    
+    // Solve Kepler's equation iteratively for hyperbolic case
+    let F = M; // Initial guess
+    for(let i = 0; i < 10; i++) {
+        const dF = (M - e * Math.sinh(F) + F) / (e * Math.cosh(F) - 1);
+        F += dF;
+        if (Math.abs(dF) < 1e-6) break;
+    }
+    
+    // Calculate velocity in orbital plane coordinates
+    const denominator = e * Math.cosh(F) - 1;
+    const vx = -a * n * Math.sinh(F) / denominator;
+    const vy = a * n * Math.sqrt(e*e - 1) * Math.cosh(F) / denominator;
+    
+    // Calculate orbit orientation vectors
+    const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
+    const hNorm = h.clone().normalize();
+    
+    // Calculate eccentricity vector
+    const vCrossH = new THREE.Vector3().crossVectors(initialVel, h);
+    const eVec = vCrossH.multiplyScalar(1/mu).sub(initialPos.clone().normalize());
+    const eNorm = eVec.clone().normalize();
+    
+    // Calculate orbit plane basis vectors
+    const periapsisDir = eNorm;
+    const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
+    
+    // Transform from orbital plane to 3D space
+    return new THREE.Vector3()
+        .addScaledVector(periapsisDir, vx)
+        .addScaledVector(perpDir, vy);
+}
+
 export function generateHyperbolicPoints(
     a: number,
     e: number,
