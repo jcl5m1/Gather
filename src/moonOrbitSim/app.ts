@@ -78,25 +78,14 @@ export class MoonOrbitSimulation {
         const cameraManager = this.gameLoop.getCameraManager();
         cameraManager.resetToInitial();
         
-        // Initialize Moon with actual Earth-Moon system parameters from config
+        // Initialize Moon from config
         const moonBody = config.bodies.moon;
         const earthBody = config.bodies.earth;
-        console.log('[initializeSimulation] moonBody:', moonBody);
-        console.log('[initializeSimulation] moonBody.data:', moonBody.data);
-        const moonDistance = (moonBody.data && moonBody.data.distance) || 384400;
-        const earthMass = earthBody.mass;
-        const moonMass = moonBody.mass;
-        const moonRadius = moonBody.radius;
+        console.log('[initializeSimulation] Loading moon from config:', moonBody);
         
-        // Calculate circular orbital velocity: v = sqrt(G * M_earth / r)
-        // G is in km³/(kg·s²) for consistency with km-based distances
-        // This gives velocity in km/s
-        const GValue = (G as any).over(gravitationalConstantUnit).value;
-        const moonVelocity = Math.sqrt(GValue * earthMass / moonDistance);
-        
-        // Place Moon at distance along x-axis, with velocity in z-direction for circular orbit in xz plane
+        // Use ADD_BODY command with position and velocity from config
         const addResult = this.simulationController.executeCommand(
-            `ADD_BODY position:${moonDistance},0,0 velocity:0,0,${moonVelocity} mass:${moonMass} id:${moonBody.name} radius:${moonRadius} color:${moonBody.color || 'cccccc'} trajectoryColor:${moonBody.trajectoryColor || 'ffffff'}`
+            `ADD_BODY position:${moonBody.position.x},${moonBody.position.y},${moonBody.position.z} velocity:${moonBody.velocity.x},${moonBody.velocity.y},${moonBody.velocity.z} mass:${moonBody.mass} id:${moonBody.name} radius:${moonBody.radius} color:${moonBody.color || 'cccccc'} trajectoryColor:${moonBody.trajectoryColor || 'ffffff'} parentId:${moonBody.parentId || ''}`
         );
         
         // Update all UI sections

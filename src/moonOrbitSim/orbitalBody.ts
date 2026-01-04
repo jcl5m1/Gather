@@ -244,7 +244,8 @@ export class OrbitalBody extends Body {
         radius: number = 1.0,
         color: number = 0xcccccc,
         trajectoryColor: number = 0xff6666,
-        name: string = 'Unnamed'
+        name: string = 'Unnamed',
+        parentId: string = ''
     ) {
         // Initialize Body with standard properties
         super({
@@ -254,7 +255,9 @@ export class OrbitalBody extends Body {
             radius: radius,
             name: name,
             color: `#${color.toString(16).padStart(6, '0')}`,
-            trajectoryColor: `#${trajectoryColor.toString(16).padStart(6, '0')}`
+            trajectoryColor: `#${trajectoryColor.toString(16).padStart(6, '0')}`,
+            parentId: parentId,
+            id: name
         });
 
         this.initialPosition = position.clone();
@@ -265,6 +268,45 @@ export class OrbitalBody extends Body {
 
         // Create trajectory (one per body)
         this._trajectory = new Trajectory(scene, trajectoryColor);
+    }
+
+    /**
+     * Create an OrbitalBody from a Body configuration object
+     * This allows each class to know how to serialize/deserialize itself
+     */
+    static fromConfig(scene: THREE.Scene, bodyConfig: Body): OrbitalBody {
+        // Parse color from hex string
+        const colorHex = bodyConfig.color ? parseInt(bodyConfig.color.replace('#', ''), 16) : 0xcccccc;
+        const trajectoryColorHex = bodyConfig.trajectoryColor ? parseInt(bodyConfig.trajectoryColor.replace('#', ''), 16) : 0xff6666;
+        
+        return new OrbitalBody(
+            scene,
+            bodyConfig.position.clone(),
+            bodyConfig.velocity.clone(),
+            bodyConfig.mass,
+            bodyConfig.radius,
+            colorHex,
+            trajectoryColorHex,
+            bodyConfig.name,
+            bodyConfig.parentId
+        );
+    }
+
+    /**
+     * Serialize this OrbitalBody to a Body configuration object
+     */
+    toConfig(): Body {
+        return new Body({
+            position: this.position.clone(),
+            velocity: this.velocity.clone(),
+            mass: this.mass,
+            radius: this.radius,
+            name: this.name,
+            color: this.color,
+            trajectoryColor: this.trajectoryColor,
+            parentId: this.parentId,
+            id: this.id
+        });
     }
 
     /**

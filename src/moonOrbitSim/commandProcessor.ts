@@ -450,7 +450,7 @@ export class CommandProcessor {
         if (!position || !velocity || isNaN(mass)) {
             return {
                 success: false,
-                message: 'Invalid parameters. Expected: position:x,y,z velocity:x,y,z mass:value [id:id] [radius:value] [color:hex] [trajectoryColor:hex]'
+                message: 'Invalid parameters. Expected: position:x,y,z velocity:x,y,z mass:value [id:id] [radius:value] [color:hex] [trajectoryColor:hex] [parentId:id]'
             };
         }
 
@@ -461,6 +461,9 @@ export class CommandProcessor {
             };
         }
 
+        // Get parentId if provided
+        const parentId = params.parentid || params.parentId || '';
+
         const body = this.gameLoop.addOrbitalBody(
             position,
             velocity,
@@ -468,7 +471,8 @@ export class CommandProcessor {
             radius,
             color,
             trajectoryColor,
-            bodyId
+            bodyId,
+            parentId
         );
         // Add to map immediately so it's available when camera switches to it
         this.orbitalBodyIdMap.set(bodyId, body);
@@ -683,4 +687,3 @@ HELP - Show this help message`
         return bodies.length > 0 ? bodies[0] : null;
     }
 }
-

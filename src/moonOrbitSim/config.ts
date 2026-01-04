@@ -148,17 +148,23 @@ export function hexToNumber(hex: string): number {
 
 // Helper to create a Body from config data
 function createBodyFromConfig(bodyData: any, distance?: Length): Body {
+    // Parse position and velocity from config
+    const position = bodyData.position ? parseVector3(bodyData.position) : new THREE.Vector3(0, 0, 0);
+    const velocity = bodyData.velocity ? parseVector3(bodyData.velocity) : new THREE.Vector3(0, 0, 0);
+    
     const body = new Body({
         name: bodyData.name,
         mass: parseMass(bodyData.mass).over(kilograms).value,
         radius: parseLength(bodyData.radius).over(kilometers).value,
         color: bodyData.color,
         trajectoryColor: bodyData.trajectoryColor,
-        position: new THREE.Vector3(0, 0, 0),
-        velocity: new THREE.Vector3(0, 0, 0)
+        position: position,
+        velocity: velocity,
+        parentId: bodyData.parentId || '',
+        id: bodyData.name // Use name as id by default
     });
 
-    // Store distance in body.data if provided
+    // Store distance in body.data if provided (backward compatibility)
     if (distance) {
         body.data.distance = distance.over(kilometers).value;
     }

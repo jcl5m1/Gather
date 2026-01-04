@@ -753,6 +753,22 @@ export class UIManager {
                 event.preventDefault();
                 // P key toggles Property Inspector visibility
                 this.togglePropertyInspector();
+            } else if (event.key === ',') {
+                event.preventDefault();
+                // ',' key multiplies timescale by 0.1x
+                const gameLoop = this.simulationController.getGameLoop();
+                const currentTimeScale = gameLoop.getTimeScale();
+                const newTimeScale = currentTimeScale * 0.1;
+                this.executeAndDisplayCommand(`SET_TIME_SCALE ${newTimeScale}`);
+                console.log(`Time scale: ${currentTimeScale} -> ${newTimeScale} (0.1x)`);
+            } else if (event.key === '.') {
+                event.preventDefault();
+                // '.' key multiplies timescale by 10x
+                const gameLoop = this.simulationController.getGameLoop();
+                const currentTimeScale = gameLoop.getTimeScale();
+                const newTimeScale = currentTimeScale * 10;
+                this.executeAndDisplayCommand(`SET_TIME_SCALE ${newTimeScale}`);
+                console.log(`Time scale: ${currentTimeScale} -> ${newTimeScale} (10x)`);
             }
         });
     }

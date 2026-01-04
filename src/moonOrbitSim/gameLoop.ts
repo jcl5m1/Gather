@@ -145,7 +145,8 @@ export class GameLoop {
         radius: number = 1.0,
         color: number = 0xcccccc,
         trajectoryColor: number = 0xff6666,
-        name: string = 'Unnamed'
+        name: string = 'Unnamed',
+        parentId: string = ''
     ): OrbitalBody {
         const body = new OrbitalBody(
             this._scene,
@@ -155,7 +156,8 @@ export class GameLoop {
             radius,
             color,
             trajectoryColor,
-            name
+            name,
+            parentId
         );
 
         // Calculate initial trajectory
