@@ -2,8 +2,8 @@ export let logDiv: HTMLDivElement;
 export let inventoryDiv: HTMLDivElement;
 export let modeDiv: HTMLDivElement;
 export let hoverTextDiv: HTMLDivElement;
-import { Resource } from './types/resource'; // Removed as Body is defined in the same file
-export let resourceTable: Resource[] = [];
+// Resource class removed - define inline if needed
+export let resourceTable: any[] = [];
 import { v4 as uuidv4 } from 'uuid';
 
 export function init(document: Document) {
@@ -88,8 +88,7 @@ export async function getResourceById(id: string) {
     if (resourceTable.length === 0) {
         await getTable('resource').then(data => {
             data.forEach((item: any) => {
-                const resource = new Resource(item);
-                resourceTable.push(resource);
+                resourceTable.push(item);
             });
             console.log('Resource table loaded:', resourceTable.length);
         }).catch(error => {

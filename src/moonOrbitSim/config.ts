@@ -1,6 +1,7 @@
 import configData from './config.json';
 import { Measure, Length, Mass, Time, kilometers, kilograms, seconds, parseUnit, gravitationalConstantUnit, GenericMeasure } from './units';
 import * as THREE from 'three';
+import { Body } from './types';
 
 // Helper to parse a value with unit from JSON
 function parseValueWithUnit(obj: any): number {
@@ -75,18 +76,9 @@ export interface PhysicsConfig {
     defaultTimeScale: number; // Dimensionless
 }
 
-export interface BodyConfig {
-    name: string;
-    mass: Mass;
-    radius: Length;
-    color?: string;
-    trajectoryColor?: string;
-    distance?: Length;
-}
-
 export interface BodiesConfig {
-    earth: BodyConfig;
-    moon: BodyConfig;
+    earth: Body;
+    moon: Body;
 }
 
 export interface CameraConfig {
@@ -154,6 +146,26 @@ export function hexToNumber(hex: string): number {
     return parseInt(hex, 16);
 }
 
+// Helper to create a Body from config data
+function createBodyFromConfig(bodyData: any, distance?: Length): Body {
+    const body = new Body({
+        name: bodyData.name,
+        mass: parseMass(bodyData.mass).over(kilograms).value,
+        radius: parseLength(bodyData.radius).over(kilometers).value,
+        color: bodyData.color,
+        trajectoryColor: bodyData.trajectoryColor,
+        position: new THREE.Vector3(0, 0, 0),
+        velocity: new THREE.Vector3(0, 0, 0)
+    });
+
+    // Store distance in body.data if provided
+    if (distance) {
+        body.data.distance = distance.over(kilometers).value;
+    }
+
+    return body;
+}
+
 // Parse the config data and convert to typed values
 function parseConfig(data: any): SimulationConfig {
     return {
@@ -162,20 +174,11 @@ function parseConfig(data: any): SimulationConfig {
             defaultTimeScale: parseValueWithUnit(data.physics.defaultTimeScale)
         },
         bodies: {
-            earth: {
-                name: data.bodies.earth.name,
-                mass: parseMass(data.bodies.earth.mass),
-                radius: parseLength(data.bodies.earth.radius),
-                color: data.bodies.earth.color
-            },
-            moon: {
-                name: data.bodies.moon.name,
-                mass: parseMass(data.bodies.moon.mass),
-                radius: parseLength(data.bodies.moon.radius),
-                distance: data.bodies.moon.distance ? parseLength(data.bodies.moon.distance) : undefined,
-                color: data.bodies.moon.color,
-                trajectoryColor: data.bodies.moon.trajectoryColor
-            }
+            earth: createBodyFromConfig(data.bodies.earth),
+            moon: createBodyFromConfig(
+                data.bodies.moon,
+                data.bodies.moon.distance ? parseLength(data.bodies.moon.distance) : undefined
+            )
         },
         scene: {
             camera: {

@@ -70,3 +70,6 @@ if (typeof window !== 'undefined') {
     (window as any).testCommandInterface = testCommandInterface;
 }
 
+
+
+

@@ -1,15 +1,76 @@
-this is a space simulation game written in typescript. it is an npm project
-the main code is in src/moonOrbitSim/.
-the main file is in gameLoop.ts
-all of the static values should be stores in config.json and is loaded by config.ts
-open a webbrowser to test the results
-the project has also commandProcessor.ts which allows automated execution of all UI elements without interacting with widgets.  do not click on widgets, use the text commands to test functionality when you open the webbrowser and use console output to report the results.  this is to minimize the need for processing screenshots of the webpage.
-ensure all UI are actually executed through text commands to allow full automation.
- the UI should not makes changes directly. the UI should always use commands to make changes to the game state
-make sure to use the developer console out to help debug behavior.
-all distance units should be stored in kilometers, radians, kilograms, seconds, liters, kelvin, newtons, joules, and watts. But, display using the formatters in uiManager
-check the webpage for compilation errors after completing each task ebfore saying you are done.
-if the change impacted command behavior test it before saying you are complete
-the ui has an inspector that neatly organizes a lot of the UI data.
-don't run npm build unless absolutely necessary.  the server auto updates the changes.
+# Gather - Space Simulation Game
 
+This is a space simulation game written in TypeScript. It is an npm project with auto-reloading development server.
+
+## Project Structure
+
+### Main Application (src/moonOrbitSim/)
+The primary codebase for the orbital mechanics simulation.
+
+**Core Files:**
+- `index.ts` - Application entry point, initializes the app
+- `app.ts` - Main application setup and initialization
+- `gameLoop.ts` - **MAIN GAME LOOP** - handles rendering, physics updates, and game state
+- `config.ts` - Loads and parses configuration from config.json with unit conversion
+- `config.json` - **ALL STATIC VALUES** - physics constants, scene settings, body definitions
+
+**Game Objects:**
+- `orbitalBody.ts` - OrbitalBody class (extends Body), handles orbital mechanics and rendering
+- `trajectory.ts` - Trajectory visualization and orbital calculations
+- `types.ts` - Type definitions including Body class, BezierCurve, OrbitGeometry renderers
+
+**Simulation & Physics:**
+- `simulationController.ts` - Controls time scaling and simulation state
+- `orbitUtils.ts` - Utility functions for orbital calculations
+
+**UI & Interaction:**
+- `uiManager.ts` - UI rendering and **formatters for unit display** (use these for displaying values!)
+- `commandProcessor.ts` - **TEXT COMMAND INTERFACE** - allows automated execution of all UI actions
+- `cameraManager.ts` - Camera controls, tracking, and free camera mode (WASD+RF movement)
+
+**Utilities:**
+- `units.ts` - Unit system (kilometers, kilograms, seconds, etc.)
+- `unitsVector3.ts` - Vector3 with unit support
+
+**Documentation:**
+- `COMMAND_INTERFACE.md` - Documentation for text commands
+
+### Other Modules
+- `src/mineGather/` - Separate game module (resource gathering game)
+- `src/index.ts` - **DEPRECATED** legacy code, not used by current build
+- `src/renderbody.ts` - **DEPRECATED** legacy code
+- `src/utils.ts` - Legacy utilities
+
+## Key Concepts
+
+### Type Organization
+- **Module-specific types**: Each module has its own `types.ts` file
+  - `src/moonOrbitSim/types.ts` - Body class, orbit geometry types
+  - `src/mineGather/types.ts` - Resource types, game state types
+- **No shared types folder** - types are co-located with the modules that use them
+
+### Units
+- **Internal storage**: kilometers, radians, kilograms, seconds, liters, kelvin, newtons, joules, watts
+- **Display**: Use formatters in `uiManager.ts` to convert to user-friendly units
+
+### Command-Driven Architecture
+- **Never click UI widgets directly** - use text commands via `commandProcessor.ts`
+- **All UI actions must go through commands** - ensures full automation capability
+- **Test via console** - use browser console output to verify behavior, minimize screenshot processing
+
+### Inspector
+- UI has an inspector panel that organizes game data and allows inspection/modification of properties
+
+## Development Workflow
+
+1. **Don't run `npm build`** unless absolutely necessary - the dev server auto-updates
+2. **Test in browser** after changes - check for compilation errors in browser console
+3. **Use text commands** to test functionality - see `COMMAND_INTERFACE.md` for command reference
+4. **Use console.log** for debugging - check browser developer console for output
+5. **Test command behavior** if commands were modified before marking task complete
+
+## Testing
+- Open browser to test results
+- Use text commands (not UI clicks) for automated testing
+- Check console output for results and errors
+- Verify no compilation errors in browser console after each task

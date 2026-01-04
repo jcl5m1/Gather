@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BezierCurvePoints, BezierCurve } from './types';
+import { BezierCurvePoints, BezierCurve } from './trajectory';
 import { G } from './config';
 import { gravitationalConstantUnit } from './units';
 

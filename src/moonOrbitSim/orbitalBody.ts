@@ -2,51 +2,47 @@ import * as THREE from 'three';
 import { Trajectory } from './trajectory';
 import { MeasureVector3, LengthVector3, VelocityVector3 } from './unitsVector3';
 import { Mass, Measure, Length, Velocity, kilograms, kilometers, seconds, GenericMeasure, gravitationalConstantUnit } from './units';
+import { Body } from './types';
 
-/**
- * OrbitalBody class representing a celestial body with position, velocity, mass, and a trajectory
- */
-export class OrbitalBody {
-    private _position: THREE.Vector3;      // Private - use underscore prefix
-    private _velocity: THREE.Vector3;      // Private - use underscore prefix
-    public initialPosition: THREE.Vector3;  // Public for UI inspection
-    public initialVelocity: THREE.Vector3;   // Public for UI inspection
-    public mass: number;                     // Public for UI inspection
-    public radius: number;
-    public name: string;
-    private _trajectory: Trajectory;        // Private - use underscore prefix
-    private _mesh: THREE.Mesh;              // Private - use underscore prefix
-    private _dotSprite: THREE.Sprite;       // Private - use underscore prefix for 2D dot rendering
-    private _useDotRendering: boolean = false;  // Private - use underscore prefix
-    private _trailPoints: THREE.Vector3[] = [];  // Private - use underscore prefix
-    private _maxTrailPoints: number = 100; // Private - use underscore prefix
-    private _scene: THREE.Scene;            // Private - use underscore prefix
+// ============================================================================
+// OrbitalBody Rendering
+// ============================================================================
 
-    constructor(
-        scene: THREE.Scene,
-        position: THREE.Vector3,
-        velocity: THREE.Vector3,
-        mass: number,
-        radius: number = 1.0,
-        color: number = 0xcccccc,
-        trajectoryColor: number = 0xff6666,
-        name: string = 'Unnamed'
-    ) {
-        this._scene = scene;
-        this._position = position.clone();
-        this._velocity = velocity.clone();
-        this.initialPosition = position.clone();
-        this.initialVelocity = velocity.clone();
-        this.mass = mass;
+export interface OrbitalBodyRender {
+    // Core Three.js objects for rendering
+    mesh: THREE.Mesh;
+    dotSprite: THREE.Sprite;
+    
+    // Methods for updating the visual representation
+    updateRenderingMode(position: THREE.Vector3, camera: THREE.Camera): void;
+    getTrailPoints(): THREE.Vector3[];
+    addTrailPoint(point: THREE.Vector3): void;
+    clearTrail(initialPoint: THREE.Vector3): void;
+    updateRadius(radius: number, color: number): void;
+    setVisibility(visible: boolean): void;
+    cleanup(): void;
+}
+
+export class OrbitalBodyRenderer implements OrbitalBodyRender {
+    mesh: THREE.Mesh;
+    dotSprite: THREE.Sprite;
+    
+    private scene: THREE.Scene;
+    private trailPoints: THREE.Vector3[] = [];
+    private maxTrailPoints: number = 100;
+    private useDotRendering: boolean = false;
+    private radius: number;
+
+    constructor(scene: THREE.Scene, position: THREE.Vector3, radius: number, color: number) {
+        this.scene = scene;
         this.radius = radius;
-        this.name = name;
 
         // Create mesh for the body
         const geometry = new THREE.SphereGeometry(radius, 32, 32);
         const material = new THREE.MeshPhongMaterial({ color });
-        this._mesh = new THREE.Mesh(geometry, material);
-        this._mesh.position.copy(this._position);
-        scene.add(this._mesh);
+        this.mesh = new THREE.Mesh(geometry, material);
+        this.mesh.position.copy(position);
+        scene.add(this.mesh);
 
         // Create dot sprite for far-away rendering
         const dotTexture = this.createDotTexture(color);
@@ -55,14 +51,13 @@ export class OrbitalBody {
             sizeAttenuation: false,  // Size stays constant regardless of distance
             depthTest: true
         });
-        this._dotSprite = new THREE.Sprite(spriteMaterial);
-        this._dotSprite.scale.set(0.01, 0.01, 1);  // 10x10 pixel scale for screen-space size
-        this._dotSprite.position.copy(this._position);
+        this.dotSprite = new THREE.Sprite(spriteMaterial);
+        this.dotSprite.scale.set(0.01, 0.01, 1);  // 10x10 pixel scale for screen-space size
+        this.dotSprite.position.copy(position);
         // Don't add to scene yet - will be added when needed
 
-        // Create trajectory (one per body)
-        this._trajectory = new Trajectory(scene, trajectoryColor);
-        this._trailPoints = [position.clone()];
+        // Initialize trail with starting position
+        this.trailPoints = [position.clone()];
     }
 
     /**
@@ -89,13 +84,13 @@ export class OrbitalBody {
      * Calculate the screen size of the body in pixels
      * Returns the approximate diameter of the body as it appears on screen
      */
-    private calculateScreenSize(camera: THREE.Camera): number {
+    private calculateScreenSize(position: THREE.Vector3, camera: THREE.Camera): number {
         if (!(camera instanceof THREE.PerspectiveCamera)) {
             return Infinity; // Default to mesh rendering for non-perspective cameras
         }
 
         // Calculate distance from camera to body
-        const distance = camera.position.distanceTo(this._position);
+        const distance = camera.position.distanceTo(position);
         
         // Get the vertical field of view in radians
         const fov = camera.fov * Math.PI / 180;
@@ -117,30 +112,167 @@ export class OrbitalBody {
      * Update rendering mode based on screen size
      * Switches between 3D mesh and 2D dot sprite
      */
-    updateRenderingMode(camera: THREE.Camera): void {
-        const screenSize = this.calculateScreenSize(camera);
+    updateRenderingMode(position: THREE.Vector3, camera: THREE.Camera): void {
+        const screenSize = this.calculateScreenSize(position, camera);
         const shouldUseDot = screenSize < 10;  // Use dot if body is less than 10 pixels
         
-        if (shouldUseDot !== this._useDotRendering) {
-            this._useDotRendering = shouldUseDot;
+        if (shouldUseDot !== this.useDotRendering) {
+            this.useDotRendering = shouldUseDot;
             
-            if (this._useDotRendering) {
+            if (this.useDotRendering) {
                 // Switch to dot rendering
-                this._scene.remove(this._mesh);
-                this._scene.add(this._dotSprite);
+                this.scene.remove(this.mesh);
+                this.scene.add(this.dotSprite);
             } else {
                 // Switch to mesh rendering
-                this._scene.remove(this._dotSprite);
-                this._scene.add(this._mesh);
+                this.scene.remove(this.dotSprite);
+                this.scene.add(this.mesh);
             }
         }
         
         // Update position for whichever is visible
-        if (this._useDotRendering) {
-            this._dotSprite.position.copy(this._position);
+        if (this.useDotRendering) {
+            this.dotSprite.position.copy(position);
         } else {
-            this._mesh.position.copy(this._position);
+            this.mesh.position.copy(position);
         }
+    }
+
+    /**
+     * Add a point to the trail
+     */
+    addTrailPoint(point: THREE.Vector3): void {
+        this.trailPoints.push(point.clone());
+        if (this.trailPoints.length > this.maxTrailPoints) {
+            this.trailPoints.shift();
+        }
+    }
+
+    /**
+     * Clear trail and set initial point
+     */
+    clearTrail(initialPoint: THREE.Vector3): void {
+        this.trailPoints = [initialPoint.clone()];
+    }
+
+    /**
+     * Get trail points (sub-sampled to 10 segments for rendering)
+     */
+    getTrailPoints(): THREE.Vector3[] {
+        if (this.trailPoints.length <= 11) {
+            return this.trailPoints;
+        }
+        
+        // Sub-sample to approximately 10 line segments (11 points)
+        const sampledPoints: THREE.Vector3[] = [];
+        const step = (this.trailPoints.length - 1) / 10;
+        
+        for (let i = 0; i < 11; i++) {
+            const index = Math.floor(i * step);
+            sampledPoints.push(this.trailPoints[index]);
+        }
+        
+        return sampledPoints;
+    }
+
+    /**
+     * Update radius and regenerate mesh with new radius and color
+     */
+    updateRadius(radius: number, color: number): void {
+        this.radius = radius;
+        
+        // Remove old mesh
+        this.scene.remove(this.mesh);
+        this.mesh.geometry.dispose();
+        if (this.mesh.material instanceof THREE.Material) {
+            this.mesh.material.dispose();
+        }
+        
+        // Create new mesh with updated radius
+        const geometry = new THREE.SphereGeometry(radius, 32, 32);
+        const material = new THREE.MeshPhongMaterial({ color });
+        this.mesh = new THREE.Mesh(geometry, material);
+        this.mesh.position.copy(this.mesh.position); // Keep same position
+        this.scene.add(this.mesh);
+    }
+
+    /**
+     * Set visibility of mesh/sprite
+     */
+    setVisibility(visible: boolean): void {
+        this.mesh.visible = visible;
+        this.dotSprite.visible = visible;
+    }
+
+    /**
+     * Cleanup and remove from scene
+     */
+    cleanup(): void {
+        this.scene.remove(this.mesh);
+        this.scene.remove(this.dotSprite);
+        this.mesh.geometry.dispose();
+        if (this.mesh.material instanceof THREE.Material) {
+            this.mesh.material.dispose();
+        }
+        if (this.dotSprite.material.map) {
+            this.dotSprite.material.map.dispose();
+        }
+        this.dotSprite.material.dispose();
+    }
+}
+
+// ============================================================================
+// OrbitalBody Class
+// ============================================================================
+
+/**
+ * OrbitalBody class representing a celestial body with position, velocity, mass, and a trajectory
+ * Extends Body to inherit standard properties (position, velocity, mass, radius, name, etc.)
+ * and adds simulation-specific functionality (trajectory, rendering, physics updates)
+ */
+export class OrbitalBody extends Body {
+    public initialPosition: THREE.Vector3;  // Public for UI inspection
+    public initialVelocity: THREE.Vector3;   // Public for UI inspection
+    private _trajectory: Trajectory;        // Private - use underscore prefix
+    private _render: OrbitalBodyRender;     // Private - rendering delegate
+
+    constructor(
+        scene: THREE.Scene,
+        position: THREE.Vector3,
+        velocity: THREE.Vector3,
+        mass: number,
+        radius: number = 1.0,
+        color: number = 0xcccccc,
+        trajectoryColor: number = 0xff6666,
+        name: string = 'Unnamed'
+    ) {
+        // Initialize Body with standard properties
+        super({
+            position: position.clone(),
+            velocity: velocity.clone(),
+            mass: mass,
+            radius: radius,
+            name: name,
+            color: `#${color.toString(16).padStart(6, '0')}`,
+            trajectoryColor: `#${trajectoryColor.toString(16).padStart(6, '0')}`
+        });
+
+        this.initialPosition = position.clone();
+        this.initialVelocity = velocity.clone();
+
+        // Create renderer for the body
+        this._render = new OrbitalBodyRenderer(scene, position, radius, color);
+
+        // Create trajectory (one per body)
+        this._trajectory = new Trajectory(scene, trajectoryColor);
+    }
+
+    /**
+     * Update rendering mode based on screen size
+     * Switches between 3D mesh and 2D dot sprite
+     */
+    updateRenderingMode(camera: THREE.Camera): void {
+        this._render.updateRenderingMode(this.position, camera);
     }
 
     /**
@@ -149,7 +281,7 @@ export class OrbitalBody {
      * G must be in km³/(kg·s²) as a Measure
      */
     update(dt: number, centralBodyPosition: THREE.Vector3, centralBodyMass: number, G: GenericMeasure<number, any, any>): void {
-        const r = this._position.clone().sub(centralBodyPosition);
+        const r = this.position.clone().sub(centralBodyPosition);
         const distance = r.length(); // km
         
         // Prevent division by zero and extreme forces at very small distances
@@ -163,33 +295,30 @@ export class OrbitalBody {
 
             // Update velocity: v += a * dt = (F/m) * dt
             // Units: (kg·km/s² / kg) * s = km/s
-            this._velocity.add(force.multiplyScalar(dt / this.mass));
+            this.velocity.add(force.multiplyScalar(dt / this.mass));
             
             // Update position: r += v * dt
             // Units: km/s * s = km
-            this._position.add(this._velocity.clone().multiplyScalar(dt));
+            this.position.add(this.velocity.clone().multiplyScalar(dt));
         }
 
         // Note: mesh/sprite position is updated in updateRenderingMode(), called from game loop
 
         // Update trajectory current state (altitude and velocity)
-        const positionVec = MeasureVector3.fromVector3<Length>(this._position, kilometers);
-        const velocityVec = MeasureVector3.fromVector3<Velocity>(this._velocity, kilometers.per(seconds));
+        const positionVec = MeasureVector3.fromVector3<Length>(this.position, kilometers);
+        const velocityVec = MeasureVector3.fromVector3<Velocity>(this.velocity, kilometers.per(seconds));
         this._trajectory.updateCurrentState(positionVec, velocityVec);
 
         // Add to trail
-        this._trailPoints.push(this._position.clone());
-        if (this._trailPoints.length > this._maxTrailPoints) {
-            this._trailPoints.shift();
-        }
+        this._render.addTrailPoint(this.position);
     }
 
     /**
      * Reset to initial conditions and recalculate trajectory
      */
     reset(position: THREE.Vector3, velocity: THREE.Vector3, mass: number, centralBodyMass: number, radius?: number): void {
-        this._position.copy(position);
-        this._velocity.copy(velocity);
+        this.position.copy(position);
+        this.velocity.copy(velocity);
         this.mass = mass;
         this.initialPosition = position.clone();
         this.initialVelocity = velocity.clone();
@@ -197,24 +326,13 @@ export class OrbitalBody {
         // Update radius and regenerate mesh if radius is provided
         if (radius !== undefined && radius !== this.radius) {
             this.radius = radius;
-            
-            // Remove old mesh
-            this._scene.remove(this._mesh);
-            this._mesh.geometry.dispose();
-            if (this._mesh.material instanceof THREE.Material) {
-                this._mesh.material.dispose();
-            }
-            
-            // Create new mesh with updated radius
-            const geometry = new THREE.SphereGeometry(radius, 32, 32);
-            const material = new THREE.MeshPhongMaterial({ color: (this._mesh.material as THREE.MeshPhongMaterial).color });
-            this._mesh = new THREE.Mesh(geometry, material);
-            this._mesh.position.copy(this._position);
-            this._scene.add(this._mesh);
+            // Get color from existing mesh material
+            const color = (this._render.mesh.material as THREE.MeshPhongMaterial).color.getHex();
+            this._render.updateRadius(radius, color);
         }
 
         // Clear trail
-        this._trailPoints = [position.clone()];
+        this._render.clearTrail(position);
 
         // Recalculate trajectory
         this._trajectory.clear();
@@ -229,11 +347,11 @@ export class OrbitalBody {
      * and recompute trajectory
      */
     resetToInitial(centralBodyMass: number): void {
-        this._position.copy(this.initialPosition);
-        this._velocity.copy(this.initialVelocity);
+        this.position.copy(this.initialPosition);
+        this.velocity.copy(this.initialVelocity);
 
         // Clear trail
-        this._trailPoints = [this.initialPosition.clone()];
+        this._render.clearTrail(this.initialPosition);
 
         // Recompute trajectory
         this._trajectory.clear();
@@ -247,14 +365,14 @@ export class OrbitalBody {
      * Get current position
      */
     getPosition(): THREE.Vector3 {
-        return this._position.clone();
+        return this.position.clone();
     }
 
     /**
      * Get current velocity
      */
     getVelocity(): THREE.Vector3 {
-        return this._velocity.clone();
+        return this.velocity.clone();
     }
 
     /**
@@ -303,27 +421,14 @@ export class OrbitalBody {
      * Get trail points (sub-sampled to 10 segments for rendering)
      */
     getTrailPoints(): THREE.Vector3[] {
-        if (this._trailPoints.length <= 11) {
-            return this._trailPoints;
-        }
-        
-        // Sub-sample to approximately 10 line segments (11 points)
-        const sampledPoints: THREE.Vector3[] = [];
-        const step = (this._trailPoints.length - 1) / 10;
-        
-        for (let i = 0; i < 11; i++) {
-            const index = Math.floor(i * step);
-            sampledPoints.push(this._trailPoints[index]);
-        }
-        
-        return sampledPoints;
+        return this._render.getTrailPoints();
     }
 
     /**
      * Get mesh
      */
     getMesh(): THREE.Mesh {
-        return this._mesh;
+        return this._render.mesh;
     }
 
     /**
@@ -338,16 +443,6 @@ export class OrbitalBody {
      */
     dispose(): void {
         this._trajectory.clear();
-        this._scene.remove(this._mesh);
-        this._scene.remove(this._dotSprite);
-        this._mesh.geometry.dispose();
-        if (this._mesh.material instanceof THREE.Material) {
-            this._mesh.material.dispose();
-        }
-        if (this._dotSprite.material.map) {
-            this._dotSprite.material.map.dispose();
-        }
-        this._dotSprite.material.dispose();
+        this._render.cleanup();
     }
 }
-

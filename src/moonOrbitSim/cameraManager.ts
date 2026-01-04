@@ -2,12 +2,35 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { OrbitalBody } from './orbitalBody';
 import { config } from './config';
+import { Body } from './types';
 
 /**
  * CameraManager class that handles all camera-related functionality
- * including target tracking, zoom, and rotation
+ * including target tracking, zoom, and rotation.
+ * 
+ * Extends Body to inherit spatial properties (position, velocity, mass, etc.)
+ * allowing the camera to be treated as a first-class entity in the scene.
+ * 
+ * Architecture:
+ * - Inherits from Body: position, velocity, mass, radius, name, id
+ * - Manages THREE.PerspectiveCamera and OrbitControls
+ * - Tracks target bodies (central body or orbital bodies)
+ * - Supports free camera mode with keyboard controls (WASD+RF)
+ * - Persists camera state per body using Body serialization (toJSON/fromJSON)
+ * - Syncs Body.position with THREE.Camera.position each frame
+ * 
+ * Camera States:
+ * - Free Camera (target = null): WASD+RF movement, no tracking
+ * - Tracking Mode (target != null): Follows body while maintaining offset
+ * - State Persistence: Camera position/offset saved per body, restored on switch
+ * 
+ * Integration:
+ * - Created by GameLoop with camera, renderer, and body references
+ * - Called via update() in render loop to handle tracking and movement
+ * - Provides camera access via getCamera() for rendering
+ * - Target switching: keyboard ([/]), inspector dropdown, or switchToBody() method
  */
-export class CameraManager {
+export class CameraManager extends Body {
     private _camera: THREE.PerspectiveCamera;              // Private - use underscore prefix
     private _controls!: OrbitControls;                    // Private - use underscore prefix
     private _renderer: THREE.WebGLRenderer;               // Private - use underscore prefix
@@ -19,7 +42,8 @@ export class CameraManager {
     private _previousTargetPosition: THREE.Vector3 = new THREE.Vector3(); // Private - use underscore prefix (previous target position for tracking)
     
     // Storage for camera state per body (to restore when switching back)
-    private _bodyCameraStates: Map<string, THREE.Vector3> = new Map(); // Private - use underscore prefix (maps body name to camera offset)
+    // Now stores full Body state with position, velocity, etc.
+    private _bodyCameraStates: Map<string, any> = new Map(); // Private - use underscore prefix (maps body name to serialized camera state)
     
     // Storage for free camera state (position and target)
     private _freeCameraPosition: THREE.Vector3 | null = null; // Private - use underscore prefix
@@ -163,10 +187,23 @@ export class CameraManager {
         centralBody: OrbitalBody,
         orbitalBodies: OrbitalBody[]
     ) {
+        // Initialize Body with camera properties
+        super({
+            name: 'Camera',
+            position: camera.position.clone(),
+            velocity: new THREE.Vector3(),
+            mass: 0,
+            radius: 1,
+            id: 'camera-main'
+        });
+        
         this._camera = camera;
         this._renderer = renderer;
         this._centralBody = centralBody;
         this._orbitalBodies = orbitalBodies;
+        
+        // Sync Body position with camera
+        this.position.copy(this._camera.position);
         
         // Initialize cameraFocus property
         const allBodies = this.getAllBodies();
@@ -298,7 +335,13 @@ export class CameraManager {
             this._cameraTargetIndex = -2;
             // Restore stored camera state if available, otherwise use current offset
             const storedState = this._bodyCameraStates.get(this._centralBody.getName());
-            this._cameraOffset = storedState ? storedState.clone() : currentCameraOffset;
+            if (storedState && storedState.position) {
+                // Restore from serialized Body state
+                this.position.copy(new THREE.Vector3(storedState.position.x, storedState.position.y, storedState.position.z));
+                this._cameraOffset = this.position.clone().sub(this._centralBody.getPosition());
+            } else {
+                this._cameraOffset = currentCameraOffset;
+            }
             this.notifyTargetChange(this._centralBody.getName());
         } else {
             const orbitalIndex = this._orbitalBodies.indexOf(newTarget);
@@ -307,7 +350,13 @@ export class CameraManager {
                 this._cameraTargetIndex = orbitalIndex;
                 // Restore stored camera state if available, otherwise use current offset
                 const storedState = this._bodyCameraStates.get(newTarget.getName());
-                this._cameraOffset = storedState ? storedState.clone() : currentCameraOffset;
+                if (storedState && storedState.position) {
+                    // Restore from serialized Body state
+                    this.position.copy(new THREE.Vector3(storedState.position.x, storedState.position.y, storedState.position.z));
+                    this._cameraOffset = this.position.clone().sub(newTarget.getPosition());
+                } else {
+                    this._cameraOffset = currentCameraOffset;
+                }
                 this.notifyTargetChange(newTarget.getName());
             }
         }
@@ -376,6 +425,9 @@ export class CameraManager {
             // Update camera position by the same offset to maintain relative position
             this._camera.position.add(targetDelta);
             
+            // Sync Body position with camera
+            this.position.copy(this._camera.position);
+            
             // Update the controls target to follow the body
             this._controls.target.copy(targetPosition);
             
@@ -386,10 +438,11 @@ export class CameraManager {
             // After controls.update(), capture the current offset (includes scroll wheel changes)
             // This captures any zoom/rotation changes from user input
             this._cameraOffset = this._camera.position.clone().sub(targetPosition);
+            this.position.copy(this._camera.position);
             
-            // Update stored camera state for this body to keep it in sync with user changes
+            // Update stored camera state for this body using Body serialization
             const currentBodyName = this._cameraTarget.getName();
-            this._bodyCameraStates.set(currentBodyName, this._cameraOffset.clone());
+            this._bodyCameraStates.set(currentBodyName, this.toJSON());
             
             // Store current target position for next frame
             this._previousTargetPosition.copy(targetPosition);
@@ -397,6 +450,9 @@ export class CameraManager {
             // Free camera mode - handle keyboard movement and update controls
             this.handleFreeCameraMovement(deltaTime);
             this._controls.update();
+            
+            // Sync Body position with camera
+            this.position.copy(this._camera.position);
             
             // Update stored free camera state
             this._freeCameraPosition = this._camera.position.clone();
@@ -616,7 +672,13 @@ export class CameraManager {
             this._cameraTarget = this._centralBody;
             this._cameraTargetIndex = -2;
             const storedState = this._bodyCameraStates.get(this._centralBody.getName());
-            this._cameraOffset = storedState ? storedState.clone() : currentCameraOffset;
+            if (storedState && storedState.position) {
+                // Restore from serialized Body state
+                this.position.copy(new THREE.Vector3(storedState.position.x, storedState.position.y, storedState.position.z));
+                this._cameraOffset = this.position.clone().sub(this._centralBody.getPosition());
+            } else {
+                this._cameraOffset = currentCameraOffset;
+            }
             this.notifyTargetChange(this._centralBody.getName());
         } else {
             const orbitalIndex = this._orbitalBodies.indexOf(body);
@@ -624,7 +686,13 @@ export class CameraManager {
                 this._cameraTarget = body;
                 this._cameraTargetIndex = orbitalIndex;
                 const storedState = this._bodyCameraStates.get(body.getName());
-                this._cameraOffset = storedState ? storedState.clone() : currentCameraOffset;
+                if (storedState && storedState.position) {
+                    // Restore from serialized Body state
+                    this.position.copy(new THREE.Vector3(storedState.position.x, storedState.position.y, storedState.position.z));
+                    this._cameraOffset = this.position.clone().sub(body.getPosition());
+                } else {
+                    this._cameraOffset = currentCameraOffset;
+                }
                 this.notifyTargetChange(body.getName());
             }
         }
@@ -676,4 +744,3 @@ export class CameraManager {
         this.notifyTargetChange(null);
     }
 }
-

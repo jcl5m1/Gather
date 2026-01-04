@@ -1,8 +1,52 @@
 import * as THREE from 'three';
-import {Body} from './types/body'; // Removed as Body is defined in the same file
 import { appendToLog } from './utils'; // Assuming you have a utility function for logging
 import config from './config.json';
 import * as state from './state';
+
+// Legacy Body class for deprecated code
+class Body {
+    position: THREE.Vector3 = new THREE.Vector3();
+    velocity: THREE.Vector3 = new THREE.Vector3();
+    angularVelocity: THREE.Vector3 = new THREE.Vector3();
+    id: string = '';
+    name: string = '';
+    parentId: string = '';
+    attached: boolean = false;
+    radius: number = 1.0;
+    data: any = {};
+    
+    constructor(init: Partial<Body>) {
+        Object.assign(this, init);
+    }
+    
+    toJSON(): any {
+        return {
+            position: { x: this.position.x, y: this.position.y, z: this.position.z },
+            velocity: { x: this.velocity.x, y: this.velocity.y, z: this.velocity.z },
+            angularVelocity: { x: this.angularVelocity.x, y: this.angularVelocity.y, z: this.angularVelocity.z },
+            id: this.id,
+            name: this.name,
+            parentId: this.parentId,
+            attached: this.attached,
+            radius: this.radius,
+            data: this.data
+        };
+    }
+    
+    static fromJSON(json: any): Body {
+        return new Body({
+            position: new THREE.Vector3(json.position?.x || 0, json.position?.y || 0, json.position?.z || 0),
+            velocity: new THREE.Vector3(json.velocity?.x || 0, json.velocity?.y || 0, json.velocity?.z || 0),
+            angularVelocity: new THREE.Vector3(json.angularVelocity?.x || 0, json.angularVelocity?.y || 0, json.angularVelocity?.z || 0),
+            id: json.id || '',
+            name: json.name || '',
+            parentId: json.parentId || '',
+            attached: json.attached || false,
+            radius: json.radius || 1.0,
+            data: json.data || {}
+        });
+    }
+}
 
 export class RenderBody extends Body {
     mesh: THREE.Mesh = new THREE.Mesh();
@@ -135,5 +179,4 @@ export class RenderBody extends Body {
             this.mesh.quaternion.multiplyQuaternions(quaternion, this.mesh.quaternion);
         }
     }
-}   
-
+}

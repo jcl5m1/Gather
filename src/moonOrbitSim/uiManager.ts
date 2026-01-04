@@ -494,10 +494,10 @@ export class UIManager {
         propertyInspector.appendChild(titleBar);
 
         // Initialize with Moon parameters from config
-        const moonConfig = config.bodies.moon;
-        const earthConfig = config.bodies.earth;
-        const moonDistance = moonConfig.distance ? moonConfig.distance.over(kilometers).value : 384400;
-        const earthMass = earthConfig.mass.over(kilograms).value;
+        const moonBody = config.bodies.moon;
+        const earthBody = config.bodies.earth;
+        const moonDistance = (moonBody.data && moonBody.data.distance) || 384400;
+        const earthMass = earthBody.mass;
         const GValue = (G as any).over(gravitationalConstantUnit).value;
         const moonVelocity = Math.sqrt(GValue * earthMass / moonDistance);
 

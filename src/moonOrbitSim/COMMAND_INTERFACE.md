@@ -254,3 +254,6 @@ The UI includes a command input field that allows testing commands directly:
 4. **Decoupled**: UI is decoupled from simulation logic
 5. **No Rendering Required**: Commands can be executed without UI rendering for headless testing
 
+
+
+

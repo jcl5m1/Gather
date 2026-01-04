@@ -1,3 +1,9 @@
+/**
+ * @deprecated This file is legacy code and not used by the current webpack build system.
+ * The active application uses src/moonOrbitSim/index.ts or src/mineGather/index.ts.
+ * This file is kept for reference but should not be modified.
+ */
+
 import * as THREE from 'three';
 import { RenderBody } from './renderbody';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
@@ -5,10 +11,32 @@ import config from './config.json';
 import { appendToLog } from './utils'; // Assuming you have a utility function for logging
 import * as utils from './utils';
 import * as state from './state';
-import { Body } from './types/body';
+
+// Legacy Body class for deprecated code
+class Body {
+    position: THREE.Vector3 = new THREE.Vector3();
+    velocity: THREE.Vector3 = new THREE.Vector3();
+    id: string = '';
+    name: string = '';
+    data: any = {};
+    
+    constructor(init: Partial<Body>) {
+        Object.assign(this, init);
+    }
+    
+    toJSON(): any {
+        return {
+            position: { x: this.position.x, y: this.position.y, z: this.position.z },
+            velocity: { x: this.velocity.x, y: this.velocity.y, z: this.velocity.z },
+            id: this.id,
+            name: this.name,
+            data: this.data
+        };
+    }
+}
 
 let scene: THREE.Scene;
-let camera: THREE.PerspectiveCamera;
+let camera: THREE.PerspectiveCamera; // Legacy - kept for reference
 let renderer: THREE.WebGLRenderer;
 let controls: OrbitControls;
 const raycaster = new THREE.Raycaster();

@@ -352,7 +352,7 @@ export class CommandProcessor {
         if (!hasParams || !params.position || !params.velocity || !params.mass) {
             // Generate random position and velocity, then compute orbit parameters
             // Keep trying until we get valid orbit parameters
-            const centralMass = config.bodies.earth.mass.over(kilograms).value;
+            const centralMass = config.bodies.earth.mass;
             let validOrbit = false;
             let attempts = 0;
             const maxAttempts = 1000;

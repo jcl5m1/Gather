@@ -79,12 +79,14 @@ export class MoonOrbitSimulation {
         cameraManager.resetToInitial();
         
         // Initialize Moon with actual Earth-Moon system parameters from config
-        const moonConfig = config.bodies.moon;
-        const earthConfig = config.bodies.earth;
-        const moonDistance = moonConfig.distance ? moonConfig.distance.over(kilometers).value : 384400;
-        const earthMass = earthConfig.mass.over(kilograms).value;
-        const moonMass = moonConfig.mass.over(kilograms).value;
-        const moonRadius = moonConfig.radius.over(kilometers).value;
+        const moonBody = config.bodies.moon;
+        const earthBody = config.bodies.earth;
+        console.log('[initializeSimulation] moonBody:', moonBody);
+        console.log('[initializeSimulation] moonBody.data:', moonBody.data);
+        const moonDistance = (moonBody.data && moonBody.data.distance) || 384400;
+        const earthMass = earthBody.mass;
+        const moonMass = moonBody.mass;
+        const moonRadius = moonBody.radius;
         
         // Calculate circular orbital velocity: v = sqrt(G * M_earth / r)
         // G is in km³/(kg·s²) for consistency with km-based distances
@@ -94,7 +96,7 @@ export class MoonOrbitSimulation {
         
         // Place Moon at distance along x-axis, with velocity in z-direction for circular orbit in xz plane
         const addResult = this.simulationController.executeCommand(
-            `ADD_BODY position:${moonDistance},0,0 velocity:0,0,${moonVelocity} mass:${moonMass} id:${moonConfig.name} radius:${moonRadius} color:${moonConfig.color || 'cccccc'} trajectoryColor:${moonConfig.trajectoryColor || 'ffffff'}`
+            `ADD_BODY position:${moonDistance},0,0 velocity:0,0,${moonVelocity} mass:${moonMass} id:${moonBody.name} radius:${moonRadius} color:${moonBody.color || 'cccccc'} trajectoryColor:${moonBody.trajectoryColor || 'ffffff'}`
         );
         
         // Update all UI sections

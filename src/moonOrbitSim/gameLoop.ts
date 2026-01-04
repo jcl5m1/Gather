@@ -121,21 +121,17 @@ export class GameLoop {
         // Create central body (Earth) at origin with actual Earth parameters
         const centralPosition = new THREE.Vector3(0, 0, 0);
         const centralVelocity = new THREE.Vector3(0, 0, 0);
-        const earthConfig = config.bodies.earth;
-        
-        // Extract numeric values from Measure types
-        const earthMass = earthConfig.mass.over(kilograms).value;
-        const earthRadius = earthConfig.radius.over(kilometers).value;
+        const earthBody = config.bodies.earth;
         
         this._centralBody = new OrbitalBody(
             this._scene,
             centralPosition,
             centralVelocity,
-            earthMass,
-            earthRadius,
-            hexToNumber(earthConfig.color || '3366cc'),
+            earthBody.mass,
+            earthBody.radius,
+            hexToNumber(earthBody.color || '3366cc'),
             0x000000, // no trajectory color (central body doesn't orbit)
-            earthConfig.name
+            earthBody.name
         );
     }
 
