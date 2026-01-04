@@ -370,9 +370,17 @@ export class GameLoop {
         // Update camera (handles target tracking, mouse input, zoom, etc.)
         this._cameraManager.update();
         
+        // Get currently selected body name from camera manager
+        const selectedBodyName = this._cameraManager.getCurrentTargetName();
+        
         // Update rendering mode for all orbital bodies based on camera distance
+        // and set trajectory visibility based on selection
         this._orbitalBodies.forEach(body => {
             body.updateRenderingMode(this._camera);
+            
+            // Only show full trajectory for the currently selected body
+            const isSelected = body.getName() === selectedBodyName;
+            body.getTrajectory().setVisibility(isSelected && this._trajectoriesVisible);
         });
         
         // Also update rendering mode for central body
@@ -563,4 +571,3 @@ export class GameLoop {
         }
     }
 }
-

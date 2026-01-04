@@ -124,6 +124,11 @@ export function formatDistanceWithAstronomicalUnits(length: Length): string {
         const lsValue = kmValue / LIGHT_SPEED_KM_PER_S;
         return `${lsValue.toFixed(3)} Ls`;
     }
+    // Megameter: 1 Mm = 1000 km, >= 0.5 Mm means >= 500 km
+    if (absKm >= 500) {
+        const mmValue = kmValue / 1000;
+        return `${mmValue.toFixed(3)} Mm`;
+    }
     // km: >= 0.5 km
     if (absKm >= 0.5) {
         return `${kmValue.toFixed(3)} km`;
@@ -240,5 +245,3 @@ export function getUnitString(measure: GenericMeasure<number, any, any>): string
     // For now, return a generic identifier
     return 'unit'; // This will be improved based on actual usage
 }
-
-

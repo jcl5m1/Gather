@@ -15,9 +15,9 @@ The primary codebase for the orbital mechanics simulation.
 - `config.json` - **ALL STATIC VALUES** - physics constants, scene settings, body definitions
 
 **Game Objects:**
-- `orbitalBody.ts` - OrbitalBody class (extends Body), handles orbital mechanics and rendering
-- `trajectory.ts` - Trajectory visualization and orbital calculations
-- `types.ts` - Type definitions including Body class, BezierCurve, OrbitGeometry renderers
+- `orbitalBody.ts` - OrbitalBody class (extends Body) for orbital mechanics; OrbitalBodyRenderer class handles 3D rendering with automatic mesh/sprite switching based on screen size
+- `trajectory.ts` - Trajectory class for orbit calculation and visualization; BezierCurve class for curve math; TrajectoryRenderer and BezierCurveRenderer classes for rendering orbit paths
+- `types.ts` - Body base class (properties: position, velocity, mass, radius, name, color, etc.); JSON serialization utilities (Vector3fromJSON, Vector3toJSON, toJSON, fromJSON); OrbitControls interface
 
 **Simulation & Physics:**
 - `simulationController.ts` - Controls time scaling and simulation state
@@ -45,9 +45,10 @@ The primary codebase for the orbital mechanics simulation.
 
 ### Type Organization
 - **Module-specific types**: Each module has its own `types.ts` file
-  - `src/moonOrbitSim/types.ts` - Body class, orbit geometry types
+  - `src/moonOrbitSim/types.ts` - Body base class, JSON serialization utilities, OrbitControls interface
   - `src/mineGather/types.ts` - Resource types, game state types
 - **No shared types folder** - types are co-located with the modules that use them
+- **Orbit geometry types** - defined in `trajectory.ts` alongside implementation (BezierCurve, TrajectoryParameters, TrajectoryType, etc.)
 
 ### Units
 - **Internal storage**: kilometers, radians, kilograms, seconds, liters, kelvin, newtons, joules, watts
@@ -70,7 +71,7 @@ The primary codebase for the orbital mechanics simulation.
 5. **Test command behavior** if commands were modified before marking task complete
 
 ## Testing
-- Open browser to test results
+- ask me if I would like you to use the browser to test results, if so.  open the browser.
 - Use text commands (not UI clicks) for automated testing
 - Check console output for results and errors
 - Verify no compilation errors in browser console after each task

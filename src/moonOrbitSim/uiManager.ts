@@ -4,6 +4,7 @@ import { config, G } from './config';
 import { gravitationalConstantUnit } from './units';
 import { kilometers, kilograms, Length, Velocity, Time, Mass, formatDistanceWithAstronomicalUnits, formatVelocity, formatTime, GenericMeasure } from './units';
 import * as THREE from 'three';
+import { PropertyInspector } from './propertyInspector';
 
 // Use require for marked to avoid TypeScript module resolution issues
 const markedModule = require('marked');
@@ -48,6 +49,7 @@ export class UIManager {
     private currentFocusedBodyName: string | null = null;
     private updateInterval: number | null = null;
     private gameLoopUpdateFrameId: number = 0;
+    private propertyInspectorWindow!: PropertyInspector;
 
     constructor(simulationController: SimulationController, cameraManager?: CameraManager) {
         this.simulationController = simulationController;
@@ -461,37 +463,22 @@ export class UIManager {
     }
 
     private initializeUI(): void {
-        // Create Property Inspector container
-        const propertyInspector = document.createElement('div');
-        propertyInspector.id = 'propertyInspector';
-        propertyInspector.style.cssText = `
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            width: 300px;
-            background: rgba(30,30,30,0.95);
-            color: white;
-            font-family: 'Segoe UI', Arial, sans-serif;
-            font-size: 12px;
-            max-height: 90vh;
-            overflow-y: auto;
-            border: 1px solid rgba(255,255,255,0.2);
-            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
-            margin: 0;
-        `;
-
-        // Title bar
-        const titleBar = document.createElement('div');
-        titleBar.style.cssText = `
-            padding: 2px;
-            background: rgba(0,0,0,0.5);
-            border-bottom: 1px solid rgba(255,255,255,0.2);
-            font-weight: bold;
-            font-size: 13px;
-            margin: 0;
-        `;
-        titleBar.textContent = 'Property Inspector';
-        propertyInspector.appendChild(titleBar);
+        // Create Property Inspector window
+        this.propertyInspectorWindow = new PropertyInspector({
+            title: 'Property Inspector',
+            x: 10,
+            y: 10,
+            width: 300,
+            height: 600,
+            minWidth: 250,
+            minHeight: 200
+        });
+        
+        // Dock to left by default
+        this.propertyInspectorWindow.dockToSide('left');
+        
+        // Get the content area to add sections
+        const propertyInspector = this.propertyInspectorWindow.getPropertyInspectorContent();
 
         // Initialize with Moon parameters from config
         const moonBody = config.bodies.moon;
@@ -545,15 +532,19 @@ export class UIManager {
         const gameLoop = this.simulationController.getGameLoop();
         this.currentTimeScale = gameLoop.getTimeScale();
 
-        document.body.appendChild(propertyInspector);
-
         // Command interface (for testing/automation) - separate UI element at bottom
         this.initializeCommandInterface();
     }
 
+    private commandContainer!: HTMLDivElement;
+    private commandContainerHeight: number = 200; // Default height
+    private isCommandContainerCollapsed: boolean = false;
+    private savedCommandContainerHeight: number = 200;
+
     private initializeCommandInterface(): void {
         // Create command interface container at bottom of page
         const commandContainer = document.createElement('div');
+        this.commandContainer = commandContainer;
         commandContainer.id = 'commandInterface';
         commandContainer.style.cssText = `
             position: fixed;
@@ -561,24 +552,82 @@ export class UIManager {
             left: 0;
             right: 0;
             width: 100%;
+            height: ${this.commandContainerHeight}px;
             background: rgba(0,0,0,0.85);
             color: white;
             padding: 10px;
             font-family: Arial, sans-serif;
             border-top: 2px solid #666;
-            z-index: 1000;
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
         `;
         
+        // Create resize handle at the top
+        const resizeHandle = document.createElement('div');
+        resizeHandle.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 6px;
+            background: rgba(100,150,255,0.3);
+            cursor: ns-resize;
+            z-index: 10;
+            transition: background 0.2s;
+        `;
+        resizeHandle.onmouseenter = () => {
+            resizeHandle.style.background = 'rgba(100,150,255,0.6)';
+        };
+        resizeHandle.onmouseleave = () => {
+            resizeHandle.style.background = 'rgba(100,150,255,0.3)';
+        };
         
+        // Add resize functionality
+        let isResizing = false;
+        let startY = 0;
+        let startHeight = 0;
+        
+        resizeHandle.addEventListener('mousedown', (e) => {
+            if (this.isCommandContainerCollapsed) return;
+            isResizing = true;
+            startY = e.clientY;
+            startHeight = this.commandContainerHeight;
+            e.preventDefault();
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            const deltaY = startY - e.clientY; // Inverted because we're at the bottom
+            const newHeight = Math.max(100, Math.min(600, startHeight + deltaY));
+            this.commandContainerHeight = newHeight;
+            commandContainer.style.height = `${newHeight}px`;
+        });
+        
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+            }
+        });
+        
+        // Add double-click to collapse/expand
+        resizeHandle.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.toggleCommandContainerCollapse();
+        });
+        
+        commandContainer.appendChild(resizeHandle);
         const commandInputContainer = document.createElement('div');
-        commandInputContainer.style.cssText = 'display: flex; gap: 10px; margin-bottom: 10px; align-items: center;';
+        commandInputContainer.style.cssText = 'display: flex; gap: 4px; margin-bottom: 4px; align-items: center; flex-shrink: 0; margin-top: 8px;';
         
         this.commandInput = document.createElement('input');
         this.commandInput.type = 'text';
         this.commandInput.placeholder = 'Enter command (e.g., RESET position:20,5,3 velocity:2,8.5,0 mass:1.0)';
         this.commandInput.style.cssText = `
             flex: 1;
-            padding: 2px;
+            padding: 4px;
+            margin: 0;
             background: rgba(255,255,255,0.1);
             color: white;
             border: 1px solid #666;
@@ -586,10 +635,22 @@ export class UIManager {
             font-size: 12px;
         `;
         
+        // Ensure input captures all events when focused
+        this.commandInput.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+        });
+        this.commandInput.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+        });
+        this.commandInput.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+        
         const commandButton = document.createElement('button');
         commandButton.textContent = 'Execute';
         commandButton.style.cssText = `
-            padding: 2px 4px;
+            padding: 4px 8px;
+            margin: 0;
             background: rgba(100,150,255,0.8);
             color: white;
             border: 1px solid #666;
@@ -605,13 +666,15 @@ export class UIManager {
         this.commandOutput = document.createElement('div');
         this.commandOutput.id = 'commandOutput';
         this.commandOutput.style.cssText = `
-            padding: 2px;
+            padding: 4px;
+            margin: 0;
             background: rgba(0,0,0,0.6);
             font-family: monospace;
             font-size: 11px;
-            max-height: 150px;
+            flex: 1;
             overflow-y: auto;
             border: 1px solid #444;
+            min-height: 0;
         `;
         // Add CSS to eliminate spacing between lines in markdown output
         const style = document.createElement('style');
@@ -628,6 +691,33 @@ export class UIManager {
         commandContainer.appendChild(this.commandOutput);
         
         document.body.appendChild(commandContainer);
+        
+        // Start collapsed by default
+        this.toggleCommandContainerCollapse();
+    }
+    
+    private toggleCommandContainerCollapse(): void {
+        if (this.isCommandContainerCollapsed) {
+            // Expand
+            this.isCommandContainerCollapsed = false;
+            this.commandContainer.style.height = `${this.savedCommandContainerHeight}px`;
+            this.commandContainerHeight = this.savedCommandContainerHeight;
+            this.commandOutput.style.display = 'block';
+            const inputContainer = this.commandInput.parentElement;
+            if (inputContainer) {
+                inputContainer.style.display = 'flex';
+            }
+        } else {
+            // Collapse - just show the blue bar
+            this.isCommandContainerCollapsed = true;
+            this.savedCommandContainerHeight = this.commandContainerHeight;
+            this.commandContainer.style.height = '6px'; // Just the blue resize bar
+            this.commandOutput.style.display = 'none';
+            const inputContainer = this.commandInput.parentElement;
+            if (inputContainer) {
+                inputContainer.style.display = 'none';
+            }
+        }
     }
 
     private setupEventListeners(): void {
@@ -635,17 +725,18 @@ export class UIManager {
         // Input field listeners are now handled directly in generateEditablePropertySection
 
         document.addEventListener('keydown', (event) => {
-            // Only handle if not typing in an input field (except command input)
-            if (event.target instanceof HTMLInputElement && event.target !== this.commandInput) {
-                return;
-            }
-            if (event.target instanceof HTMLTextAreaElement) {
+            // If typing in ANY input field or textarea, don't handle game hotkeys
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+                // Only allow Enter key to execute command when in command input
+                if (event.key === 'Enter' && event.target === this.commandInput) {
+                    this.executeCommand();
+                }
+                // For all other keys in input fields, let the browser handle them normally
                 return;
             }
 
-            if (event.key === 'Enter' && event.target === this.commandInput) {
-                this.executeCommand();
-            } else if (event.key === ' ') {
+            // Only handle game hotkeys when NOT in an input field
+            if (event.key === ' ') {
                 event.preventDefault();
                 // Space key triggers ADD_BODY 50 times (with random values)
                 for (let i = 0; i < 50; i++) {
@@ -658,13 +749,10 @@ export class UIManager {
                 gameLoop.toggleTrajectoryVisibility();
                 const visible = gameLoop.getTrajectoriesVisible();
                 console.log(`Trajectories ${visible ? 'shown' : 'hidden'}`);
-            }
-        });
-
-        // Allow command input to execute on Enter
-        this.commandInput.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter') {
-                this.executeCommand();
+            } else if (event.key === 'p' || event.key === 'P') {
+                event.preventDefault();
+                // P key toggles Property Inspector visibility
+                this.togglePropertyInspector();
             }
         });
     }
@@ -688,6 +776,20 @@ export class UIManager {
             }
         } catch (error) {
             console.error('Error resetting simulation:', error);
+        }
+    }
+
+    /**
+     * Toggle Property Inspector visibility
+     */
+    private togglePropertyInspector(): void {
+        const container = this.propertyInspectorWindow.getContainer();
+        if (container.style.display === 'none') {
+            this.propertyInspectorWindow.show();
+            console.log('Property Inspector shown');
+        } else {
+            this.propertyInspectorWindow.hide();
+            console.log('Property Inspector hidden');
         }
     }
 
@@ -1678,6 +1780,13 @@ export class UIManager {
         if (trajectorySection && trajectorySection.getObject && trajectorySection.contentContainer) {
             const obj = trajectorySection.getObject();
             this.updateSectionForUISection(trajectorySection, obj);
+        }
+        
+        // Also update the OrbitalBody section to show current position/velocity
+        const bodySection = this.getInitialParametersSection();
+        if (bodySection && bodySection.getObject && bodySection.contentContainer) {
+            const obj = bodySection.getObject();
+            this.updateSectionForUISection(bodySection, obj);
         }
     }
 
