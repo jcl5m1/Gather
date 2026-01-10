@@ -88,6 +88,19 @@ export class MoonOrbitSimulation {
             `ADD_BODY position:${moonBody.position.x},${moonBody.position.y},${moonBody.position.z} velocity:${moonBody.velocity.x},${moonBody.velocity.y},${moonBody.velocity.z} mass:${moonBody.mass} id:${moonBody.name} radius:${moonBody.radius} color:${moonBody.color || 'cccccc'} trajectoryColor:${moonBody.trajectoryColor || 'ffffff'} parentId:${moonBody.parentId || ''}`
         );
         
+        // Enable bezier animation on Moon - this automatically enables dual-rendering
+        // The single Moon body will now render both analytical and bezier positions
+        if (addResult.success) {
+            const bodies = this.gameLoop.getOrbitalBodies();
+            const moon = bodies.find(b => b.getName() === 'Moon');
+            
+            if (moon) {
+                const centralBodyMass = this.gameLoop.getCentralBody().getMass();
+                moon.enableBezierAnimation(this.gameLoop.getCurrentTime(), centralBodyMass, G);
+                console.log('[initializeSimulation] Enabled bezier animation with dual-rendering for Moon');
+            }
+        }
+        
         // Update all UI sections
         if (addResult.success) {
             this.uiManager.updateAllSections();

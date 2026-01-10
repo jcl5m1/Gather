@@ -30,77 +30,77 @@ export function generateStateFromOrbitalElements(
 ): { position: THREE.Vector3; velocity: THREE.Vector3 } {
     const GValue = (G as any).over(gravitationalConstantUnit).value;
     const mu = GValue * centralBodyMass;
-    
+
     // Calculate semi-major axis
     const a = (rp + ra) / 2;
-    
+
     // Calculate semi-latus rectum
     const p = a * (1 - e * e);
-    
+
     // Calculate current radius from true anomaly
     const r = p / (1 + e * Math.cos(trueAnomaly));
-    
+
     // Calculate velocity components in perifocal frame
     // Radial component: v_r = sqrt(mu/p) * e * sin(ν)
     // Transverse component: v_t = sqrt(mu/p) * (1 + e * cos(ν))
     const sqrtMuP = Math.sqrt(mu / p);
     const vRadial = sqrtMuP * e * Math.sin(trueAnomaly);
     const vTransverse = sqrtMuP * (1 + e * Math.cos(trueAnomaly));
-    
+
     // Position in orbital plane (perifocal frame)
     const xPerifocal = r * Math.cos(trueAnomaly);
     const yPerifocal = r * Math.sin(trueAnomaly);
-    
+
     // Velocity in orbital plane (perifocal frame)
     // Radial direction is along position vector, transverse is perpendicular
     const radialDir = new THREE.Vector3(Math.cos(trueAnomaly), Math.sin(trueAnomaly), 0);
     const transverseDir = new THREE.Vector3(-Math.sin(trueAnomaly), Math.cos(trueAnomaly), 0);
-    
+
     const vxPerifocal = vRadial * radialDir.x + vTransverse * transverseDir.x;
     const vyPerifocal = vRadial * radialDir.y + vTransverse * transverseDir.y;
-    
+
     // Rotation matrices for orbital plane orientation
     // 1. Rotation around z-axis by argument of periapsis
     const cosArgPeri = Math.cos(argumentOfPeriapsis);
     const sinArgPeri = Math.sin(argumentOfPeriapsis);
-    
+
     // 2. Rotation around x-axis by inclination
     const cosInc = Math.cos(inclination);
     const sinInc = Math.sin(inclination);
-    
+
     // 3. Rotation around z-axis by longitude of ascending node
     const cosLAN = Math.cos(longitudeOfAscendingNode);
     const sinLAN = Math.sin(longitudeOfAscendingNode);
-    
+
     // Combined rotation matrix (Z-X-Z Euler angles)
     // First apply argument of periapsis rotation
     let x1 = xPerifocal * cosArgPeri - yPerifocal * sinArgPeri;
     let y1 = xPerifocal * sinArgPeri + yPerifocal * cosArgPeri;
     let z1 = 0;
-    
+
     // Then apply inclination rotation
     let x2 = x1;
     let y2 = y1 * cosInc - z1 * sinInc;
     let z2 = y1 * sinInc + z1 * cosInc;
-    
+
     // Finally apply longitude of ascending node rotation
     const x = x2 * cosLAN - y2 * sinLAN;
     const y = x2 * sinLAN + y2 * cosLAN;
     const z = z2;
-    
+
     // Same rotations for velocity
     let vx1 = vxPerifocal * cosArgPeri - vyPerifocal * sinArgPeri;
     let vy1 = vxPerifocal * sinArgPeri + vyPerifocal * cosArgPeri;
     let vz1 = 0;
-    
+
     let vx2 = vx1;
     let vy2 = vy1 * cosInc - vz1 * sinInc;
     let vz2 = vy1 * sinInc + vz1 * cosInc;
-    
+
     const vx = vx2 * cosLAN - vy2 * sinLAN;
     const vy = vx2 * sinLAN + vy2 * cosLAN;
     const vz = vz2;
-    
+
     return {
         position: new THREE.Vector3(x, y, z),
         velocity: new THREE.Vector3(vx, vy, vz)
@@ -116,19 +116,19 @@ export function calculateInitialE(
 ): number {
     // Calculate specific angular momentum vector
     const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
-    
+
     // Calculate radius and velocity magnitudes
     const r = initialPos.length();
-    
+
     // Calculate radial velocity component
     const radialVel = initialVel.dot(initialPos.clone().normalize());
-    
+
     // Calculate true anomaly directly from position and velocity
     const theta = Math.atan2(
         h.length() * radialVel,
         h.length() * h.length() / r - mu
     );
-    
+
     // Convert true anomaly to eccentric anomaly
     return 2 * Math.atan(Math.sqrt((1 - e) / (1 + e)) * Math.tan(theta / 2));
 }
@@ -145,39 +145,39 @@ export function calculateHyperbolicPosition(
     const GValue = (G as any).over(gravitationalConstantUnit).value;
     const mu = GValue * planetMass;
     const F0 = calculateInitialE(initialPos, initialVel, a, e, mu); // Using same function but result is hyperbolic anomaly
-    
+
     // Mean anomaly at t=0 for hyperbolic orbit
     const M0 = e * Math.sinh(F0) - F0;
-    
+
     // Current mean anomaly
     const n = Math.sqrt(mu / (-a * a * a)); // Mean motion for hyperbolic orbit
     const M = M0 + n * (time - startTime);
-    
+
     // Solve Kepler's equation iteratively for hyperbolic case (M = e*sinh(F) - F)
     let F = M; // Initial guess
-    for(let i = 0; i < 10; i++) {
+    for (let i = 0; i < 10; i++) {
         const dF = (M - e * Math.sinh(F) + F) / (e * Math.cosh(F) - 1);
         F += dF;
         if (Math.abs(dF) < 1e-6) break;
     }
-    
+
     // Calculate position in orbital plane coordinates
     const x = a * (e - Math.cosh(F));
-    const y = a * Math.sqrt(e*e - 1) * Math.sinh(F);
-    
+    const y = a * Math.sqrt(e * e - 1) * Math.sinh(F);
+
     // Calculate orbit orientation vectors
     const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
     const hNorm = h.clone().normalize();
-    
+
     // Calculate eccentricity vector
     const vCrossH = new THREE.Vector3().crossVectors(initialVel, h);
-    const eVec = vCrossH.multiplyScalar(1/mu).sub(initialPos.clone().normalize());
+    const eVec = vCrossH.multiplyScalar(1 / mu).sub(initialPos.clone().normalize());
     const eNorm = eVec.clone().normalize();
-    
+
     // Calculate orbit plane basis vectors
     const periapsisDir = eNorm;
     const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-    
+
     // Transform from orbital plane to 3D space
     return new THREE.Vector3()
         .addScaledVector(periapsisDir, x)
@@ -197,36 +197,36 @@ export function calculateEllipticalPosition(
     const GValue = (G as any).over(gravitationalConstantUnit).value;
     const mu = GValue * planetMass;
     const E0 = calculateInitialE(initialPos, initialVel, a, e, mu);
-    
+
     // Mean anomaly at t=0
     const M0 = E0 - e * Math.sin(E0);
-    
+
     // Current mean anomaly
     const M = M0 + 2 * Math.PI * ((time - startTime) / period);
-    
+
     // Solve Kepler's equation iteratively (M = E - e*sin(E))
     let E = M; // Initial guess
-    for(let i = 0; i < 10; i++) {
+    for (let i = 0; i < 10; i++) {
         E = M + e * Math.sin(E);
     }
-    
+
     // Calculate position in orbital plane coordinates
     const x = a * (Math.cos(E) - e);
-    const y = a * Math.sqrt(1 - e*e) * Math.sin(E);
-    
+    const y = a * Math.sqrt(1 - e * e) * Math.sin(E);
+
     // Calculate orbit orientation vectors
     const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
     const hNorm = h.clone().normalize();
-    
+
     // Calculate eccentricity vector
     const vCrossH = new THREE.Vector3().crossVectors(initialVel, h);
-    const eVec = vCrossH.multiplyScalar(1/mu).sub(initialPos.clone().normalize());
+    const eVec = vCrossH.multiplyScalar(1 / mu).sub(initialPos.clone().normalize());
     const eNorm = eVec.clone().normalize();
-    
+
     // Calculate orbit plane basis vectors
     const periapsisDir = eNorm;
     const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-    
+
     // Transform from orbital plane to 3D space
     return new THREE.Vector3()
         .addScaledVector(periapsisDir, x)
@@ -246,42 +246,42 @@ export function calculateEllipticalVelocity(
     const GValue = (G as any).over(gravitationalConstantUnit).value;
     const mu = GValue * planetMass;
     const E0 = calculateInitialE(initialPos, initialVel, a, e, mu);
-    
+
     // Mean anomaly at t=0
     const M0 = E0 - e * Math.sin(E0);
-    
+
     // Current mean anomaly
     const M = M0 + 2 * Math.PI * ((time - startTime) / period);
-    
+
     // Solve Kepler's equation iteratively (M = E - e*sin(E))
     let E = M; // Initial guess
-    for(let i = 0; i < 10; i++) {
+    for (let i = 0; i < 10; i++) {
         E = M + e * Math.sin(E);
     }
-    
+
     // Mean motion
     const n = 2 * Math.PI / period;
-    
+
     // Calculate velocity in orbital plane coordinates
     // vx = -a*n*sin(E) / (1 - e*cos(E))
     // vy = a*n*sqrt(1-e²)*cos(E) / (1 - e*cos(E))
     const denominator = 1 - e * Math.cos(E);
     const vx = -a * n * Math.sin(E) / denominator;
-    const vy = a * n * Math.sqrt(1 - e*e) * Math.cos(E) / denominator;
-    
+    const vy = a * n * Math.sqrt(1 - e * e) * Math.cos(E) / denominator;
+
     // Calculate orbit orientation vectors
     const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
     const hNorm = h.clone().normalize();
-    
+
     // Calculate eccentricity vector
     const vCrossH = new THREE.Vector3().crossVectors(initialVel, h);
-    const eVec = vCrossH.multiplyScalar(1/mu).sub(initialPos.clone().normalize());
+    const eVec = vCrossH.multiplyScalar(1 / mu).sub(initialPos.clone().normalize());
     const eNorm = eVec.clone().normalize();
-    
+
     // Calculate orbit plane basis vectors
     const periapsisDir = eNorm;
     const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-    
+
     // Transform from orbital plane to 3D space
     return new THREE.Vector3()
         .addScaledVector(periapsisDir, vx)
@@ -300,40 +300,40 @@ export function calculateHyperbolicVelocity(
     const GValue = (G as any).over(gravitationalConstantUnit).value;
     const mu = GValue * planetMass;
     const F0 = calculateInitialE(initialPos, initialVel, a, e, mu);
-    
+
     // Mean anomaly at t=0 for hyperbolic orbit
     const M0 = e * Math.sinh(F0) - F0;
-    
+
     // Current mean anomaly
     const n = Math.sqrt(mu / (-a * a * a)); // Mean motion for hyperbolic orbit
     const M = M0 + n * (time - startTime);
-    
+
     // Solve Kepler's equation iteratively for hyperbolic case
     let F = M; // Initial guess
-    for(let i = 0; i < 10; i++) {
+    for (let i = 0; i < 10; i++) {
         const dF = (M - e * Math.sinh(F) + F) / (e * Math.cosh(F) - 1);
         F += dF;
         if (Math.abs(dF) < 1e-6) break;
     }
-    
+
     // Calculate velocity in orbital plane coordinates
     const denominator = e * Math.cosh(F) - 1;
     const vx = -a * n * Math.sinh(F) / denominator;
-    const vy = a * n * Math.sqrt(e*e - 1) * Math.cosh(F) / denominator;
-    
+    const vy = a * n * Math.sqrt(e * e - 1) * Math.cosh(F) / denominator;
+
     // Calculate orbit orientation vectors
     const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
     const hNorm = h.clone().normalize();
-    
+
     // Calculate eccentricity vector
     const vCrossH = new THREE.Vector3().crossVectors(initialVel, h);
-    const eVec = vCrossH.multiplyScalar(1/mu).sub(initialPos.clone().normalize());
+    const eVec = vCrossH.multiplyScalar(1 / mu).sub(initialPos.clone().normalize());
     const eNorm = eVec.clone().normalize();
-    
+
     // Calculate orbit plane basis vectors
     const periapsisDir = eNorm;
     const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-    
+
     // Transform from orbital plane to 3D space
     return new THREE.Vector3()
         .addScaledVector(periapsisDir, vx)
@@ -354,35 +354,35 @@ export function generateHyperbolicPoints(
     // Normalize vectors
     const hNorm = h.clone().normalize();
     const eNorm = eVec.clone().normalize();
-    
+
     // Calculate orbit plane basis vectors
     const periapsisDir = eNorm;
     const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-    
+
     // Calculate center of hyperbola (offset from focus by -c along periapsis direction)
     const center = periapsisDir.clone().multiplyScalar(-c);
-    
+
     // For hyperbola, we need to calculate the maximum angle based on asymptotes
-    const maxTheta = Math.acos(-1/e); // Angle between asymptote and periapsis direction
-    
+    const maxTheta = Math.acos(-1 / e); // Angle between asymptote and periapsis direction
+
     // Generate hyperbola points in the orbit plane
     for (let i = 0; i <= numPoints; i++) {
         // Map i to range [-maxTheta, maxTheta]
         const theta = -maxTheta + (2 * maxTheta * i / numPoints);
-        
+
         // Parametric equations for hyperbola
-        const r = a * (e*e - 1) / (1 + e * Math.cos(theta));
+        const r = a * (e * e - 1) / (1 + e * Math.cos(theta));
         const x = r * Math.cos(theta);
         const y = r * Math.sin(theta);
-        
+
         // Calculate point relative to focus
         const point = new THREE.Vector3()
             .addScaledVector(periapsisDir, x)
             .addScaledVector(perpDir, y);
-        
+
         points.push(point);
     }
-    
+
     return points;
 }
 
@@ -400,27 +400,27 @@ export function generateEllipsePoints(
     // Normalize vectors
     const hNorm = h.clone().normalize();
     const eNorm = eVec.clone().normalize();
-    
+
     // Calculate orbit plane basis vectors
     const periapsisDir = eNorm;
     const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-    
+
     // Calculate center of ellipse (offset from focus by -c along periapsis direction)
     const center = periapsisDir.clone().multiplyScalar(-c);
-    
+
     // Generate ellipse points in the orbit plane
     for (let i = 0; i <= numPoints; i++) {
         const theta = (i / numPoints) * Math.PI * 2;
-        
+
         // Calculate point relative to ellipse center
         const point = new THREE.Vector3()
             .addScaledVector(periapsisDir, a * Math.cos(theta))
             .addScaledVector(perpDir, b * Math.sin(theta))
             .add(center);
-        
+
         points.push(point);
     }
-    
+
     return points;
 }
 //TODO store bezier curves in the orbit class
@@ -438,21 +438,21 @@ export function generateHyperbolicBezierPoints(
     // Normalize vectors
     const hNorm = h.clone().normalize();
     const eNorm = eVec.clone().normalize();
-    
+
     // Calculate orbit plane basis vectors
     const periapsisDir = eNorm;
     const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-    
+
     // Calculate center of hyperbola
     const center = periapsisDir.clone().multiplyScalar(-c);
 
     // Calculate angle of asymptotes
-    const alpha = Math.acos(-1/e);
+    const alpha = Math.acos(-1 / e);
     const tanAlpha = Math.tan(alpha);
-    
+
     // Scale factor for control points (can be adjusted for better fit)
     const scale = 2.0;
-    
+
     // Control points for both branches of the hyperbola
     const controlPoints = [
         // Right branch (periapsis side)
@@ -500,7 +500,7 @@ export function generateHyperbolicBezierPoints(
         points.push(leftCurve.getPoint(t));
     }
 
-    return { 
+    return {
         points,
         curves: [rightCurve, leftCurve]  // Return both curves
     };
@@ -514,56 +514,67 @@ export function generateBezierOrbitPoints(
 ): { points: THREE.Vector3[], curves: BezierCurve[] } {
     const points: THREE.Vector3[] = [];
     const numPointsPerCurve = 25;
-    const b = a * Math.sqrt(1 - e * e);
-    const c = a * e;
+    const b = a * Math.sqrt(1 - e * e); // semi-minor axis
+    const c = a * e; // distance from center to focus
 
     // Normalize vectors
     const hNorm = h.clone().normalize();
     const eNorm = eVec.clone().normalize();
-    
+
     // Calculate orbit plane basis vectors
     const periapsisDir = eNorm;
     const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-    
-    // Calculate center of ellipse
+
+    // Calculate center of ellipse (offset from focus by -c along periapsis direction)
     const center = periapsisDir.clone().multiplyScalar(-c);
 
-    // Magic number to approximate circle with Bezier curves
+    // Magic number for cubic Bezier approximation of circular arcs
+    // This is (4/3)*tan(π/8) ≈ 0.5519150244935105707435627
     const k = 0.551915024494;
-    
-    // Control points
-    const controlPoints = [
-        new THREE.Vector3(a, 0, 0),
-        new THREE.Vector3(a, b * k, 0),
-        new THREE.Vector3(a * k, b, 0),
-        new THREE.Vector3(0, b, 0),
-        new THREE.Vector3(-a * k, b, 0),
-        new THREE.Vector3(-a, b * k, 0),
-        new THREE.Vector3(-a, 0, 0),
-        new THREE.Vector3(-a, -b * k, 0),
-        new THREE.Vector3(-a * k, -b, 0),
-        new THREE.Vector3(0, -b, 0),
-        new THREE.Vector3(a * k, -b, 0),
-        new THREE.Vector3(a, -b * k, 0)
-    ];
 
-    // Transform control points to orbit plane
-    const transformedPoints = controlPoints.map(p => {
-        const transformed = new THREE.Vector3();
-        transformed.addScaledVector(periapsisDir, p.x);
-        transformed.addScaledVector(perpDir, p.y);
-        return transformed.add(center);
-    });
+    // Create 4 cubic Bezier curves to approximate the ellipse
+    const curves: BezierCurve[] = [];
 
-    // Create Bezier curves
-    const curves = [
-        new BezierCurve(transformedPoints[0], transformedPoints[1], transformedPoints[2], transformedPoints[3]),
-        new BezierCurve(transformedPoints[3], transformedPoints[4], transformedPoints[5], transformedPoints[6]),
-        new BezierCurve(transformedPoints[6], transformedPoints[7], transformedPoints[8], transformedPoints[9]),
-        new BezierCurve(transformedPoints[9], transformedPoints[10], transformedPoints[11], transformedPoints[0])
-    ];
+    // Quarter ellipse 1: 0° to 90°
+    const c1 = new BezierCurve(
+        new THREE.Vector3().addScaledVector(periapsisDir, a).addScaledVector(perpDir, 0).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, a).addScaledVector(perpDir, k * b).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, k * a).addScaledVector(perpDir, b).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, 0).addScaledVector(perpDir, b).add(center)
+    );
 
-    // Generate points for each curve
+    // Quarter ellipse 2: 90° to 180°
+    const c2 = new BezierCurve(
+        new THREE.Vector3().addScaledVector(periapsisDir, 0).addScaledVector(perpDir, b).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, -k * a).addScaledVector(perpDir, b).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, -a).addScaledVector(perpDir, k * b).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, -a).addScaledVector(perpDir, 0).add(center)
+    );
+
+    // Quarter ellipse 3: 180° to 270°
+    const c3 = new BezierCurve(
+        new THREE.Vector3().addScaledVector(periapsisDir, -a).addScaledVector(perpDir, 0).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, -a).addScaledVector(perpDir, -k * b).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, -k * a).addScaledVector(perpDir, -b).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, 0).addScaledVector(perpDir, -b).add(center)
+    );
+
+    // Quarter ellipse 4: 270° to 360°
+    const c4 = new BezierCurve(
+        new THREE.Vector3().addScaledVector(periapsisDir, 0).addScaledVector(perpDir, -b).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, k * a).addScaledVector(perpDir, -b).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, a).addScaledVector(perpDir, -k * b).add(center),
+        new THREE.Vector3().addScaledVector(periapsisDir, a).addScaledVector(perpDir, 0).add(center)
+    );
+
+    // Add curves in order starting from Apoapsis (180°)
+    // Analytical model starts at Apoapsis (180°), so we order curves: Q3, Q4, Q1, Q2
+    curves.push(c3); // 180°-270°
+    curves.push(c4); // 270°-360°
+    curves.push(c1); // 0°-90°
+    curves.push(c2); // 90°-180°
+
+    // Generate points for visualization
     curves.forEach(curve => {
         for (let i = 0; i <= numPointsPerCurve; i++) {
             const t = i / numPointsPerCurve;

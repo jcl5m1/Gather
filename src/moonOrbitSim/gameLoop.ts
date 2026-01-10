@@ -32,6 +32,9 @@ export class GameLoop {
     // Trail rendering
     private _trailLines: Map<OrbitalBody, THREE.Line> = new Map();
     private _trajectoriesVisible: boolean = true;
+    
+    // Plot update callbacks
+    private _plotUpdateCallbacks: Array<() => void> = [];
 
     constructor() {
         this.initScene();
@@ -389,6 +392,15 @@ export class GameLoop {
         this._centralBody.updateRenderingMode(this._camera);
         
         this._renderer.render(this._scene, this._camera);
+        
+        // Call plot update callbacks
+        this._plotUpdateCallbacks.forEach(callback => {
+            try {
+                callback();
+            } catch (error) {
+                console.error('Error in plot update callback:', error);
+            }
+        });
     }
 
     /**
@@ -570,6 +582,24 @@ export class GameLoop {
             }
         } else {
             console.error('[Random Body] SimulationController not available. Cannot create body via command interface.');
+        }
+    }
+
+    /**
+     * Register a callback function to be called on each render frame
+     * Used for updating plots with current animation state
+     */
+    registerPlotUpdateCallback(callback: () => void): void {
+        this._plotUpdateCallbacks.push(callback);
+    }
+
+    /**
+     * Unregister a plot update callback
+     */
+    unregisterPlotUpdateCallback(callback: () => void): void {
+        const index = this._plotUpdateCallbacks.indexOf(callback);
+        if (index > -1) {
+            this._plotUpdateCallbacks.splice(index, 1);
         }
     }
 }

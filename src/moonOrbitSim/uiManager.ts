@@ -976,6 +976,10 @@ export class UIManager {
     private generateEditablePropertySection(obj: any, container: HTMLDivElement): void {
         if (!obj || !container) return;
 
+        // Get unique prefix for this section's IDs to prevent duplicates
+        const className = this.getClassName(obj);
+        const idPrefix = className.toLowerCase().replace(/\s+/g, '') + '_';
+
         // Check if this is the central body or no body is focused
         const isCentralBody = this.currentFocusedBodyName === config.bodies.earth.name;
         const shouldDisable = !this.currentFocusedBodyName || isCentralBody;
@@ -1060,7 +1064,7 @@ export class UIManager {
                 valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
                 
                 const select = document.createElement('select');
-                select.id = key;
+                select.id = idPrefix + key;
                 select.disabled = shouldDisable;
                 select.style.cssText = `
                     width: 100%;
@@ -1177,7 +1181,7 @@ export class UIManager {
                 // X input
                 const xInput = document.createElement('input');
                 xInput.type = 'number';
-                xInput.id = `${key}.x`;
+                xInput.id = `${idPrefix}${key}.x`;
                 xInput.value = this.formatNumber(vec.x);
                 xInput.step = step;
                 xInput.disabled = shouldDisable;
@@ -1203,7 +1207,7 @@ export class UIManager {
                 // Y input
                 const yInput = document.createElement('input');
                 yInput.type = 'number';
-                yInput.id = `${key}.y`;
+                yInput.id = `${idPrefix}${key}.y`;
                 yInput.value = this.formatNumber(vec.y);
                 yInput.step = step;
                 yInput.disabled = shouldDisable;
@@ -1229,7 +1233,7 @@ export class UIManager {
                 // Z input
                 const zInput = document.createElement('input');
                 zInput.type = 'number';
-                zInput.id = `${key}.z`;
+                zInput.id = `${idPrefix}${key}.z`;
                 zInput.value = this.formatNumber(vec.z);
                 zInput.step = step;
                 zInput.disabled = shouldDisable;
@@ -1268,7 +1272,7 @@ export class UIManager {
                 
                 const numInput = this.createReadWriteProperty(
                     this.formatLabelFromVariableName(key),
-                    key,
+                    idPrefix + key,
                     this.formatNumber(value),
                     step
                 );
@@ -1314,7 +1318,7 @@ export class UIManager {
                 
                 const textInput = document.createElement('input');
                 textInput.type = 'text';
-                textInput.id = key;
+                textInput.id = idPrefix + key;
                 textInput.value = value;
                 textInput.disabled = shouldDisable;
                 textInput.style.cssText = `

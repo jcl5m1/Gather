@@ -132,19 +132,46 @@ export class BezierCurveRenderer implements BezierCurveRender {
     }
 
     updatePoints(): void {
-        const points = this.curve.getControlPoints();
+        // Handle both BezierCurve (returns BezierCurvePoints) and RationalBezierCurve (returns array)
+        const controlPoints = this.curve.getControlPoints();
         
-        // Update end points
-        this.startPoint.position.copy(points.p0);
-        this.endPoint.position.copy(points.p3);
-
-        // Update control points
-        this.controlPoints[0].position.copy(points.p1);
-        this.controlPoints[1].position.copy(points.p2);
-
-        // Update control lines
-        this.controlLines[0].geometry.setFromPoints([points.p0, points.p1]);
-        this.controlLines[1].geometry.setFromPoints([points.p2, points.p3]);
+        if (Array.isArray(controlPoints)) {
+            // RationalBezierCurve returns an array
+            if (controlPoints.length === 3) {
+                // Quadratic curve (3 control points)
+                this.startPoint.position.copy(controlPoints[0]);
+                this.endPoint.position.copy(controlPoints[2]);
+                this.controlPoints[0].position.copy(controlPoints[1]);
+                this.controlPoints[1].visible = false; // Hide second control point for quadratic
+                
+                // Update control lines
+                this.controlLines[0].geometry.setFromPoints([controlPoints[0], controlPoints[1]]);
+                this.controlLines[1].geometry.setFromPoints([controlPoints[1], controlPoints[2]]);
+            } else if (controlPoints.length === 4) {
+                // Cubic curve (4 control points)
+                this.startPoint.position.copy(controlPoints[0]);
+                this.endPoint.position.copy(controlPoints[3]);
+                this.controlPoints[0].position.copy(controlPoints[1]);
+                this.controlPoints[1].position.copy(controlPoints[2]);
+                this.controlPoints[1].visible = true;
+                
+                // Update control lines
+                this.controlLines[0].geometry.setFromPoints([controlPoints[0], controlPoints[1]]);
+                this.controlLines[1].geometry.setFromPoints([controlPoints[2], controlPoints[3]]);
+            }
+        } else {
+            // BezierCurve returns BezierCurvePoints object
+            const points = controlPoints as any;
+            this.startPoint.position.copy(points.p0);
+            this.endPoint.position.copy(points.p3);
+            this.controlPoints[0].position.copy(points.p1);
+            this.controlPoints[1].position.copy(points.p2);
+            this.controlPoints[1].visible = true;
+            
+            // Update control lines
+            this.controlLines[0].geometry.setFromPoints([points.p0, points.p1]);
+            this.controlLines[1].geometry.setFromPoints([points.p2, points.p3]);
+        }
     }
 
     setVisibility(show: boolean, showControls: boolean = false): void {
@@ -223,12 +250,14 @@ export class BezierCurveRenderer implements BezierCurveRender {
 export interface TrajectoryRender {
     // Core Three.js objects for rendering
     orbitLine: THREE.Line;
+    bezierLine: THREE.Line;
     bezierRenderers: BezierCurveRenderer[];
     periapsisMarker: THREE.Mesh;
     apoapsisMarker: THREE.Mesh;
 
     // Methods for updating the visual representation
     updateOrbitLine(points: THREE.Vector3[]): void;
+    updateBezierLine(points: THREE.Vector3[]): void;
     updateBezierCurves(curves: BezierCurve[]): void;
     updateMarkers(periapsisPos: THREE.Vector3, apoapsisPos: THREE.Vector3, visible: boolean, showApoapsis?: boolean): void;
     setVisibility(show: boolean): void;
@@ -237,6 +266,7 @@ export interface TrajectoryRender {
 
 export class TrajectoryRenderer implements TrajectoryRender {
     orbitLine: THREE.Line;
+    bezierLine: THREE.Line;
     bezierRenderers: BezierCurveRenderer[] = [];
     periapsisMarker: THREE.Mesh;
     apoapsisMarker: THREE.Mesh;
@@ -253,18 +283,33 @@ export class TrajectoryRenderer implements TrajectoryRender {
             orbitColor: '0x' + orbitColor.toString(16)
         });
 
-        // Initialize orbit line
+        // Initialize analytical orbit line (solid, white)
         const orbitGeometry = new THREE.BufferGeometry();
         this.orbitLine = new THREE.Line(
             orbitGeometry,
             new THREE.LineBasicMaterial({ 
-                color: orbitColor, 
+                color: 0xffffff,  // White color for analytical orbit
                 opacity: 0.8, 
                 transparent: true 
             })
         );
         scene.add(this.orbitLine);
         console.log('[DEBUG] Added orbitLine to scene, scene children:', scene.children.length);
+
+        // Initialize bezier approximation line (dashed, slightly different color)
+        const bezierGeometry = new THREE.BufferGeometry();
+        this.bezierLine = new THREE.Line(
+            bezierGeometry,
+            new THREE.LineDashedMaterial({ 
+                color: orbitColor,
+                opacity: 0.6, 
+                transparent: true,
+                dashSize: 3,
+                gapSize: 2
+            })
+        );
+        scene.add(this.bezierLine);
+        console.log('[DEBUG] Added bezierLine to scene, scene children:', scene.children.length);
 
         // Initialize markers
         const markerGeometry = new THREE.SphereGeometry(0.5, 16, 16);
@@ -283,6 +328,11 @@ export class TrajectoryRenderer implements TrajectoryRender {
 
     updateOrbitLine(points: THREE.Vector3[]): void {
         this.orbitLine.geometry.setFromPoints(points);
+    }
+
+    updateBezierLine(points: THREE.Vector3[]): void {
+        this.bezierLine.geometry.setFromPoints(points);
+        this.bezierLine.computeLineDistances(); // Required for dashed lines
     }
 
     updateBezierCurves(curves: BezierCurve[]): void {
@@ -306,6 +356,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
 
     setVisibility(show: boolean): void {
         this.orbitLine.visible = show;
+        this.bezierLine.visible = show;
         this.bezierRenderers.forEach(renderer => renderer.setVisibility(show, false));
         this.periapsisMarker.visible = show;
         this.apoapsisMarker.visible = show;
@@ -315,6 +366,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
         console.log('[DEBUG] TrajectoryRenderer.cleanup() called', {
             bezierRenderersCount: this.bezierRenderers.length,
             orbitLineInScene: this.orbitLine.parent === this.scene,
+            bezierLineInScene: this.bezierLine.parent === this.scene,
             periapsisMarkerInScene: this.periapsisMarker.parent === this.scene,
             apoapsisMarkerInScene: this.apoapsisMarker.parent === this.scene,
             sceneChildrenBefore: this.scene.children.length
@@ -322,6 +374,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
 
         // Hide all objects first
         this.orbitLine.visible = false;
+        this.bezierLine.visible = false;
         this.periapsisMarker.visible = false;
         this.apoapsisMarker.visible = false;
         
@@ -337,6 +390,12 @@ export class TrajectoryRenderer implements TrajectoryRender {
             this.scene.remove(this.orbitLine);
         } else {
             console.log('[DEBUG] orbitLine not in scene, parent:', this.orbitLine.parent);
+        }
+        if (this.bezierLine.parent === this.scene) {
+            console.log('[DEBUG] Removing bezierLine from scene');
+            this.scene.remove(this.bezierLine);
+        } else {
+            console.log('[DEBUG] bezierLine not in scene, parent:', this.bezierLine.parent);
         }
         if (this.periapsisMarker.parent === this.scene) {
             console.log('[DEBUG] Removing periapsisMarker from scene');
@@ -355,6 +414,10 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.orbitLine.geometry.dispose();
         if (this.orbitLine.material instanceof THREE.Material) {
             this.orbitLine.material.dispose();
+        }
+        this.bezierLine.geometry.dispose();
+        if (this.bezierLine.material instanceof THREE.Material) {
+            this.bezierLine.material.dispose();
         }
         this.periapsisMarker.geometry.dispose();
         if (this.periapsisMarker.material instanceof THREE.Material) {
@@ -566,8 +629,9 @@ export class Trajectory {
             this.periapsis = Measure.of(periapsisValue, kilometers);
             this.apoapsis = Measure.of(apoapsisValue, kilometers);
 
-            // Update visualization
-            this._renderer.updateOrbitLine(bezierResult.points);
+            // Update visualization - render BOTH analytical orbit and bezier approximation
+            this._renderer.updateOrbitLine(ellipsePoints);
+            this._renderer.updateBezierLine(bezierResult.points);
             this._renderer.updateBezierCurves(bezierResult.curves);
             // Extract THREE.Vector3 for renderer
             this._renderer.updateMarkers(
@@ -627,8 +691,9 @@ export class Trajectory {
             this.periapsis = Measure.of(periapsisValue, kilometers);
             this.apoapsis = INFINITE_LENGTH;
 
-            // Update visualization
-            this._renderer.updateOrbitLine(bezierResult.points);
+            // Update visualization - render BOTH analytical orbit and bezier approximation
+            this._renderer.updateOrbitLine(hyperbolicPoints);
+            this._renderer.updateBezierLine(bezierResult.points);
             this._renderer.updateBezierCurves(bezierResult.curves);
             // Extract THREE.Vector3 for renderer
             const periapsisVec3 = this._periapsisPoint!.getVector3();
@@ -738,6 +803,13 @@ export class Trajectory {
      */
     getBezierPoints(): THREE.Vector3[] {
         return this._bezierPoints;
+    }
+
+    /**
+     * Get bezier curves
+     */
+    getBezierCurves(): any[] {
+        return this._bezierCurves;
     }
 
     /**

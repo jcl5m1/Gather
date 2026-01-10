@@ -27,6 +27,10 @@ The primary codebase for the orbital mechanics simulation.
 - `uiManager.ts` - UI rendering and **formatters for unit display** (use these for displaying values!)
 - `commandProcessor.ts` - **TEXT COMMAND INTERFACE** - allows automated execution of all UI actions
 - `cameraManager.ts` - Camera controls, tracking, and free camera mode (WASD+RF movement)
+- `uiWindow.ts` - Base UIWindow class for creating draggable, resizable windows with title bars
+- `plotWindow.ts` - PlotWindow class (extends UIWindow) for 2D XY plotting with interactive hover tooltips, grid, and axes
+- `plotDemo.ts` - Creates analysis plots for bezier orbit approximation; displays separate time warp and distance error plots
+- `propertyInspector.ts` - Property inspection and modification interface for game objects
 
 **Utilities:**
 - `units.ts` - Unit system (kilometers, kilograms, seconds, etc.)

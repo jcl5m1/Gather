@@ -1,4 +1,6 @@
 import { MoonOrbitSimulation } from './app';
+import { createSinePlotDemo } from './plotDemo';
+import { autoRunBezierTest } from './testBezierOrbit';
 
 // Display error on the page if initialization fails
 function displayError(error: any) {
@@ -58,6 +60,14 @@ function initializeSimulation() {
         // This allows commands to be executed programmatically without UI interaction
         (window as any).simulationController = simulation.getController();
         console.log('Simulation controller exposed globally. Use window.simulationController.executeCommand() for testing.');
+        
+        // Create orbit error plots (time warp and distance error)
+        console.log('[Index] Creating orbit error plots...');
+        const sinePlot = createSinePlotDemo();
+        console.log('[Index] Orbit error plots created. Call window.createSinePlotDemo() to create additional plots.');
+        
+        // Auto-run Bezier orbit accuracy test (disabled - use TEST_BEZIER_ORBIT command manually)
+        // autoRunBezierTest();
     } catch (error) {
         console.error('[Index] Fatal error during initialization:', error);
         displayError(error);

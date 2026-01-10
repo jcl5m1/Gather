@@ -122,17 +122,18 @@ export class UIWindow {
         const titleBar = document.createElement('div');
         titleBar.className = 'window-titlebar';
         titleBar.style.cssText = `
-            padding: 2px 4px;
+            padding: 1px 2px;
             background: rgba(0,0,0,0.5);
             border-bottom: 1px solid rgba(255,255,255,0.2);
             font-weight: bold;
-            font-size: 12px;
+            font-size: 11px;
             cursor: move;
             display: flex;
             justify-content: space-between;
             align-items: center;
             user-select: none;
             flex-shrink: 0;
+            height: 18px;
         `;
 
         const titleText = document.createElement('span');
@@ -143,7 +144,7 @@ export class UIWindow {
         buttonContainer.className = 'window-buttons';
         buttonContainer.style.cssText = `
             display: flex;
-            gap: 4px;
+            gap: 2px;
         `;
 
         // Create window control buttons
@@ -185,14 +186,14 @@ export class UIWindow {
         button.textContent = text;
         button.title = title;
         button.style.cssText = `
-            width: 20px;
-            height: 20px;
+            width: 16px;
+            height: 16px;
             padding: 0;
             background: rgba(255,255,255,0.1);
             color: white;
-            border: 1px solid rgba(255,255,255,0.2);
+            border: none;
             cursor: pointer;
-            font-size: 14px;
+            font-size: 12px;
             line-height: 1;
             display: flex;
             align-items: center;
