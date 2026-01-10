@@ -190,7 +190,7 @@ export function createOrbitErrorPlot(): PlotWindow | null {
         const scatterM: number[] = [];
         const scatterT: number[] = [];
         const scatterTooltips: string[] = [];
-        const lutIndexOffset = 1; // Offset due to start padding
+        const lutIndexOffset = 0; // No offset, samples align with data
 
         for (let i = 0; i < lutSamplePositions.length; i++) {
             const lutIdx = i + lutIndexOffset;
@@ -246,7 +246,7 @@ export function createOrbitErrorPlot(): PlotWindow | null {
     // Use stored optimization errors from LUT for scatter plot and create tooltips
     const lutSampleErrors: number[] = [];
     const lutTooltips: string[] = [];
-    const lutIndexOffset = 1; // Offset due to start padding in LUT
+    const lutIndexOffset = 0; // No offset, samples align with data
 
     if (lutData && lutData.errors) {
         for (let idx = 0; idx < lutSamplePositions.length; idx++) {
@@ -320,7 +320,7 @@ export function createOrbitErrorPlot(): PlotWindow | null {
     // Verify that recalculation at LUT positions matches stored errors
     if (lutData && lutData.errors) {
         console.log('\n=== LUT Error Verification (Detailed) ===');
-        const lutIndexOffset = 1; // Offset due to start padding
+        const lutIndexOffset = 0; // No offset, samples align with data
         let maxDiff = 0;
 
         for (let idx = 0; idx < lutSamplePositions.length; idx++) {
