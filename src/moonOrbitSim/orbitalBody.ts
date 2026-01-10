@@ -1493,7 +1493,7 @@ export class OrbitalBody extends Body {
         // This is safer.
 
         const numIntervals = 8;
-        const subSamplesPerInterval = 16;
+        const subSamplesPerInterval = 8;
         const bezierPoints: { p1: number, p2: number }[] = [];
 
         // We need the KNOTS (M values) to be evenly spaced or specific?
