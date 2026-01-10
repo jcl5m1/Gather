@@ -6,6 +6,7 @@ import { PlotWindow } from './plotWindow';
 import { G } from './config';
 import { gravitationalConstantUnit } from './units';
 import * as THREE from 'three';
+import './performanceTest'; // Import to register benchmark function
 
 
 

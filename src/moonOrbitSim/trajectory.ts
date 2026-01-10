@@ -1193,6 +1193,12 @@ export class Trajectory {
         return { p1: (c22 * r1 - c12 * r2) * invDet, p2: (c11 * r2 - c12 * r1) * invDet };
     }
 
+    private _interpolationMode: 'linear' | 'cubic' = 'cubic';
+
+    public setInterpolationMode(mode: 'linear' | 'cubic'): void {
+        this._interpolationMode = mode;
+    }
+
     private timeWarpFunction(t: number): number {
         t = Math.max(0, Math.min(1, t));
         if (this._timeWarpFunction) return this._timeWarpFunction(t);
@@ -1234,7 +1240,7 @@ export class Trajectory {
 
         let result = T0 + (T1 - T0) * ((normalizedT - M0) / (M1 - M0)); // Linear fallback
 
-        if (pts) {
+        if (pts && this._interpolationMode === 'cubic') {
             const u = (normalizedT - M0) / (M1 - M0);
             const oneMinusU = 1 - u;
             result = (oneMinusU ** 3) * T0 +
