@@ -1385,4 +1385,36 @@ export class Trajectory {
         const periapsisRelativeTime = (normalizedTime + 0.5) % 1.0;
         return this.calculateAnalyticalPositionInternal(periapsisRelativeTime);
     }
+
+    private _gpuCompute: import('./gpuOrbitCompute').GPUOrbitCompute | null = null;
+
+    /**
+     * Compute batch of positions using GPU acceleration
+     */
+    public computePositionsGPU(times: number[]): Float32Array | null {
+        if (!this.type) return null; // Safety check
+        // Check for bezier/LUT availability? GPU compute handles missing LUT?
+        // Actually best to ensure LUT exists if using Time Warp
+        if (this._useBezierEstimation && (!this._timeWarpLUT || this._timeWarpLUT.M.length === 0)) {
+            // Try building it?
+            this.buildTimeWarpLUT(this._centralBodyMass);
+        }
+
+        // Lazy initialize GPU compute
+        if (!this._gpuCompute) {
+            const { GPUOrbitCompute } = require('./gpuOrbitCompute');
+            this._gpuCompute = new GPUOrbitCompute();
+        }
+
+        // We need access to the renderer. 
+        // Hack: SimulationController attaches renderer to window? Or we search?
+        const controller = (window as any).simulationController;
+        const renderer = controller?.getGameLoop()?.getRenderer();
+        if (!renderer) {
+            console.error('[Trajectory] Renderer not found for GPU compute');
+            return null;
+        }
+
+        return this._gpuCompute!.compute(renderer, times, this._timeWarpLUT!, this._bezierCurves);
+    }
 }

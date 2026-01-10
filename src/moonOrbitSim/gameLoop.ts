@@ -15,7 +15,7 @@ export class GameLoop {
     private _renderer!: THREE.WebGLRenderer;
     private _cameraManager!: CameraManager;
     private _animationFrameId: number = 0;
-    
+
     // Simulation state - properties with underscores are not shown in inspector
     private _centralBody!: OrbitalBody;
     private _orbitalBodies: OrbitalBody[] = [];
@@ -32,7 +32,7 @@ export class GameLoop {
     // Trail rendering
     private _trailLines: Map<OrbitalBody, THREE.Line> = new Map();
     private _trajectoriesVisible: boolean = true;
-    
+
     // Plot update callbacks
     private _plotUpdateCallbacks: Array<() => void> = [];
 
@@ -125,7 +125,7 @@ export class GameLoop {
         const centralPosition = new THREE.Vector3(0, 0, 0);
         const centralVelocity = new THREE.Vector3(0, 0, 0);
         const earthBody = config.bodies.earth;
-        
+
         this._centralBody = new OrbitalBody(
             this._scene,
             centralPosition,
@@ -174,20 +174,20 @@ export class GameLoop {
         const trailGeometry = new THREE.BufferGeometry();
         const trailLine = new THREE.Line(
             trailGeometry,
-            new THREE.LineBasicMaterial({ 
-                color: hexToNumber(trailConfig.color), 
-                opacity: trailConfig.opacity 
+            new THREE.LineBasicMaterial({
+                color: hexToNumber(trailConfig.color),
+                opacity: trailConfig.opacity
             })
         );
         this._scene.add(trailLine);
         this._trailLines.set(body, trailLine);
 
         this._orbitalBodies.push(body);
-        
+
         // Update camera manager with new body list and pass the newly added body
         // This will automatically switch camera to the new body if no orbital body is currently focused
         this._cameraManager.updateOrbitalBodies(this._orbitalBodies, body);
-        
+
         return body;
     }
 
@@ -198,7 +198,7 @@ export class GameLoop {
         const index = this._orbitalBodies.indexOf(body);
         if (index > -1) {
             this._orbitalBodies.splice(index, 1);
-            
+
             // Remove trail line
             const trailLine = this._trailLines.get(body);
             if (trailLine) {
@@ -209,10 +209,10 @@ export class GameLoop {
                 }
                 this._trailLines.delete(body);
             }
-            
+
             body.dispose();
         }
-        
+
         // Update camera manager with new body list
         this._cameraManager.updateOrbitalBodies(this._orbitalBodies);
     }
@@ -222,7 +222,7 @@ export class GameLoop {
      */
     resetOrbitalBody(body: OrbitalBody, position: THREE.Vector3, velocity: THREE.Vector3, mass: number, radius?: number): void {
         body.reset(position, velocity, mass, this._centralBody.getMass(), radius);
-        
+
         // Clear trail
         const trailLine = this._trailLines.get(body);
         if (trailLine) {
@@ -244,15 +244,15 @@ export class GameLoop {
     resetAll(): void {
         // Reset time scale to default
         this.timeScale = config.physics.defaultTimeScale;
-        
+
         // Reset current time
         this.currentTime = 0;
-        
+
         // Reset all orbital bodies to their initial conditions
         const centralMass = this._centralBody.getMass();
         this._orbitalBodies.forEach(body => {
             body.resetToInitial(centralMass);
-            
+
             // Clear trail
             const trailLine = this._trailLines.get(body);
             if (trailLine) {
@@ -271,11 +271,11 @@ export class GameLoop {
         bodiesToRemove.forEach(body => {
             this.removeOrbitalBody(body);
         });
-        
+
         // Explicitly clear the array to ensure it's empty
         // (removeOrbitalBody should have removed all, but this ensures it)
         this._orbitalBodies.length = 0;
-        
+
         // Verify the array is empty
         if (this._orbitalBodies.length !== 0) {
             console.warn('Warning: orbitalBodies array is not empty after removeAllOrbitalBodies()');
@@ -338,7 +338,7 @@ export class GameLoop {
             this._dt = 0.016; // Fallback for first frame
         }
         this._lastFrameTime = currentTime;
-        
+
         // Update FPS counter every second
         this._frameCount++;
         if (currentTime - this._fpsUpdateTime >= 1.0) {
@@ -346,10 +346,10 @@ export class GameLoop {
             this._frameCount = 0;
             this._fpsUpdateTime = currentTime;
         }
-        
+
         // Update body count
         this.bodyCount = this._orbitalBodies.length;
-        
+
         const scaledDt = this._dt * this.timeScale;
         this.currentTime += scaledDt;
 
@@ -374,25 +374,25 @@ export class GameLoop {
     private render(): void {
         // Update camera (handles target tracking, mouse input, zoom, etc.)
         this._cameraManager.update();
-        
+
         // Get currently selected body name from camera manager
         const selectedBodyName = this._cameraManager.getCurrentTargetName();
-        
+
         // Update rendering mode for all orbital bodies based on camera distance
         // and set trajectory visibility based on selection
         this._orbitalBodies.forEach(body => {
             body.updateRenderingMode(this._camera);
-            
+
             // Only show full trajectory for the currently selected body
             const isSelected = body.getName() === selectedBodyName;
             body.getTrajectory().setVisibility(isSelected && this._trajectoriesVisible);
         });
-        
+
         // Also update rendering mode for central body
         this._centralBody.updateRenderingMode(this._camera);
-        
+
         this._renderer.render(this._scene, this._camera);
-        
+
         // Call plot update callbacks
         this._plotUpdateCallbacks.forEach(callback => {
             try {
@@ -453,6 +453,13 @@ export class GameLoop {
     }
 
     /**
+     * Get the renderer (for GPU compute)
+     */
+    getRenderer(): THREE.WebGLRenderer {
+        return this._renderer;
+    }
+
+    /**
      * Get camera manager (for UI integration)
      */
     getCameraManager(): CameraManager {
@@ -492,14 +499,14 @@ export class GameLoop {
     private createRandomOrbitalBody(): void {
         // Generate random eccentricity between 0.2 and 0.8
         const e = 0.2 + Math.random() * 0.6;
-        
+
         // Generate random periapsis > 50km
         const rp = 50 + Math.random() * 450; // 50 to 500 km
-        
+
         // Calculate apapsis from eccentricity and periapsis
         // e = (ra - rp) / (ra + rp) => ra = rp * (1 + e) / (1 - e)
         const ra = rp * (1 + e) / (1 - e);
-        
+
         // Ensure apapsis < 1000km
         if (ra >= 1000) {
             // Adjust periapsis to meet constraint
@@ -529,13 +536,13 @@ export class GameLoop {
      */
     private createBodyFromOrbitalParams(rp: number, ra: number, e: number): void {
         const centralMass = this._centralBody.getMass();
-        
+
         // Generate random orbital orientation
         const trueAnomaly = Math.random() * 2 * Math.PI; // Random position along orbit
         const inclination = (Math.random() - 0.5) * Math.PI; // Random inclination
         const longitudeOfAscendingNode = Math.random() * 2 * Math.PI;
         const argumentOfPeriapsis = Math.random() * 2 * Math.PI;
-        
+
         // Generate position and velocity from orbital elements
         const { position, velocity } = generateStateFromOrbitalElements(
             rp,
@@ -547,29 +554,29 @@ export class GameLoop {
             longitudeOfAscendingNode,
             argumentOfPeriapsis
         );
-        
+
         // Generate random color
         const hue = Math.random() * 360;
         const color = new THREE.Color().setHSL(hue / 360, 0.7, 0.5);
         const colorHex = color.getHexString();
-        
+
         // Generate random trajectory color (lighter shade)
         const trajectoryColor = new THREE.Color().setHSL(hue / 360, 0.5, 0.7);
         const trajectoryColorHex = trajectoryColor.getHexString();
-        
+
         // Small mass and radius for the body
         const mass = 1e10; // Small mass in kg
         const radius = 10; // 10 km radius
-        
+
         // Create body name
         const bodyName = `RandomBody_${this._orbitalBodies.length + 1}`;
-        
+
         // Use command interface to add the body (same code path as text commands)
         const simulationController = (window as any).simulationController;
         if (simulationController) {
             const command = `ADD_BODY position:${position.x},${position.y},${position.z} velocity:${velocity.x},${velocity.y},${velocity.z} mass:${mass} id:${bodyName} radius:${radius} color:${colorHex} trajectoryColor:${trajectoryColorHex}`;
             const result = simulationController.executeCommand(command);
-            
+
             if (result.success) {
                 console.log(`[Random Body] Created ${bodyName}:`, {
                     periapsis: `${rp.toFixed(1)} km`,
