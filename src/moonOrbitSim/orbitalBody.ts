@@ -1008,9 +1008,30 @@ export class OrbitalBody extends Body {
         const M_values = this._timeWarpLUT.M;
         const bezierT_values = this._timeWarpLUT.bezierT;
 
-        // Handle edge cases
-        if (t <= M_values[0]) return bezierT_values[0];
-        if (t >= M_values[M_values.length - 1]) return bezierT_values[bezierT_values.length - 1];
+        // Symmetric Time Warp Logic
+        // The LUT covers [0, 0.5] (first half of orbit)
+        // For t > 0.5, we use the symmetry: T(t) = 1 - T(1-t)
+
+        let normalizedT = t;
+        let isMirrored = false;
+
+        if (t > 0.5) {
+            normalizedT = 1.0 - t;
+            isMirrored = true;
+        }
+
+        // Handle edge cases for endpoints
+        if (normalizedT <= M_values[0]) {
+            const val = bezierT_values[0];
+            return isMirrored ? 1.0 - val : val;
+        }
+
+        // Ensure we don't exceed the last LUT value (should be 0.5)
+        const maxM = M_values[M_values.length - 1];
+        if (normalizedT >= maxM) {
+            const val = bezierT_values[bezierT_values.length - 1];
+            return isMirrored ? 1.0 - val : val;
+        }
 
         // Binary search to find the interval
         let left = 0;
@@ -1018,12 +1039,15 @@ export class OrbitalBody extends Body {
 
         while (right - left > 1) {
             const mid = Math.floor((left + right) / 2);
-            if (M_values[mid] <= t) {
+            if (M_values[mid] <= normalizedT) {
                 left = mid;
             } else {
                 right = mid;
             }
         }
+
+        // For mirrored calculation, we compute T(normalizedT) then invert
+        // ... (rest of function uses M0, M1, etc from indices)
 
         // Get interval data for interpolation
         const M0 = M_values[left];
@@ -1038,7 +1062,7 @@ export class OrbitalBody extends Body {
             // Cubic Bezier interpolation
             // B(u) = (1-u)^3*p0 + 3(1-u)^2*u*p1 + 3(1-u)u^2*p2 + u^3*p3
             // u is normalized time within interval [0,1]
-            const u = (t - M0) / (M1 - M0);
+            const u = (normalizedT - M0) / (M1 - M0);
 
             const oneMinusU = 1 - u;
             const u2 = u * u;
@@ -1049,15 +1073,18 @@ export class OrbitalBody extends Body {
             const T0 = bezierT0;
             const T1 = bezierT1;
 
-            return oneMinusU3 * T0 +
+            const result = oneMinusU3 * T0 +
                 3 * oneMinusU2 * u * pts.p1 +
                 3 * oneMinusU * u2 * pts.p2 +
                 u3 * T1;
+
+            return isMirrored ? 1.0 - result : result;
         }
 
         // Fallback to Linear interpolation if no coeffs
-        const u = (t - M0) / (M1 - M0);
-        return bezierT0 + (bezierT1 - bezierT0) * u;
+        const u = (normalizedT - M0) / (M1 - M0);
+        const result = bezierT0 + (bezierT1 - bezierT0) * u;
+        return isMirrored ? 1.0 - result : result;
     }
 
     /**
@@ -1492,8 +1519,8 @@ export class OrbitalBody extends Body {
         // we will ignore the samples generated above for the LUT and generate FRESH samples for the fitting.
         // This is safer.
 
-        const numIntervals = 8;
-        const subSamplesPerInterval = 8;
+        const numIntervals = 4;
+        const subSamplesPerInterval = 16;
         const bezierPoints: { p1: number, p2: number }[] = [];
 
         // We need the KNOTS (M values) to be evenly spaced or specific?
@@ -1519,8 +1546,8 @@ export class OrbitalBody extends Body {
         const fitData: { u: number, M: number, bezierT: number }[] = [];
 
         for (let i = 0; i <= totalFitSamples; i++) {
-            // Sample evenly in Eccentric Anomaly from Pi to 3Pi
-            const E = Math.PI + (i / totalFitSamples) * 2 * Math.PI;
+            // Sample evenly in Eccentric Anomaly from Pi to 2*Pi (Half orbit, Apoapsis to Periapsis)
+            const E = Math.PI + (i / totalFitSamples) * Math.PI;
             const M = E - eccentricity * Math.sin(E);
 
             // Normalize M
@@ -1537,25 +1564,7 @@ export class OrbitalBody extends Body {
         // Sort by M to be safe (though E-monotonicity implies M-monotonicity)
         fitData.sort((a, b) => a.M - b.M);
 
-        if (fitData.length > 0) {
-            const first = fitData[0];
-            const last = fitData[fitData.length - 1];
 
-            // Pad with wrap-around points to ensure covereage of [0, 1]
-            // Prepend last point shifted by -1
-            fitData.unshift({
-                u: 0, // u is not really used for the padding points in the list context
-                M: last.M - 1.0,
-                bezierT: last.bezierT - 1.0
-            });
-
-            // Append first point shifted by +1
-            fitData.push({
-                u: 0,
-                M: first.M + 1.0,
-                bezierT: first.bezierT + 1.0
-            });
-        }
 
         // Now build the LUT intervals from the augmented data
         for (let i = 0; i < fitData.length - 1; i += subSamplesPerInterval) {
@@ -2097,8 +2106,21 @@ export class OrbitalBody extends Body {
         if (!this._timeWarpLUT) {
             return [];
         }
-        // Return M values without the wraparound points (start and end padding)
-        return this._timeWarpLUT.M.slice(1, -1);
+
+        // LUT stores [0, 0.5] without padding
+        const halfOrbit = this._timeWarpLUT.M;
+        if (halfOrbit.length === 0) return [];
+
+        // Mirror to get [0.5, 1.0]
+        // Reverse halfOrbit (excluding the last element which is 0.5), and map 1-x
+        const mirrored = [];
+        // Iterate backwards from second to last element
+        for (let i = halfOrbit.length - 2; i >= 0; i--) {
+            mirrored.push(1.0 - halfOrbit[i]);
+        }
+
+        // Concatenate: [0 ... 0.5] + [0.625 ... 1.0]
+        return halfOrbit.concat(mirrored);
     }
 
     /**
