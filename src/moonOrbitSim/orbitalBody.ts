@@ -356,8 +356,16 @@ export class OrbitalBody extends Body {
     private _dualRenderingEnabled: boolean = false;
     private _bezierPosition: THREE.Vector3 | null = null;
 
-    // Time warp LUT (Lookup Table) for True Anomaly based interpolation with cubic spline
-    private _timeWarpLUT: { M: number[], bezierT: number[], splineCoeffs: number[][], errors: number[] } | null = null;
+    // Time warp LUT (Lookup Table) for True Anomaly based interpolation with fit bezier curves
+    private _timeWarpLUT: {
+        M: number[],
+        bezierT: number[],
+        // Control points for each interval: P1 and P2 (scalar values for T)
+        bezierPoints: { p1: number, p2: number }[],
+        errors: number[]
+    } | null = null;
+
+
 
     // Visual markers for LUT sample positions (using sprites for constant screen size)
     private _lutSampleMarkers: THREE.Sprite[] = [];
@@ -856,81 +864,131 @@ export class OrbitalBody extends Body {
      * @param y Array of y values  
      * @returns Array of coefficient arrays [a, b, c, d] for each interval, or empty if computation fails
      */
-    private computeCubicSplineCoefficients(x: number[], y: number[]): number[][] {
-        const n = x.length - 1;
-        if (n < 1) return [];
-
-        try {
-            // Initialize arrays
-            const a = [...y];
-            const b = new Array(n).fill(0);
-            const c = new Array(n + 1).fill(0);
-            const d = new Array(n).fill(0);
-            const h = new Array(n).fill(0);
-
-            // Compute h values (interval widths)
-            for (let i = 0; i < n; i++) {
-                h[i] = x[i + 1] - x[i];
-                if (h[i] <= 0 || !isFinite(h[i])) {
-                    console.warn('[CubicSpline] Invalid interval width, falling back to linear');
-                    return [];
-                }
-            }
-
-            // Set up tridiagonal system for natural spline (c[0] = c[n] = 0)
-            const alpha = new Array(n).fill(0);
-            for (let i = 1; i < n; i++) {
-                alpha[i] = (3 / h[i]) * (a[i + 1] - a[i]) - (3 / h[i - 1]) * (a[i] - a[i - 1]);
-                if (!isFinite(alpha[i])) {
-                    console.warn('[CubicSpline] Non-finite alpha value, falling back to linear');
-                    return [];
-                }
-            }
-
-            // Solve tridiagonal system using Thomas algorithm
-            const l = new Array(n + 1).fill(1);
-            const mu = new Array(n + 1).fill(0);
-            const z = new Array(n + 1).fill(0);
-
-            for (let i = 1; i < n; i++) {
-                l[i] = 2 * (x[i + 1] - x[i - 1]) - h[i - 1] * mu[i - 1];
-                if (Math.abs(l[i]) < 1e-10) {
-                    console.warn('[CubicSpline] Near-zero diagonal element, falling back to linear');
-                    return [];
-                }
-                mu[i] = h[i] / l[i];
-                z[i] = (alpha[i] - h[i - 1] * z[i - 1]) / l[i];
-
-                if (!isFinite(mu[i]) || !isFinite(z[i])) {
-                    console.warn('[CubicSpline] Non-finite mu or z value, falling back to linear');
-                    return [];
-                }
-            }
-
-            // Back substitution
-            for (let j = n - 1; j >= 0; j--) {
-                c[j] = z[j] - mu[j] * c[j + 1];
-                b[j] = (a[j + 1] - a[j]) / h[j] - h[j] * (c[j + 1] + 2 * c[j]) / 3;
-                d[j] = (c[j + 1] - c[j]) / (3 * h[j]);
-
-                if (!isFinite(b[j]) || !isFinite(c[j]) || !isFinite(d[j])) {
-                    console.warn('[CubicSpline] Non-finite coefficients, falling back to linear');
-                    return [];
-                }
-            }
-
-            // Return coefficients as array of [a, b, c, d] for each interval
-            const coeffs: number[][] = [];
-            for (let i = 0; i < n; i++) {
-                coeffs.push([a[i], b[i], c[i], d[i]]);
-            }
-
-            console.log('[CubicSpline] Successfully computed spline coefficients');
-            return coeffs;
-        } catch (error) {
-            console.warn('[CubicSpline] Error computing spline, falling back to linear:', error);
-            return [];
+    /**
+     * Fit a cubic Bezier curve to a set of points (fixed endpoints)
+     * Solving for control points P1 and P2 to minimize least squares error
+     * @param p0 Start point
+     * @param p3 End point
+     * @param samples Intermediate sample points
+     * @returns { p1: THREE.Vector2, p2: THREE.Vector2 } Control points
+     */
+    private fitCubicBezier(p0: THREE.Vector2, p3: THREE.Vector2, samples: THREE.Vector2[]): { p1: THREE.Vector2, p2: THREE.Vector2 } {
+        if (samples.length === 0) {
+            // No samples, assume linear (points at 1/3 and 2/3)
+            return {
+                p1: new THREE.Vector2().copy(p0).lerp(p3, 1 / 3),
+                p2: new THREE.Vector2().copy(p0).lerp(p3, 2 / 3)
+            };
         }
+
+        // We assign a 'u' parameter to each sample based on its index
+        // e.g. if we have 3 samples, they are at u=0.25, 0.5, 0.75 relative to the interval
+        // because we include p0 at u=0 and p3 at u=1 implicit logic
+
+        let c11 = 0, c12 = 0, c22 = 0;
+        let rx1 = 0, ry1 = 0, rx2 = 0, ry2 = 0;
+
+        const n = samples.length;
+        for (let i = 0; i < n; i++) {
+            const u = (i + 1) / (n + 1);
+            const u2 = u * u;
+            const u3 = u2 * u;
+            const oneMinusU = 1 - u;
+            const oneMinusU2 = oneMinusU * oneMinusU;
+            const oneMinusU3 = oneMinusU2 * oneMinusU;
+
+            // Basis functions for P1 and P2
+            // B1(u) = 3(1-u)^2 * u
+            // B2(u) = 3(1-u) * u^2
+            const b1 = 3 * oneMinusU2 * u;
+            const b2 = 3 * oneMinusU * u2;
+
+            // Known parts contribution from P0 and P3
+            // B0(u) = (1-u)^3
+            // B3(u) = u^3
+            const b0 = oneMinusU3;
+            const b3 = u3;
+
+            // Target point P(u) - known parts
+            const qx = samples[i].x - (b0 * p0.x + b3 * p3.x);
+            const qy = samples[i].y - (b0 * p0.y + b3 * p3.y);
+
+            // Accumulate least squares matrix elements and RHS vector
+            c11 += b1 * b1;
+            c12 += b1 * b2;
+            c22 += b2 * b2;
+
+            rx1 += b1 * qx;
+            ry1 += b1 * qy;
+            rx2 += b2 * qx;
+            ry2 += b2 * qy;
+        }
+
+        // Solve linear system:
+        // | c11 c12 | | P1 |   | R1 |
+        // | c12 c22 | | P2 | = | R2 |
+
+        const det = c11 * c22 - c12 * c12;
+        if (Math.abs(det) < 1e-9) {
+            // Fallback Linear
+            return {
+                p1: new THREE.Vector2().copy(p0).lerp(p3, 1 / 3),
+                p2: new THREE.Vector2().copy(p0).lerp(p3, 2 / 3)
+            };
+        }
+
+        const invDet = 1.0 / det;
+
+        const p1x = (c22 * rx1 - c12 * rx2) * invDet;
+        const p1y = (c22 * ry1 - c12 * ry2) * invDet;
+        const p2x = (c11 * rx2 - c12 * rx1) * invDet;
+        const p2y = (c11 * ry2 - c12 * ry1) * invDet;
+
+        return {
+            p1: new THREE.Vector2(p1x, p1y),
+            p2: new THREE.Vector2(p2x, p2y)
+        };
+    }
+
+    /**
+     * Solve for u such that cubicBezier.x(u) = xTarget
+     * Uses Newton-Raphson method
+     */
+    private solveCubicBezierXForT(xTarget: number, p0: THREE.Vector2, p1: THREE.Vector2, p2: THREE.Vector2, p3: THREE.Vector2): number {
+        // Initial guess: assume linear relationship (u approx (x - x0) / (x3 - x0))
+        let u = (xTarget - p0.x) / (p3.x - p0.x);
+        u = Math.max(0, Math.min(1, u));
+
+        // Newton-Raphson iterations
+        for (let i = 0; i < 8; i++) {
+            const u2 = u * u;
+            const u3 = u2 * u;
+            const oneMinusU = 1 - u;
+            const oneMinusU2 = oneMinusU * oneMinusU;
+            const oneMinusU3 = oneMinusU2 * oneMinusU;
+
+            // Evaluate x(u)
+            // x(u) = (1-u)^3*x0 + 3(1-u)^2*u*x1 + 3(1-u)u^2*x2 + u^3*x3
+            const xVal = oneMinusU3 * p0.x +
+                3 * oneMinusU2 * u * p1.x +
+                3 * oneMinusU * u2 * p2.x +
+                u3 * p3.x;
+
+            const err = xVal - xTarget;
+            if (Math.abs(err) < 1e-7) return u;
+
+            // Evaluate dx/du
+            // x'(u) = 3(1-u)^2(x1-x0) + 6(1-u)u(x2-x1) + 3u^2(x3-x2)
+            const dx = 3 * oneMinusU2 * (p1.x - p0.x) +
+                6 * oneMinusU * u * (p2.x - p1.x) +
+                3 * u2 * (p3.x - p2.x);
+
+            if (Math.abs(dx) < 1e-9) break; // Zero derivative, stop
+
+            u -= err / dx;
+            u = Math.max(0, Math.min(1, u)); // Clamp to valid range
+        }
+        return u;
     }
 
     /**
@@ -973,19 +1031,28 @@ export class OrbitalBody extends Body {
         const bezierT0 = bezierT_values[left];
         const bezierT1 = bezierT_values[right];
 
-        // Check if spline coefficients are available
-        const splineCoeffs = this._timeWarpLUT.splineCoeffs;
+        // Check if bezier control points are available
+        const pts = this._timeWarpLUT.bezierPoints ? this._timeWarpLUT.bezierPoints[left] : null;
 
-        if (splineCoeffs && splineCoeffs.length > left) {
-            // Cubic spline interpolation
-            // coefficients are [a, b, c, d] for the equation:
-            // S(x) = a + b(x-xi) + c(x-xi)^2 + d(x-xi)^3
-            // where x is the input M, xi is M_values[left]
+        if (pts) {
+            // Cubic Bezier interpolation
+            // B(u) = (1-u)^3*p0 + 3(1-u)^2*u*p1 + 3(1-u)u^2*p2 + u^3*p3
+            // u is normalized time within interval [0,1]
+            const u = (t - M0) / (M1 - M0);
 
-            const coeffs = splineCoeffs[left];
-            const dx = t - M0;
+            const oneMinusU = 1 - u;
+            const u2 = u * u;
+            const u3 = u * u * u;
+            const oneMinusU2 = oneMinusU * oneMinusU;
+            const oneMinusU3 = oneMinusU * oneMinusU * oneMinusU;
 
-            return coeffs[0] + coeffs[1] * dx + coeffs[2] * dx * dx + coeffs[3] * dx * dx * dx;
+            const T0 = bezierT0;
+            const T1 = bezierT1;
+
+            return oneMinusU3 * T0 +
+                3 * oneMinusU2 * u * pts.p1 +
+                3 * oneMinusU * u2 * pts.p2 +
+                u3 * T1;
         }
 
         // Fallback to Linear interpolation if no coeffs
@@ -1303,7 +1370,7 @@ export class OrbitalBody extends Body {
         this.clearLUTMarkers();
 
         // Sample 32 points evenly in True Anomaly (physics-based spacing)
-        const numSamplesForCalculation = 32;
+        const numSamplesForCalculation = 8;
         const allSamples: { M: number, bezierT: number, position: THREE.Vector3, analyticalPos: THREE.Vector3, error: number }[] = [];
 
         console.log('[Time Warp LUT] Building LUT with optimization...');
@@ -1393,54 +1460,225 @@ export class OrbitalBody extends Body {
             this._lutSampleMarkers.push(marker);
         }
 
-        // Compute cubic spline coefficients for smooth interpolation
-        const splineCoeffs = this.computeCubicSplineCoefficients(M_values, bezierT_values);
+        console.log('[Time Warp LUT] Computing Bezier curve segments...');
 
-        console.log('[Time Warp LUT] Using cubic spline interpolation');
+        // Group samples into intervals and fit Bezier curves
+        // usage: 8 intervals (numSamplesForCalculation)
+        // each interval has sub-samples for fitting. But wait, we used 'numSamplesForCalculation' for the knot points.
+        // We need to change the sampling strategy to support the fitting.
 
-        // Store the LUT with cubic spline coefficients and optimization errors
-        const error_values = allSamples.map(e => e.error);
-        if (error_values.length > 0) {
-            const firstError = error_values[0];
-            const lastError = error_values[error_values.length - 1];
+        // RE-PLANNING SAMPLING:
+        // We want 8 intervals. So we need 32 sub-samples (4 per interval).
+        // Let's re-generate samples if we want high precision, OR we can just use the ones we have?
+        // Actually, the previous code generated 'numSamplesForCalculation' (8) samples.
+        // This is not enough for fitting 8 cubic beziers (needs 8 * 4 samples).
 
-            // Pad errors to match M_values padding (start and end)
-            error_values.unshift(lastError);
-            error_values.push(firstError);
+        // Let's clear the samples and re-generate them with the correct count.
+        // This is a bit inefficient to have 32 markers, but acceptable.
+
+        // ACTUALLY, let's keep the existing loop structure but change the count:
+        // We want N=8 intervals. So we need samples at 0, 1/8, ... 1 (9 knots).
+        // Plus 3 intermediate points per interval. Total points = 8 * 4 + 1 = 33 points.
+
+        // Changing the generation loop is complex with 'replace'.
+        // Instead, let's assume we change the sampling above or handle it here.
+        // But the previous loop was: for (let i = 0; i < numSamplesForCalculation; i++)
+
+        // Let's simpler approach: Use the 8 generated samples as the KNOTS.
+        // And we will use 'fitCubicBezier1D' which falls back to linear if we lack intermediate samples.
+        // But the goal was "4x sampling".
+
+        // To fix this correctly without editing the loop above (which is hard to target),
+        // we will ignore the samples generated above for the LUT and generate FRESH samples for the fitting.
+        // This is safer.
+
+        const numIntervals = 8;
+        const subSamplesPerInterval = 16;
+        const bezierPoints: { p1: number, p2: number }[] = [];
+
+        // We need the KNOTS (M values) to be evenly spaced or specific?
+        // The previous loop generated samples evenly in Eccentric Anomaly.
+        // We should preserve that knot structure for the intervals.
+        // So we need to re-run the sampling loop logic but with higher resolution,
+        // then pick out the knots.
+
+        // Actually, let's just use a dedicated loop here to generate the data for the LUT
+        // and ignore the 'allSamples' (which are just for debug markers/previous logic).
+
+        const lutM: number[] = [];
+        const lutBezierT: number[] = [];
+        const lutErrors: number[] = [];
+
+        // Generate knots and intermediate samples
+        // We want 'numIntervals' segments.
+        // The knots will be at indices 0, 4, 8, ... 32.
+
+        const totalFitSamples = numIntervals * subSamplesPerInterval;
+        // We need to generate 'totalFitSamples + 1' points.
+
+        const fitData: { u: number, M: number, bezierT: number }[] = [];
+
+        for (let i = 0; i <= totalFitSamples; i++) {
+            // Sample evenly in Eccentric Anomaly from Pi to 3Pi
+            const E = Math.PI + (i / totalFitSamples) * 2 * Math.PI;
+            const M = E - eccentricity * Math.sin(E);
+
+            // Normalize M
+            const M_norm = (M - M0) / (2 * Math.PI);
+            const M_wrapped = ((M_norm % 1) + 1) % 1;
+
+            // Optimize T
+            const analyticalPos = this.calculateAnalyticalPositionInternal(M_wrapped);
+            const T = this.optimizeBezierT(analyticalPos, M_wrapped);
+
+            fitData.push({ u: i / totalFitSamples, M: M_wrapped, bezierT: T });
+        }
+        // Handle wrap around: Ensure strict monotonicity and boundary matching if needed
+        // Sort by M to be safe (though E-monotonicity implies M-monotonicity)
+        fitData.sort((a, b) => a.M - b.M);
+
+        if (fitData.length > 0) {
+            const first = fitData[0];
+            const last = fitData[fitData.length - 1];
+
+            // Pad with wrap-around points to ensure covereage of [0, 1]
+            // Prepend last point shifted by -1
+            fitData.unshift({
+                u: 0, // u is not really used for the padding points in the list context
+                M: last.M - 1.0,
+                bezierT: last.bezierT - 1.0
+            });
+
+            // Append first point shifted by +1
+            fitData.push({
+                u: 0,
+                M: first.M + 1.0,
+                bezierT: first.bezierT + 1.0
+            });
         }
 
+        // Now build the LUT intervals from the augmented data
+        for (let i = 0; i < fitData.length - 1; i += subSamplesPerInterval) {
+            // Define segment from index i to i + subSamples (capped)
+            const p0Index = i;
+            let p3Index = i + subSamplesPerInterval;
+
+            // Should we merge the last small chunk? 
+            // If the remaining points are too few?
+            // With the padding strategy, we have 80 + 2 points = 82 points.
+            // 82 points.
+            // 0..10 (11 pts)
+            // 10..20 (11 pts)
+            // ...
+            // 70..80 (11 pts)
+            // 80..81 (2 pts) -> This is the last small segment.
+
+            // Adjust p3Index to not exceed bounds
+            if (p3Index >= fitData.length) {
+                p3Index = fitData.length - 1;
+            }
+
+            // If the segment is too small (just 1 point?), skip or merge?
+            // If p3Index == p0Index, we are done.
+            if (p3Index <= p0Index) break;
+
+            const segmentSamples = fitData.slice(p0Index, p3Index + 1);
+
+            const startNode = segmentSamples[0];
+            const endNode = segmentSamples[segmentSamples.length - 1];
+
+            // Add knot to LUT
+            if (lutM.length === 0) {
+                lutM.push(startNode.M);
+                lutBezierT.push(startNode.bezierT);
+            }
+            // Avoid duplicate knots if we chain perfectly (which we do)
+            lutM.push(endNode.M);
+            lutBezierT.push(endNode.bezierT);
+
+            // Normalize samples for this interval (u: 0->1)
+            const mStart = startNode.M;
+            const mEnd = endNode.M;
+            const tStart = startNode.bezierT;
+            const tEnd = endNode.bezierT;
+
+            const samplesForFit = segmentSamples.map(s => {
+                // Approximate local parameter u by M fraction (since we map M->T)
+                // u = (M - M_start) / (M_end - M_start)
+                let u_local = (s.M - mStart) / (mEnd - mStart);
+                if (isNaN(u_local)) u_local = 0;
+                return {
+                    u: u_local,
+                    y: s.bezierT
+                };
+            });
+
+            // Fit Bezier
+            const control = this.fitCubicBezier1D(tStart, tEnd, samplesForFit);
+            bezierPoints.push(control);
+
+            // If we reached the end, break
+            if (p3Index === fitData.length - 1) break;
+        }
+
+        // Store
         this._timeWarpLUT = {
-            M: M_values,
-            bezierT: bezierT_values,
-            splineCoeffs: splineCoeffs,
-            errors: error_values
+            M: lutM,
+            bezierT: lutBezierT,
+            bezierPoints: bezierPoints,
+            errors: [] // Skip error calc for now
         };
 
-        // Verification: Recompute error using the actual timeWarp function (spline/linear)
-        // This checks if the interpolation introduces additional error compared to the optimized points
-        console.log('[Time Warp LUT] Verifying LUT interpolation:');
-        const timeWarp = this.getTimeWarpFunction();
-        for (const sample of allSamples) {
-            const inputM = sample.M;
-            const outputBezierT = timeWarp(inputM);
-            const bezierPos = this.computeBezierPositionFromTime(outputBezierT);
-            const analyticalPos = sample.analyticalPos; // This matches what was used for optimization
+        console.log(`[Time Warp LUT] Built Bezier LUT with ${numIntervals} intervals.`);
+    }
 
-            if (bezierPos) {
-                const error = bezierPos.distanceTo(analyticalPos);
-                console.log(`  Input (M): ${inputM.toFixed(6)} -> Output (timeWarp): ${outputBezierT.toFixed(6)} -> Error: ${error.toFixed(6)} km`);
-            }
+    /**
+     * Fit a 1D cubic Bezier curve to a set of points (fixed endpoints)
+     * Solving for scalar control points P1 and P2 to minimize least squares error
+     */
+    private fitCubicBezier1D(y0: number, y3: number, samples: { u: number, y: number }[]): { p1: number, p2: number } {
+        if (samples.length === 0) {
+            return { p1: y0 + (y3 - y0) / 3, p2: y0 + 2 * (y3 - y0) / 3 };
         }
 
-        // Calculate statistics
-        const errors = allSamples.map(s => s.error);
-        const maxError = Math.max(...errors);
-        const avgError = errors.reduce((a, b) => a + b, 0) / errors.length;
+        let c11 = 0, c12 = 0, c22 = 0;
+        let r1 = 0, r2 = 0;
 
-        console.log(`[Time Warp LUT] Built lookup table with ${numSamplesForCalculation + 1} samples`);
-        console.log(`[Time Warp LUT] Sampling: Even in True Anomaly (physics-based)`);
-        console.log(`[Time Warp LUT] Optimization: Golden section search to minimize position error`);
-        console.log(`[Time Warp LUT] Max error: ${maxError.toFixed(2)} km, Avg error: ${avgError.toFixed(2)} km`);
+        for (const sample of samples) {
+            const u = sample.u;
+            const y = sample.y;
+
+            const oneMinusU = 1 - u;
+            const u2 = u * u;
+            const oneMinusU2 = oneMinusU * oneMinusU;
+
+            const b1 = 3 * oneMinusU2 * u;
+            const b2 = 3 * oneMinusU * u2;
+
+            const b0 = oneMinusU * oneMinusU2;
+            const b3 = u * u2;
+
+            const startEndContrib = b0 * y0 + b3 * y3;
+            const residual = y - startEndContrib;
+
+            c11 += b1 * b1;
+            c12 += b1 * b2;
+            c22 += b2 * b2;
+
+            r1 += b1 * residual;
+            r2 += b2 * residual;
+        }
+
+        const det = c11 * c22 - c12 * c12;
+        if (Math.abs(det) < 1e-9) {
+            return { p1: y0 + (y3 - y0) / 3, p2: y0 + 2 * (y3 - y0) / 3 };
+        }
+
+        const invDet = 1.0 / det;
+        const p1 = (c22 * r1 - c12 * r2) * invDet;
+        const p2 = (c11 * r2 - c12 * r1) * invDet;
+
+        return { p1, p2 };
     }
 
     /**
@@ -1866,7 +2104,7 @@ export class OrbitalBody extends Body {
     /**
      * Get full LUT data for inspection
      */
-    public getLUTData(): { M: number[], bezierT: number[], splineCoeffs: number[][] } | null {
+    public getLUTData(): { M: number[], bezierT: number[], bezierPoints: { p1: number, p2: number }[], errors: number[] } | null {
         return this._timeWarpLUT;
     }
 
