@@ -1303,23 +1303,20 @@ export class OrbitalBody extends Body {
         this.clearLUTMarkers();
 
         // Sample 32 points evenly in True Anomaly (physics-based spacing)
-        const numSamplesForCalculation = 16;
+        const numSamplesForCalculation = 32;
         const allSamples: { M: number, bezierT: number, position: THREE.Vector3, analyticalPos: THREE.Vector3, error: number }[] = [];
 
         console.log('[Time Warp LUT] Building LUT with optimization...');
 
         for (let i = 0; i < numSamplesForCalculation; i++) {
-            // Sample evenly in True Anomaly starting at apoapsis (π to 3π) - physics-based
-            // Initial position is at apoapsis (θ=π), so start there for zero offset
-            const theta = Math.PI + (i / numSamplesForCalculation) * 2 * Math.PI;
-
-            // Convert True Anomaly to Eccentric Anomaly
-            const E = 2 * Math.atan(Math.sqrt((1 - eccentricity) / (1 + eccentricity)) * Math.tan(theta / 2));
+            // Sample evenly in Eccentric Anomaly starting at apoapsis (π to 3π)
+            // This provides a distribution between uniform Mean Anomaly and uniform True Anomaly
+            const E = Math.PI + (i / numSamplesForCalculation) * 2 * Math.PI;
 
             // Compute Mean Anomaly: M = E - e*sin(E)
             const M = E - eccentricity * Math.sin(E);
 
-            // Normalize M to [0, 1] range
+            // Normalize M to [0, 1] range relative to M0
             const M_normalized = (M - M0) / (2 * Math.PI);
             const M_wrapped = ((M_normalized % 1) + 1) % 1;
 
@@ -1349,7 +1346,7 @@ export class OrbitalBody extends Body {
             });
 
             // Log ALL samples to debug the large errors
-            console.log(`  Sample ${i}/${numSamplesForCalculation}: θ=${(theta * 180 / Math.PI).toFixed(1)}°, M=${M_wrapped.toFixed(4)}, bezierT=${optimizedBezierT.toFixed(4)}, error=${error.toFixed(2)} km`);
+            console.log(`  Sample ${i}/${numSamplesForCalculation}: M=${M_wrapped.toFixed(4)}, bezierT=${optimizedBezierT.toFixed(4)}, error=${error.toFixed(2)} km`);
         }
 
         // Sort all samples by Mean Anomaly
