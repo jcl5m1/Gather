@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { G, generateEllipsePoints, generateBezierOrbitPoints, generateHyperbolicPoints, generateHyperbolicBezierPoints } from './orbitUtils';
-import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, kilograms, ZERO_LENGTH, ZERO_TIME, ZERO_VELOCITY, INFINITE_LENGTH, INFINITE_TIME, cubicKilometersPerSecondSquared, squareKilometersPerSecondSquared, kilometersPerSecond, secondsSquared } from './units';
+import { G, generateEllipsePoints, generateBezierOrbitPoints, generateHyperbolicPoints, generateHyperbolicBezierPoints, calculateOrbitBasis, OrbitBasis, calculateEllipticalPositionFromBasis, calculateEllipticalPosition } from './orbitUtils';
+import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, kilograms, ZERO_LENGTH, ZERO_TIME, ZERO_VELOCITY, INFINITE_LENGTH, INFINITE_TIME, cubicKilometersPerSecondSquared, squareKilometersPerSecondSquared, kilometersPerSecond, secondsSquared, gravitationalConstantUnit } from './units';
 import { MeasureVector3, LengthVector3, VelocityVector3, ZERO_LENGTH_VECTOR3 } from './unitsVector3';
 
 // ============================================================================
@@ -87,12 +87,12 @@ export class BezierCurveRenderer implements BezierCurveRender {
 
         // Initialize end points
         const endPointGeometry = new THREE.SphereGeometry(0.3, 16, 16);
-        const endPointMaterial = new THREE.MeshBasicMaterial({ 
+        const endPointMaterial = new THREE.MeshBasicMaterial({
             color: this.color,
             transparent: true,
             opacity: 0.8
         });
-        
+
         this.startPoint = new THREE.Mesh(endPointGeometry, endPointMaterial);
         this.endPoint = new THREE.Mesh(endPointGeometry, endPointMaterial);
         scene.add(this.startPoint);
@@ -100,12 +100,12 @@ export class BezierCurveRenderer implements BezierCurveRender {
 
         // Initialize control points
         const controlPointGeometry = new THREE.SphereGeometry(0.2, 16, 16);
-        const controlPointMaterial = new THREE.MeshBasicMaterial({ 
+        const controlPointMaterial = new THREE.MeshBasicMaterial({
             color: 0xffff00,
             transparent: true,
             opacity: 0.4
         });
-        
+
         for (let i = 0; i < 2; i++) {
             const point = new THREE.Mesh(controlPointGeometry, controlPointMaterial);
             point.visible = false;
@@ -114,12 +114,12 @@ export class BezierCurveRenderer implements BezierCurveRender {
         }
 
         // Initialize control lines
-        const controlLineMaterial = new THREE.LineBasicMaterial({ 
+        const controlLineMaterial = new THREE.LineBasicMaterial({
             color: 0xffff00,
             opacity: 0.3,
             transparent: true
         });
-        
+
         for (let i = 0; i < 2; i++) {
             const lineGeometry = new THREE.BufferGeometry();
             const line = new THREE.Line(lineGeometry, controlLineMaterial);
@@ -134,7 +134,7 @@ export class BezierCurveRenderer implements BezierCurveRender {
     updatePoints(): void {
         // Handle both BezierCurve (returns BezierCurvePoints) and RationalBezierCurve (returns array)
         const controlPoints = this.curve.getControlPoints();
-        
+
         if (Array.isArray(controlPoints)) {
             // RationalBezierCurve returns an array
             if (controlPoints.length === 3) {
@@ -143,7 +143,7 @@ export class BezierCurveRenderer implements BezierCurveRender {
                 this.endPoint.position.copy(controlPoints[2]);
                 this.controlPoints[0].position.copy(controlPoints[1]);
                 this.controlPoints[1].visible = false; // Hide second control point for quadratic
-                
+
                 // Update control lines
                 this.controlLines[0].geometry.setFromPoints([controlPoints[0], controlPoints[1]]);
                 this.controlLines[1].geometry.setFromPoints([controlPoints[1], controlPoints[2]]);
@@ -154,7 +154,7 @@ export class BezierCurveRenderer implements BezierCurveRender {
                 this.controlPoints[0].position.copy(controlPoints[1]);
                 this.controlPoints[1].position.copy(controlPoints[2]);
                 this.controlPoints[1].visible = true;
-                
+
                 // Update control lines
                 this.controlLines[0].geometry.setFromPoints([controlPoints[0], controlPoints[1]]);
                 this.controlLines[1].geometry.setFromPoints([controlPoints[2], controlPoints[3]]);
@@ -167,7 +167,7 @@ export class BezierCurveRenderer implements BezierCurveRender {
             this.controlPoints[0].position.copy(points.p1);
             this.controlPoints[1].position.copy(points.p2);
             this.controlPoints[1].visible = true;
-            
+
             // Update control lines
             this.controlLines[0].geometry.setFromPoints([points.p0, points.p1]);
             this.controlLines[1].geometry.setFromPoints([points.p2, points.p3]);
@@ -194,7 +194,7 @@ export class BezierCurveRenderer implements BezierCurveRender {
         this.endPoint.visible = false;
         this.controlPoints.forEach(point => point.visible = false);
         this.controlLines.forEach(line => line.visible = false);
-        
+
         // Remove from scene
         if (this.startPoint.parent === this.scene) {
             console.log('[DEBUG] Removing startPoint from scene');
@@ -216,7 +216,7 @@ export class BezierCurveRenderer implements BezierCurveRender {
                 this.scene.remove(line);
             }
         });
-        
+
         // Dispose of geometries and materials
         this.startPoint.geometry.dispose();
         this.endPoint.geometry.dispose();
@@ -238,7 +238,7 @@ export class BezierCurveRenderer implements BezierCurveRender {
                 line.material.dispose();
             }
         });
-        
+
         console.log('[DEBUG] BezierCurveRenderer.cleanup() completed');
     }
 }
@@ -260,6 +260,7 @@ export interface TrajectoryRender {
     updateBezierLine(points: THREE.Vector3[]): void;
     updateBezierCurves(curves: BezierCurve[]): void;
     updateMarkers(periapsisPos: THREE.Vector3, apoapsisPos: THREE.Vector3, visible: boolean, showApoapsis?: boolean): void;
+    updateLUTMarkers(points: THREE.Vector3[]): void;
     setVisibility(show: boolean): void;
     cleanup(): void;
 }
@@ -270,6 +271,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
     bezierRenderers: BezierCurveRenderer[] = [];
     periapsisMarker: THREE.Mesh;
     apoapsisMarker: THREE.Mesh;
+    lutPoints: THREE.Points;
 
     private scene: THREE.Scene;
     private color: number;
@@ -287,10 +289,10 @@ export class TrajectoryRenderer implements TrajectoryRender {
         const orbitGeometry = new THREE.BufferGeometry();
         this.orbitLine = new THREE.Line(
             orbitGeometry,
-            new THREE.LineBasicMaterial({ 
+            new THREE.LineBasicMaterial({
                 color: 0xffffff,  // White color for analytical orbit
-                opacity: 0.8, 
-                transparent: true 
+                opacity: 0.8,
+                transparent: true
             })
         );
         scene.add(this.orbitLine);
@@ -300,9 +302,9 @@ export class TrajectoryRenderer implements TrajectoryRender {
         const bezierGeometry = new THREE.BufferGeometry();
         this.bezierLine = new THREE.Line(
             bezierGeometry,
-            new THREE.LineDashedMaterial({ 
+            new THREE.LineDashedMaterial({
                 color: orbitColor,
-                opacity: 0.6, 
+                opacity: 0.6,
                 transparent: true,
                 dashSize: 3,
                 gapSize: 2
@@ -324,6 +326,54 @@ export class TrajectoryRenderer implements TrajectoryRender {
         scene.add(this.periapsisMarker);
         scene.add(this.apoapsisMarker);
         console.log('[DEBUG] Added markers to scene, scene children:', scene.children.length);
+
+        // Initialize LUT markers (Points for screen-space rendering)
+        const lutGeometry = new THREE.BufferGeometry();
+        const dotTexture = this.createDotTexture(0x0088ff); // Light blue for LUT
+        const lutMaterial = new THREE.PointsMaterial({
+            color: 0xffffff, // Use texture color
+            map: dotTexture,
+            size: 6, // 6 pixels constant size
+            sizeAttenuation: false,
+            transparent: true,
+            alphaTest: 0.5
+        });
+
+        this.lutPoints = new THREE.Points(lutGeometry, lutMaterial);
+        this.lutPoints.visible = false; // Hidden by default
+        this.lutPoints.frustumCulled = false; // Always render if visible
+        scene.add(this.lutPoints);
+    }
+
+    /**
+     * Create a circular dot texture for the sprite/points
+     */
+    private createDotTexture(color: number): THREE.Texture {
+        try {
+            // Check if we're in a browser environment (document exists)
+            if (typeof document === 'undefined') {
+                return new THREE.Texture();
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = 32;
+            canvas.height = 32;
+            const context = canvas.getContext('2d');
+            if (context) {
+                // Draw a filled circle
+                context.beginPath();
+                context.arc(16, 16, 14, 0, 2 * Math.PI);
+                context.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
+                context.fill();
+            }
+            const texture = new THREE.Texture(canvas);
+            texture.needsUpdate = true;
+            return texture;
+        } catch (e) {
+            console.warn('[TrajectoryRenderer] Failed to create dot texture', e);
+            return new THREE.Texture();
+        }
+
     }
 
     updateOrbitLine(points: THREE.Vector3[]): void {
@@ -354,12 +404,19 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.apoapsisMarker.visible = visible && showApoapsis;
     }
 
+    updateLUTMarkers(points: THREE.Vector3[]): void {
+        this.lutPoints.geometry.setFromPoints(points);
+        // Ensure geometry bounding sphere is updated for frustum culling (though we disabled it)
+        this.lutPoints.geometry.computeBoundingSphere();
+    }
+
     setVisibility(show: boolean): void {
         this.orbitLine.visible = show;
         this.bezierLine.visible = show;
         this.bezierRenderers.forEach(renderer => renderer.setVisibility(show, false));
         this.periapsisMarker.visible = show;
         this.apoapsisMarker.visible = show;
+        this.lutPoints.visible = show;
     }
 
     cleanup(): void {
@@ -377,13 +434,13 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.bezierLine.visible = false;
         this.periapsisMarker.visible = false;
         this.apoapsisMarker.visible = false;
-        
+
         // Clean up bezier renderers
         this.bezierRenderers.forEach((renderer, index) => {
             console.log(`[DEBUG] Cleaning up bezier renderer ${index}`);
             renderer.cleanup();
         });
-        
+
         // Remove all objects from scene (check if they're actually in the scene first)
         if (this.orbitLine.parent === this.scene) {
             console.log('[DEBUG] Removing orbitLine from scene');
@@ -409,6 +466,10 @@ export class TrajectoryRenderer implements TrajectoryRender {
         } else {
             console.log('[DEBUG] apoapsisMarker not in scene, parent:', this.apoapsisMarker.parent);
         }
+        if (this.lutPoints.parent === this.scene) {
+            console.log('[DEBUG] Removing lutPoints from scene');
+            this.scene.remove(this.lutPoints);
+        }
 
         // Dispose of geometry and material to free resources
         this.orbitLine.geometry.dispose();
@@ -427,10 +488,17 @@ export class TrajectoryRenderer implements TrajectoryRender {
         if (this.apoapsisMarker.material instanceof THREE.Material) {
             this.apoapsisMarker.material.dispose();
         }
+        this.lutPoints.geometry.dispose();
+        if (this.lutPoints.material instanceof THREE.Material) {
+            this.lutPoints.material.dispose();
+            if ((this.lutPoints.material as any).map) {
+                (this.lutPoints.material as any).map.dispose();
+            }
+        }
 
         // Clear arrays
         this.bezierRenderers = [];
-        
+
         console.log('[DEBUG] TrajectoryRenderer.cleanup() completed', {
             sceneChildrenAfter: this.scene.children.length,
             bezierRenderersCleared: true
@@ -452,6 +520,14 @@ export interface TrajectoryParameters {
 
 export type TrajectoryType = 'elliptical' | 'hyperbolic' | 'parabolic';
 
+export interface TimeWarpLUT {
+    M: number[];
+    bezierT: number[];
+    // Control points for each interval: P1 and P2 (scalar values for T)
+    bezierPoints: { p1: number, p2: number }[];
+    errors: number[];
+}
+
 /**
  * Trajectory class that consolidates all data required to represent and render an orbital trajectory
  */
@@ -471,6 +547,15 @@ export class Trajectory {
     public altitude: Length = ZERO_LENGTH;
     public velocity: Velocity = ZERO_VELOCITY;
 
+    private _useBezierEstimation: boolean = true;
+    private _timeWarpLUT: TimeWarpLUT | null = null;
+    private _cachedOrbitBasis: OrbitBasis | null = null;
+    private _startTime: number = 0;
+    private _initialPosition: THREE.Vector3 = new THREE.Vector3();
+    private _initialVelocity: THREE.Vector3 = new THREE.Vector3();
+    private _centralBodyMass: number = 0;
+    private _timeWarpFunction: ((t: number) => number) | null = null;
+
     constructor(scene: THREE.Scene, color: number = 0xff6666) {
         this._scene = scene;
         this._color = color;
@@ -488,36 +573,41 @@ export class Trajectory {
     /**
      * Calculate and update trajectory from position and velocity
      */
-    calculateFromState(position: LengthVector3, velocity: VelocityVector3, centralBodyMass: Mass): void {
+    calculateFromState(position: LengthVector3, velocity: VelocityVector3, centralBodyMass: Mass, startTime: Time = ZERO_TIME): void {
+        const startTimeSec = startTime.over(seconds).value;
+        this._startTime = startTimeSec;
+        this._centralBodyMass = centralBodyMass.over(kilograms).value;
+        this._initialPosition.copy(position.getVector3());
+        this._initialVelocity.copy(velocity.getVector3());
         // Clean up old renderer before creating new one
         if (this._renderer) {
             this._renderer.cleanup();
         }
         this._renderer = new TrajectoryRenderer(this._scene, this._color);
-        
+
         // Get position and velocity magnitudes as Length and Velocity
         const r = position.length(); // Length
         const v = velocity.length(); // Velocity
-        
+
         // Update current altitude and velocity (now with units)
         this.altitude = r;
         this.velocity = v;
-        
+
         // Calculate gravitational parameter mu = G * mass (with units)
         // Units: (km³/(kg·s²)) * kg = km³/s²
         const mu = (G as any).times(centralBodyMass) as any;
-        
+
         // Calculate orbit geometry vectors using MeasureVector3 operations
         // Angular momentum: h = r × v (result has units of length²/time, but we'll use Length for convenience)
         const hVec = MeasureVector3.crossVectorsLengthVelocity(position, velocity);
-        
+
         // v × h for eccentricity vector calculation
         // v has units velocity, h has units length, so v × h has units velocity × length = length²/time
         // But we need to work with this carefully - let's use the static method
         const velocityVec3 = velocity.getVector3();
         const hVecVec3 = hVec.getVector3();
         const vCrossHVec3 = new THREE.Vector3().crossVectors(velocityVec3, hVecVec3);
-        
+
         // Calculate specific energy: v²/2 - mu/r
         // v² has units (km/s)² = km²/s²
         // v²/2 has units km²/s² (dividing by dimensionless 2)
@@ -531,14 +621,14 @@ export class Trajectory {
         // For dimensionless division by 2, extract only at the end
         const vSquaredValue = (vSquared as any).over(squareKilometersPerSecondSquared).value;
         const specificEnergy = Measure.of((vSquaredValue / 2) - muOverRValue, squareKilometersPerSecondSquared);
-        
+
         // Calculate semi-major axis: a = -mu / (2 * specificEnergy)
         // Units: (km³/s²) / (km²/s²) = km
         // Extract mu value once and reuse for both calculations
         // muValue already extracted above, reuse it
         const energyValue = (specificEnergy as any).over(squareKilometersPerSecondSquared).value;
         const a = Measure.of(-muValue / (2 * energyValue), kilometers);
-        
+
         // Calculate eccentricity vector: e = (v × h) / mu - r̂
         // where r̂ is the unit vector in the direction of r
         // v × h has units velocity × length = length²/time (but stored as Length for convenience)
@@ -557,7 +647,7 @@ export class Trajectory {
 
         // Check specific energy value for orbit type (need to extract for comparison)
         const specificEnergyValue = (specificEnergy as any).over(squareKilometersPerSecondSquared).value;
-        
+
         if (specificEnergyValue < 0) {
             // Elliptical orbit
             // Calculate period: T = 2π * sqrt(a³/mu)
@@ -569,20 +659,20 @@ export class Trajectory {
             const aCubedOverMuValue = aCubedValue / muValue; // km³ / (km³/s²) = s²
             const periodValue = 2 * Math.PI * Math.sqrt(aCubedOverMuValue);
             const period = Measure.of(periodValue, seconds);
-            
+
             // Extract numeric values and THREE.Vector3 only for visualization functions
             // aValue already extracted above for period calculation, reuse it
             const referenceVecVec3 = referenceVec.getVector3();
-            
+
             // Generate ellipse points (requires numeric values and THREE.Vector3)
             const ellipsePoints = generateEllipsePoints(aValue, e, hVecVec3, referenceVecVec3, 100);
-            
+
             // Find periapsis and apoapsis points
             let periapsisPoint = new THREE.Vector3();
             let apoapsisPoint = new THREE.Vector3();
             let minDist = Infinity;
             let maxDist = -Infinity;
-            
+
             ellipsePoints.forEach(point => {
                 const dist = point.length();
                 if (dist < minDist) {
@@ -594,7 +684,7 @@ export class Trajectory {
                     apoapsisPoint.copy(point);
                 }
             });
-            
+
             // For circular orbits, use initial position as periapsis and opposite point as apoapsis
             if (e < 1e-6) {
                 periapsisPoint.copy(position.getVector3());
@@ -611,7 +701,7 @@ export class Trajectory {
             // Convert to LengthVector3
             this._periapsisPoint = MeasureVector3.fromVector3<Length>(periapsisPoint, kilometers);
             this._apoapsisPoint = MeasureVector3.fromVector3<Length>(apoapsisPoint, kilometers);
-            
+
             // Store parameters with units
             this.parameters = {
                 _a: a,
@@ -620,7 +710,7 @@ export class Trajectory {
                 _h: hVec,
                 _eVec: referenceVec
             };
-            
+
             // Update periapsis and apoapsis for elliptical orbits (with units)
             // a * (1 - e) and a * (1 + e) are dimensionless scalars times length
             // Keep a as Measure, extract only for dimensionless multiplication
@@ -649,13 +739,13 @@ export class Trajectory {
             const aValue = a.over(kilometers).value;
             const hVecVec3 = hVec.getVector3();
             const eVecVec3 = eVec.getVector3();
-            
+
             const hyperbolicPoints = generateHyperbolicPoints(aValue, e, hVecVec3, eVecVec3, 100);
-            
+
             // Find periapsis point
             let periapsisPoint = new THREE.Vector3();
             let minDist = Infinity;
-            
+
             hyperbolicPoints.forEach(point => {
                 const dist = point.length();
                 if (dist < minDist) {
@@ -674,7 +764,7 @@ export class Trajectory {
             // Convert to LengthVector3
             this._periapsisPoint = MeasureVector3.fromVector3<Length>(periapsisPoint, kilometers);
             this._apoapsisPoint = undefined;
-            
+
             // Store parameters with units
             this.parameters = {
                 _a: a,
@@ -683,7 +773,7 @@ export class Trajectory {
                 _h: hVec,
                 _eVec: eVec
             };
-            
+
             // Update periapsis for hyperbolic orbits (apoapsis is undefined)
             // For hyperbolic orbits, a is negative, so periapsis = |a| * (e - 1)
             // Keep calculation in Measure form until dimensionless multiplication
@@ -708,7 +798,7 @@ export class Trajectory {
             this._bezierCurves = [];
             this._periapsisPoint = undefined;
             this._apoapsisPoint = undefined;
-            
+
             // Store parameters with units
             this.parameters = {
                 _a: ZERO_LENGTH,
@@ -717,7 +807,7 @@ export class Trajectory {
                 _h: hVec,
                 _eVec: eVec
             };
-            
+
             // For parabolic orbits, periapsis is the distance at closest approach
             // periapsis = h² / (mu * (1 + e))
             // h has units of length²/time (from r × v), but we're using Length for convenience
@@ -734,6 +824,11 @@ export class Trajectory {
 
             // Hide visualization for parabolic orbit
             this._renderer.setVisibility(false);
+        }
+
+        // Build Time Warp LUT if applicable
+        if (this.type === 'elliptical' && this._useBezierEstimation) {
+            this.buildTimeWarpLUT(this._centralBodyMass);
         }
     }
 
@@ -754,7 +849,7 @@ export class Trajectory {
         this.altitude = ZERO_LENGTH;
         this.velocity = ZERO_VELOCITY;
     }
-    
+
     /**
      * Update current altitude and velocity (called during simulation updates)
      */
@@ -817,5 +912,471 @@ export class Trajectory {
      */
     setVisibility(visible: boolean): void {
         this._renderer.setVisibility(visible);
+    }
+
+    /**
+     * Set whether to use Bezier estimation (Time Warp LUT)
+     */
+    set useBezierEstimation(value: boolean) {
+        this._useBezierEstimation = value;
+        if (value && !this._timeWarpLUT && this.type === 'elliptical') {
+            this.buildTimeWarpLUT(this._centralBodyMass);
+        }
+    }
+
+    get useBezierEstimation(): boolean {
+        return this._useBezierEstimation;
+    }
+
+    /**
+     * Build time warp LUT by sampling evenly in True Anomaly
+     * Uses Mean Anomaly as initial guess for optimization
+     */
+    private buildTimeWarpLUT(centralBodyMass: number): void {
+        const { _a, e, period } = this.parameters;
+        const semiMajorAxis = _a.over(kilometers).value;
+        // eccentricity uses this.parameters.e
+
+        const bezierCurves = this._bezierCurves;
+
+        if (!bezierCurves || bezierCurves.length === 0) {
+            return;
+        }
+
+        // Calculate orbital basis vectors
+        this._cachedOrbitBasis = calculateOrbitBasis(this._initialPosition, this._initialVelocity, centralBodyMass);
+        const { M0 } = this._cachedOrbitBasis;
+
+        // Generate knots and intermediate samples
+        const numIntervals = 4;
+        const subSamplesPerInterval = 16;
+        const totalFitSamples = numIntervals * subSamplesPerInterval;
+
+        const lutM: number[] = [];
+        const lutBezierT: number[] = [];
+        const bezierPoints: { p1: number, p2: number }[] = [];
+
+        const fitData: { u: number, M: number, bezierT: number, error: number }[] = [];
+
+        for (let i = 0; i <= totalFitSamples; i++) {
+            // Sample evenly in Eccentric Anomaly from Pi to 2Pi (Half orbit, Apoapsis to Periapsis)
+            // This aligns with 0 input -> 0 output (Apoapsis -> Apoapsis)
+            const E = Math.PI + (i / totalFitSamples) * Math.PI;
+
+            // M relative to Periapsis (Standard Kepler M)
+            const M_standard = E - e * Math.sin(E);
+
+            // Normalize M relative to Apoapsis (0 to 0.5)
+            // M_standard ranges from Pi to 2Pi
+            const M_relative_apo = (M_standard - Math.PI) / (2 * Math.PI);
+
+            // We don't wrap here because we know we are in 0-0.5 range (relative to Apo)
+            const M_wrapped = M_relative_apo;
+
+            // Optimize T
+            // Note: calculateAnalyticalPositionInternal now expects M_standard relative to Periapsis (0-1)?
+            // Actually, let's just pass the normalized standard M to it.
+            const M_standard_norm = M_standard / (2 * Math.PI);
+
+            // DEBUG: Use Eccentric Anomaly directly for T mapping as INITIAL GUESS
+            // T range for this half orbit (Apo -> Peri) is 0.0 to 0.5
+            // E range is Pi to 2Pi
+            const initialGuessT = (E - Math.PI) / (2 * Math.PI);
+
+            const analyticalPos = this.calculateAnalyticalPositionInternal(M_standard_norm);
+            const T = this.optimizeBezierT(analyticalPos, initialGuessT);
+
+            // Calculate error
+            const bezierPos = this.computeBezierPositionFromTime(T);
+            const error = bezierPos ? analyticalPos.distanceTo(bezierPos) : Infinity;
+
+            fitData.push({ u: i / totalFitSamples, M: M_wrapped, bezierT: T, error });
+        }
+
+        fitData.sort((a, b) => a.M - b.M);
+
+        // Build LUT intervals
+        const lutErrors: number[] = [];
+
+        for (let i = 0; i < fitData.length - 1; i += subSamplesPerInterval) {
+            let p3Index = i + subSamplesPerInterval;
+            if (p3Index >= fitData.length) p3Index = fitData.length - 1;
+            if (p3Index <= i) break;
+
+            const segmentSamples = fitData.slice(i, p3Index + 1);
+            const startNode = segmentSamples[0];
+            const endNode = segmentSamples[segmentSamples.length - 1];
+
+            // Add knot to LUT
+            if (lutM.length === 0) {
+                lutM.push(startNode.M);
+                lutBezierT.push(startNode.bezierT);
+                lutErrors.push(startNode.error);
+            }
+            lutM.push(endNode.M);
+            lutBezierT.push(endNode.bezierT);
+            lutErrors.push(endNode.error);
+
+            // Fit Bezier
+            const mStart = startNode.M;
+            const mEnd = endNode.M;
+            const tStart = startNode.bezierT;
+            const tEnd = endNode.bezierT;
+
+            const samplesForFit = segmentSamples.map(s => {
+                let u_local = (s.M - mStart) / (mEnd - mStart);
+                if (isNaN(u_local)) u_local = 0;
+                return { u: u_local, y: s.bezierT };
+            });
+
+            const control = this.fitCubicBezier1D(tStart, tEnd, samplesForFit);
+            bezierPoints.push(control);
+
+            if (p3Index === fitData.length - 1) break;
+        }
+
+        this._timeWarpLUT = {
+            M: lutM,
+            bezierT: lutBezierT,
+            bezierPoints: bezierPoints,
+            errors: lutErrors
+        };
+
+        console.log(`[Trajectory] Built Time Warp LUT with ${numIntervals} intervals.`);
+
+        // Visualize LUT samples (original + mirrored)
+        const samplePositions: THREE.Vector3[] = [];
+
+        console.log('[Trajectory] LUT M values (Apo-relative):', lutM);
+        console.log('[Trajectory] Orbit Info:', { M0, e });
+
+        // Add original samples (0 to 0.5, Apo -> Peri)
+        lutM.forEach(m_apo => {
+            // Convert Apo-relative M back to Peri-relative M for analytical calc
+            // m_apo = (M_std - PI) / 2PI => M_std = m_apo * 2PI + PI
+            const M_std = m_apo * 2 * Math.PI + Math.PI;
+            const M_std_norm = M_std / (2 * Math.PI);
+            const pos = this.calculateAnalyticalPositionInternal(M_std_norm);
+            samplePositions.push(pos);
+        });
+
+        // Add mirrored samples (0.5 to 1.0, Peri -> Apo)
+        lutM.forEach(m => {
+            const mMirrored = 1.0 - m;
+            // Avoid duplicates
+            if (Math.abs(mMirrored - m) > 1e-6 && Math.abs(mMirrored - 1.0) > 1e-6) {
+                // Mirrored M_apo corresponds to the other side of orbit
+                // m_mirror = 1 - m_apo.
+                // If m_apo -> E in [PI, 2PI], then m_mirror -> E in [0, PI]?
+                // Let's check. m (Apo->Peri). m=0 (Apo), m=0.5 (Peri).
+                // m_mirror (Peri->Apo). m=1 (Apo), m=0.5 (Peri).
+                // M_std = m_mirror * 2PI + PI?
+                // No, m_mirror=1 => M_std=3PI (same as PI, Apo).
+                // m_mirror=0.5 => M_std=2PI (Peri).
+                // So yes, M_std = m_mirror * 2PI + PI works (modulo 2PI).
+
+                const M_std = mMirrored * 2 * Math.PI + Math.PI;
+                const M_std_norm = (M_std % (2 * Math.PI)) / (2 * Math.PI);
+                const pos = this.calculateAnalyticalPositionInternal(M_std_norm);
+                samplePositions.push(pos);
+            }
+        });
+
+        console.log(`[Trajectory] Generated ${samplePositions.length} LUT sample dots.`);
+
+        this._renderer.updateLUTMarkers(samplePositions);
+    }
+
+    /**
+     * Helper to compute analytical position for internal logic (using stored basis)
+     * normalizedTime is fraction of orbit relative to Periapsis (0 to 1)
+     */
+    private calculateAnalyticalPositionInternal(normalizedTime: number): THREE.Vector3 {
+        if (!this._cachedOrbitBasis) return new THREE.Vector3();
+
+        const { _a, e } = this.parameters;
+        const a = _a.over(kilometers).value;
+        const { periapsisDir, perpDir } = this._cachedOrbitBasis;
+
+        // M is Mean Anomaly relative to Periapsis
+        const M_target = normalizedTime * 2 * Math.PI;
+
+        return calculateEllipticalPositionFromBasis(M_target, a, e, periapsisDir, perpDir);
+    }
+
+    /**
+     * Optimize bezierT to minimize position error from analytical position
+     */
+    private optimizeBezierT(analyticalPos: THREE.Vector3, initialGuess: number): number {
+        const bezierCurves = this._bezierCurves;
+        if (!bezierCurves || bezierCurves.length === 0) return initialGuess;
+
+        const objectiveFunction = (bezierT: number): number => {
+            const bezierPos = this.computeBezierPositionFromTime(bezierT);
+            if (!bezierPos) return Infinity;
+            return analyticalPos.distanceTo(bezierPos);
+        };
+
+        // Grid search
+        const gridSize = 50;
+        let bestT = initialGuess;
+        let bestError = objectiveFunction(initialGuess);
+
+        // Search around guess
+        for (let i = -5; i <= 5; i++) {
+            let t = initialGuess + (i / gridSize) * 0.1;
+            // Wrap t
+            t = ((t % 1) + 1) % 1;
+            const error = objectiveFunction(t);
+            if (error < bestError) {
+                bestError = error;
+                bestT = t;
+            }
+        }
+
+        // Golden section search
+        const phi = (1 + Math.sqrt(5)) / 2;
+        const tolerance = 1e-6;
+        let a = Math.max(0, bestT - 0.02);
+        let b = Math.min(1, bestT + 0.02);
+        let c = b - (b - a) / phi;
+        let d = a + (b - a) / phi;
+
+        for (let iter = 0; iter < 20; iter++) {
+            if (objectiveFunction(c) < objectiveFunction(d)) {
+                b = d; d = c; c = b - (b - a) / phi;
+            } else {
+                a = c; c = d; d = a + (b - a) / phi;
+            }
+            if (Math.abs(b - a) < tolerance) break;
+        }
+
+        return (a + b) / 2;
+    }
+
+    public computeBezierPositionFromTime(normalizedTime: number): THREE.Vector3 | null {
+        const bezierCurves = this._bezierCurves;
+        if (!bezierCurves || bezierCurves.length === 0) return null;
+        if (isNaN(normalizedTime)) return null;
+
+        const numCurves = bezierCurves.length;
+        const totalProgress = normalizedTime * numCurves;
+        const normalizedTotal = totalProgress - Math.floor(totalProgress);
+        let curveIndex = Math.floor(totalProgress) % numCurves;
+        if (curveIndex < 0) curveIndex += numCurves;
+
+        if (curveIndex >= numCurves || !bezierCurves[curveIndex]) return null;
+        return bezierCurves[curveIndex].getPoint(normalizedTotal);
+    }
+
+    private fitCubicBezier1D(y0: number, y3: number, samples: { u: number, y: number }[]): { p1: number, p2: number } {
+        if (samples.length === 0) return { p1: y0 + (y3 - y0) / 3, p2: y0 + 2 * (y3 - y0) / 3 };
+
+        let c11 = 0, c12 = 0, c22 = 0, r1 = 0, r2 = 0;
+        for (const sample of samples) {
+            const u = sample.u;
+            const y = sample.y;
+            const oneMinusU = 1 - u;
+            const b1 = 3 * oneMinusU * oneMinusU * u;
+            const b2 = 3 * (1 - u) * u * u;
+            const b0 = (1 - u) ** 3;
+            const b3 = u ** 3;
+            const residual = y - (b0 * y0 + b3 * y3);
+            c11 += b1 * b1; c12 += b1 * b2; c22 += b2 * b2;
+            r1 += b1 * residual; r2 += b2 * residual;
+        }
+
+        const det = c11 * c22 - c12 * c12;
+        if (Math.abs(det) < 1e-9) return { p1: y0 + (y3 - y0) / 3, p2: y0 + 2 * (y3 - y0) / 3 };
+
+        const invDet = 1.0 / det;
+        return { p1: (c22 * r1 - c12 * r2) * invDet, p2: (c11 * r2 - c12 * r1) * invDet };
+    }
+
+    private timeWarpFunction(t: number): number {
+        t = Math.max(0, Math.min(1, t));
+        if (this._timeWarpFunction) return this._timeWarpFunction(t);
+        if (!this._timeWarpLUT || this._timeWarpLUT.M.length === 0) return t;
+
+        const { M, bezierT, bezierPoints } = this._timeWarpLUT;
+
+        // t is normalized M relative to Apoapsis
+
+        let normalizedT = t;
+        let isMirrored = false;
+        if (t > 0.5) {
+            normalizedT = 1.0 - t;
+            isMirrored = true;
+        }
+
+        // Find interval
+        let left = 0, right = M.length - 1;
+        // Optimization: check bounds
+        if (normalizedT <= M[0]) {
+            const val = bezierT[0];
+            return isMirrored ? 1.0 - val : val;
+        }
+        if (normalizedT >= M[M.length - 1]) {
+            const val = bezierT[bezierT.length - 1];
+            return isMirrored ? 1.0 - val : val;
+        }
+
+        while (right - left > 1) {
+            const mid = Math.floor((left + right) / 2);
+            if (M[mid] <= normalizedT) left = mid;
+            else right = mid;
+        }
+
+        const M0 = M[left], M1 = M[right];
+        const T0 = bezierT[left], T1 = bezierT[right];
+
+        const pts = bezierPoints[left];
+
+        let result = T0 + (T1 - T0) * ((normalizedT - M0) / (M1 - M0)); // Linear fallback
+
+        if (pts) {
+            const u = (normalizedT - M0) / (M1 - M0);
+            const oneMinusU = 1 - u;
+            result = (oneMinusU ** 3) * T0 +
+                3 * (oneMinusU ** 2) * u * pts.p1 +
+                3 * oneMinusU * (u ** 2) * pts.p2 +
+                (u ** 3) * T1;
+        }
+
+        return isMirrored ? 1.0 - result : result;
+    }
+
+    /**
+     * Get position at a specific time
+     * @param time Time in seconds
+     * @param method method to use ('analytical' or 'bezier')
+     */
+    getPosition(time: number, method: 'analytical' | 'bezier' = 'bezier'): THREE.Vector3 | null {
+        if (this.type === 'parabolic') return null; // TODO support parabolic
+
+        // Default to analytical if Bezier not ready or not requested
+        if (method === 'analytical' || !this._useBezierEstimation || !this._timeWarpLUT) {
+            return calculateEllipticalPosition(
+                time,
+                this.parameters._a.over(kilometers).value,
+                this.parameters.e,
+                this.parameters.period.over(seconds).value,
+                this._startTime,
+                this._initialPosition,
+                this._initialVelocity,
+                this._centralBodyMass
+            );
+        }
+
+        // Bezier Estimation
+        if (!this._cachedOrbitBasis) return null;
+
+        const p = this.parameters.period.over(seconds).value;
+        if (p === 0) return null;
+
+        // Calculate Mean Anomaly relative to Periapsis
+        // M(t) = M0 + n * (t - t0)
+        const n = 2 * Math.PI / p;
+        const dt = time - this._startTime;
+        const M_current_peri = this._cachedOrbitBasis.M0 + n * dt;
+
+        // Normalize to 0-1 range (relative to Periapsis)
+        const M_norm_peri = M_current_peri / (2 * Math.PI);
+        const M_wrapped_peri = ((M_norm_peri % 1) + 1) % 1;
+
+        // Convert to Apoapsis-relative for timeWarpFunction
+        // M_apo = M_peri + PI. M_apo_norm = (M_peri_norm + 0.5) % 1.
+        const M_wrapped_apo = (M_wrapped_peri + 0.5) % 1.0;
+
+        const warpedTime = this.timeWarpFunction(M_wrapped_apo);
+        return this.computeBezierPositionFromTime(warpedTime);
+    }
+
+
+    /**
+     * Get the time warp function
+     */
+    public getTimeWarpFunction(): (t: number) => number {
+        return this.timeWarpFunction.bind(this);
+    }
+
+    /**
+     * Get LUT sample positions (M values)
+     * Returns full range 0->1 by mirroring
+     */
+    public getLUTSamplePositions(): number[] {
+        if (!this._timeWarpLUT) return [];
+        const lutM = this._timeWarpLUT.M;
+        const fullM = [...lutM];
+
+        // Add mirrored samples (0.5 to 1.0)
+        // Iterate backwards to keep order
+        for (let i = lutM.length - 1; i >= 0; i--) {
+            const m = lutM[i];
+            const mMirrored = 1.0 - m;
+            // Avoid duplicates at 0.5 (if present)
+            // We DO want to include 1.0 to close the loop for plotting
+            if (Math.abs(mMirrored - m) > 1e-6) {
+                fullM.push(mMirrored);
+            }
+        }
+
+        return fullM;
+    }
+
+    /**
+     * Get full LUT data
+     * Returns full range 0->1 by mirroring
+     */
+    public getLUTData(): TimeWarpLUT | null {
+        if (!this._timeWarpLUT) return null;
+
+        const lutM = this._timeWarpLUT.M;
+        const lutBezierT = this._timeWarpLUT.bezierT;
+        const lutErrors = this._timeWarpLUT.errors;
+        const fullM = [...lutM];
+        const fullBezierT = [...lutBezierT];
+        const fullErrors = [...lutErrors];
+
+        // Add mirrored samples
+        for (let i = lutM.length - 1; i >= 0; i--) {
+            const m = lutM[i];
+            const t = lutBezierT[i];
+            const err = lutErrors[i] || 0;
+
+            const mMirrored = 1.0 - m;
+            // Mirror T: if M -> T, then 1-M -> 1-T
+            const tMirrored = 1.0 - t;
+
+            // Avoid duplicate M checks (mostly for 0.5)
+            // We DO want to include 1.0 to close the loop for plotting
+            if (Math.abs(mMirrored - m) > 1e-6) {
+                fullM.push(mMirrored);
+                fullBezierT.push(tMirrored);
+                fullErrors.push(err);
+            }
+        }
+
+        // Return a new object with full arrays
+        return {
+            M: fullM,
+            bezierT: fullBezierT,
+            bezierPoints: this._timeWarpLUT.bezierPoints,
+            errors: fullErrors
+        };
+    }
+
+    /**
+     * Compute analytical position from normalized time
+     */
+    /**
+     * Compute analytical position from normalized time
+     * Input time is assumed to be in the same frame as the LUT (Apoapsis-relative)
+     */
+    public computeAnalyticalPositionFromNormalizedTime(normalizedTime: number): THREE.Vector3 {
+        // Internal calculation expects Periapsis-relative time
+        // We need to shift: Apoapsis-relative 0 -> Periapsis-relative 0.5
+        const periapsisRelativeTime = (normalizedTime + 0.5) % 1.0;
+        return this.calculateAnalyticalPositionInternal(periapsisRelativeTime);
     }
 }

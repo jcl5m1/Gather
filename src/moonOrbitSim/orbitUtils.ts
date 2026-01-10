@@ -569,6 +569,9 @@ export function generateBezierOrbitPoints(
 
     // Add curves in order starting from Apoapsis (180°)
     // Analytical model starts at Apoapsis (180°), so we order curves: Q3, Q4, Q1, Q2
+    // T = 0.0 -> Apoapsis
+    // T = 0.5 -> Periapsis
+    // T = 1.0 -> Apoapsis
     curves.push(c3); // 180°-270°
     curves.push(c4); // 270°-360°
     curves.push(c1); // 0°-90°
@@ -583,4 +586,139 @@ export function generateBezierOrbitPoints(
     });
 
     return { points, curves };
+}
+
+export interface OrbitalElements {
+    semiMajorAxis: number;      // a (km)
+    eccentricity: number;       // e (dimensionless)
+    period: number;             // T (seconds)
+    isElliptical: boolean;
+}
+
+export interface OrbitBasis {
+    periapsisDir: THREE.Vector3;
+    perpDir: THREE.Vector3;
+    h: THREE.Vector3;
+    eVec: THREE.Vector3;
+    M0: number; // Mean Anomaly at epoch (t=0 relative to initial state)
+}
+
+/**
+ * Calculate orbital elements from state vectors
+ */
+export function calculateOrbitalElementsFromState(
+    position: THREE.Vector3,
+    velocity: THREE.Vector3,
+    centralBodyMass: number
+): OrbitalElements {
+    const GValue = (G as any).over(gravitationalConstantUnit).value;
+    const mu = GValue * centralBodyMass;
+
+    const r = position.length();
+    const v = velocity.length();
+
+    // Specific orbital energy: ε = v²/2 - μ/r
+    const specificEnergy = (v * v) / 2 - mu / r;
+
+    // Semi-major axis: a = -μ/(2ε)
+    const a = -mu / (2 * specificEnergy);
+
+    // Specific angular momentum
+    const h = new THREE.Vector3().crossVectors(position, velocity);
+    const hMag = h.length();
+
+    // Eccentricity: e = sqrt(1 + (2εh²)/μ²)
+    const e = Math.sqrt(1 + (2 * specificEnergy * hMag * hMag) / (mu * mu));
+
+    const isElliptical = e < 1.0;
+    const period = isElliptical ? 2 * Math.PI * Math.sqrt((a * a * a) / mu) : 0;
+
+    return {
+        semiMajorAxis: a,
+        eccentricity: e,
+        period: period,
+        isElliptical: isElliptical
+    };
+}
+
+/**
+ * Calculate orbit basis vectors and M0 from state vectors
+ */
+export function calculateOrbitBasis(
+    initialPosition: THREE.Vector3,
+    initialVelocity: THREE.Vector3,
+    centralBodyMass: number
+): OrbitBasis {
+    const GValue = (G as any).over(gravitationalConstantUnit).value;
+    const mu = GValue * centralBodyMass;
+
+    const r0 = initialPosition.length();
+
+    // Orbital elements needed for M0
+    const elements = calculateOrbitalElementsFromState(initialPosition, initialVelocity, centralBodyMass);
+    const e = elements.eccentricity;
+
+    const radialVel0 = initialVelocity.dot(initialPosition.clone().normalize());
+    const h = new THREE.Vector3().crossVectors(initialPosition, initialVelocity);
+    const hMag = h.length();
+
+    // Calculate True Anomaly at epoch
+    const theta0 = Math.atan2(hMag * radialVel0, hMag * hMag / r0 - mu);
+
+    // Calculate Eccentric Anomaly at epoch
+    const E0 = 2 * Math.atan(Math.sqrt((1 - e) / (1 + e)) * Math.tan(theta0 / 2));
+
+    // Calculate Mean Anomaly at epoch
+    const M0 = E0 - e * Math.sin(E0);
+
+    const hNorm = h.clone().normalize();
+    const vCrossH = new THREE.Vector3().crossVectors(initialVelocity, h);
+    const eVec = vCrossH.multiplyScalar(1 / mu).sub(initialPosition.clone().normalize());
+    const eNorm = eVec.clone().normalize();
+    const periapsisDir = eNorm;
+    const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
+
+    return {
+        periapsisDir,
+        perpDir,
+        h,
+        eVec,
+        M0
+    };
+}
+
+/**
+ * Calculate position from Mean Anomaly using pre-calculated basis vectors
+ * Efficient for LUT generation and repeated calculations
+ */
+export function calculateEllipticalPositionFromBasis(
+    M: number,
+    a: number,
+    e: number,
+    periapsisDir: THREE.Vector3,
+    perpDir: THREE.Vector3
+): THREE.Vector3 {
+    // Solve Kepler's Eq: E - e*sin(E) = M
+    let E = M;
+    for (let iter = 0; iter < 10; iter++) {
+        E = M + e * Math.sin(E);
+    }
+
+    // True Anomaly
+    const theta = 2 * Math.atan2(
+        Math.sqrt(1 + e) * Math.sin(E / 2),
+        Math.sqrt(1 - e) * Math.cos(E / 2)
+    );
+
+    // Radius
+    const r = a * (1 - e * e) / (1 + e * Math.cos(theta));
+
+    // Position in orbital plane
+    const x = r * Math.cos(theta);
+    const y = r * Math.sin(theta);
+
+    // Transform to 3D
+    return new THREE.Vector3()
+        .addScaledVector(periapsisDir, x)
+        .addScaledVector(perpDir, y);
 }
