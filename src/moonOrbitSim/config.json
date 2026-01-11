@@ -27,14 +27,32 @@
         "unit": "km"
       },
       "position": {
-        "x": { "value": 0, "unit": "km" },
-        "y": { "value": 0, "unit": "km" },
-        "z": { "value": 0, "unit": "km" }
+        "x": {
+          "value": 0,
+          "unit": "km"
+        },
+        "y": {
+          "value": 0,
+          "unit": "km"
+        },
+        "z": {
+          "value": 0,
+          "unit": "km"
+        }
       },
       "velocity": {
-        "x": { "value": 0, "unit": "km/s" },
-        "y": { "value": 0, "unit": "km/s" },
-        "z": { "value": 0, "unit": "km/s" }
+        "x": {
+          "value": 0,
+          "unit": "km/s"
+        },
+        "y": {
+          "value": 0,
+          "unit": "km/s"
+        },
+        "z": {
+          "value": 0,
+          "unit": "km/s"
+        }
       },
       "parentId": "",
       "color": "3366cc"
@@ -50,14 +68,32 @@
         "unit": "km"
       },
       "position": {
-        "x": { "value": 384400, "unit": "km" },
-        "y": { "value": 0, "unit": "km" },
-        "z": { "value": 0, "unit": "km" }
+        "x": {
+          "value": 384400,
+          "unit": "km"
+        },
+        "y": {
+          "value": 0,
+          "unit": "km"
+        },
+        "z": {
+          "value": 0,
+          "unit": "km"
+        }
       },
       "velocity": {
-        "x": { "value": 0, "unit": "km/s" },
-        "y": { "value": 0, "unit": "km/s" },
-        "z": { "value": 0.522, "unit": "km/s" }
+        "x": {
+          "value": 0.4,
+          "unit": "km/s"
+        },
+        "y": {
+          "value": 0.3,
+          "unit": "km/s"
+        },
+        "z": {
+          "value": 0.522,
+          "unit": "km/s"
+        }
       },
       "parentId": "Earth",
       "color": "cccccc",

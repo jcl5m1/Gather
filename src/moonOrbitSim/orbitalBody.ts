@@ -282,6 +282,11 @@ export class OrbitalBody extends Body {
 
         // Create trajectory (one per body)
         this._trajectory = new Trajectory(scene, trajectoryColor);
+
+        // Hide markers for Earth by default (as per user request)
+        if (name.toLowerCase() === 'earth') {
+            this._trajectory.setMarkersVisible(false);
+        }
     }
 
     /**

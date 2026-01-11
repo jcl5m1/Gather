@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { G, generateEllipsePoints, generateBezierOrbitPoints, generateHyperbolicPoints, generateHyperbolicBezierPoints, calculateOrbitBasis, OrbitBasis, calculateEllipticalPositionFromBasis, calculateEllipticalPosition } from './orbitUtils';
-import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, kilograms, ZERO_LENGTH, ZERO_TIME, ZERO_VELOCITY, INFINITE_LENGTH, INFINITE_TIME, cubicKilometersPerSecondSquared, squareKilometersPerSecondSquared, kilometersPerSecond, secondsSquared, gravitationalConstantUnit } from './units';
+import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, kilograms, ZERO_LENGTH, ZERO_TIME, ZERO_VELOCITY, INFINITE_LENGTH, INFINITE_TIME, cubicKilometersPerSecondSquared, squareKilometersPerSecondSquared, kilometersPerSecond, secondsSquared, gravitationalConstantUnit, formatDistanceWithAstronomicalUnits } from './units';
 import { MeasureVector3, LengthVector3, VelocityVector3, ZERO_LENGTH_VECTOR3 } from './unitsVector3';
 
 // ============================================================================
@@ -252,15 +252,18 @@ export interface TrajectoryRender {
     orbitLine: THREE.Line;
     bezierLine: THREE.Line;
     bezierRenderers: BezierCurveRenderer[];
-    periapsisMarker: THREE.Mesh;
-    apoapsisMarker: THREE.Mesh;
+    periapsisIcon: THREE.Sprite;
+    periapsisText: THREE.Sprite;
+    apoapsisIcon: THREE.Sprite;
+    apoapsisText: THREE.Sprite;
 
     // Methods for updating the visual representation
     updateOrbitLine(points: THREE.Vector3[]): void;
     updateBezierLine(points: THREE.Vector3[]): void;
     updateBezierCurves(curves: BezierCurve[]): void;
-    updateMarkers(periapsisPos: THREE.Vector3, apoapsisPos: THREE.Vector3, visible: boolean, showApoapsis?: boolean): void;
+    updateMarkers(periapsisPos: THREE.Vector3, apoapsisPos: THREE.Vector3, visible: boolean, showApoapsis?: boolean, periDist?: Length, apoDist?: Length): void;
     updateLUTMarkers(points: THREE.Vector3[]): void;
+    setMarkersVisible(visible: boolean): void;
     setVisibility(show: boolean): void;
     cleanup(): void;
 }
@@ -269,8 +272,10 @@ export class TrajectoryRenderer implements TrajectoryRender {
     orbitLine: THREE.Line;
     bezierLine: THREE.Line;
     bezierRenderers: BezierCurveRenderer[] = [];
-    periapsisMarker: THREE.Mesh;
-    apoapsisMarker: THREE.Mesh;
+    periapsisIcon: THREE.Sprite;
+    periapsisText: THREE.Sprite;
+    apoapsisIcon: THREE.Sprite;
+    apoapsisText: THREE.Sprite;
     lutPoints: THREE.Points;
 
     private scene: THREE.Scene;
@@ -285,46 +290,49 @@ export class TrajectoryRenderer implements TrajectoryRender {
             orbitColor: '0x' + orbitColor.toString(16)
         });
 
-        // Initialize analytical orbit line (solid, white)
+        // Initialize analytical orbit line (HIDDEN by default now, as we only want Bezier)
         const orbitGeometry = new THREE.BufferGeometry();
         this.orbitLine = new THREE.Line(
             orbitGeometry,
             new THREE.LineBasicMaterial({
-                color: 0xffffff,  // White color for analytical orbit
+                color: 0xffffff,
                 opacity: 0.8,
-                transparent: true
+                transparent: true,
+                visible: false // Hide analytical line
             })
         );
+        this.orbitLine.visible = false;
         scene.add(this.orbitLine);
         console.log('[DEBUG] Added orbitLine to scene, scene children:', scene.children.length);
 
-        // Initialize bezier approximation line (dashed, slightly different color)
+        // Initialize bezier approximation line (Solid now, to be the main visual)
         const bezierGeometry = new THREE.BufferGeometry();
         this.bezierLine = new THREE.Line(
             bezierGeometry,
-            new THREE.LineDashedMaterial({
+            new THREE.LineBasicMaterial({ // Solid line
                 color: orbitColor,
-                opacity: 0.6,
-                transparent: true,
-                dashSize: 3,
-                gapSize: 2
+                opacity: 0.8,
+                transparent: true
             })
         );
         scene.add(this.bezierLine);
         console.log('[DEBUG] Added bezierLine to scene, scene children:', scene.children.length);
 
-        // Initialize markers
-        const markerGeometry = new THREE.SphereGeometry(0.5, 16, 16);
-        this.periapsisMarker = new THREE.Mesh(
-            markerGeometry,
-            new THREE.MeshBasicMaterial({ color: 0x00ff00 })
-        );
-        this.apoapsisMarker = new THREE.Mesh(
-            markerGeometry,
-            new THREE.MeshBasicMaterial({ color: 0xff0000 })
-        );
-        scene.add(this.periapsisMarker);
-        scene.add(this.apoapsisMarker);
+        // Initialize markers as Sprites
+        // Periapsis - Greenish
+        const periColor = 0x00ff00;
+        this.periapsisIcon = this.createSprite(this.createIconTexture(periColor, 'Pe'), 0.5);
+        this.periapsisText = this.createSprite(this.createTextTexture('', periColor), 1.0); // Size 1.0 for text
+
+        // Apoapsis - Reddish
+        const apoColor = 0xff0000;
+        this.apoapsisIcon = this.createSprite(this.createIconTexture(apoColor, 'Ap'), 0.5);
+        this.apoapsisText = this.createSprite(this.createTextTexture('', apoColor), 1.0);
+
+        scene.add(this.periapsisIcon);
+        scene.add(this.periapsisText);
+        scene.add(this.apoapsisIcon);
+        scene.add(this.apoapsisText);
         console.log('[DEBUG] Added markers to scene, scene children:', scene.children.length);
 
         // Initialize LUT markers (Points for screen-space rendering)
@@ -345,22 +353,28 @@ export class TrajectoryRenderer implements TrajectoryRender {
         scene.add(this.lutPoints);
     }
 
+    private createSprite(texture: THREE.Texture, scale: number): THREE.Sprite {
+        const material = new THREE.SpriteMaterial({
+            map: texture,
+            sizeAttenuation: false, // Screen space
+            depthTest: true // Keep depth test so they hide behind planets
+        });
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(scale * 0.1, scale * 0.1, 1); // Initial scale, will be adjusted
+        return sprite;
+    }
+
     /**
      * Create a circular dot texture for the sprite/points
      */
     private createDotTexture(color: number): THREE.Texture {
         try {
-            // Check if we're in a browser environment (document exists)
-            if (typeof document === 'undefined') {
-                return new THREE.Texture();
-            }
-
+            if (typeof document === 'undefined') return new THREE.Texture();
             const canvas = document.createElement('canvas');
             canvas.width = 32;
             canvas.height = 32;
             const context = canvas.getContext('2d');
             if (context) {
-                // Draw a filled circle
                 context.beginPath();
                 context.arc(16, 16, 14, 0, 2 * Math.PI);
                 context.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
@@ -370,139 +384,191 @@ export class TrajectoryRenderer implements TrajectoryRender {
             texture.needsUpdate = true;
             return texture;
         } catch (e) {
-            console.warn('[TrajectoryRenderer] Failed to create dot texture', e);
             return new THREE.Texture();
         }
+    }
 
+    private createIconTexture(color: number, label: string): THREE.Texture {
+        try {
+            if (typeof document === 'undefined') return new THREE.Texture();
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                // Draw a circle with border
+                ctx.beginPath();
+                ctx.arc(32, 32, 24, 0, 2 * Math.PI);
+                ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}44`; // Transparent fill
+                ctx.fill();
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = `#${color.toString(16).padStart(6, '0')}`;
+                ctx.stroke();
+
+                // Draw label in center
+                ctx.font = 'bold 24px Arial';
+                ctx.fillStyle = '#ffffff';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(label, 32, 32);
+            }
+            const texture = new THREE.Texture(canvas);
+            texture.needsUpdate = true;
+            return texture;
+        } catch (e) { return new THREE.Texture(); }
+    }
+
+    private createTextTexture(text: string, color: number): THREE.Texture {
+        try {
+            if (typeof document === 'undefined') return new THREE.Texture();
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.font = 'bold 20px monospace';
+                ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.shadowColor = 'black';
+                ctx.shadowBlur = 4;
+                ctx.fillText(text, 128, 32);
+            }
+            const texture = new THREE.Texture(canvas);
+            texture.needsUpdate = true;
+            return texture;
+        } catch (e) { return new THREE.Texture(); }
     }
 
     updateOrbitLine(points: THREE.Vector3[]): void {
         this.orbitLine.geometry.setFromPoints(points);
+        // Force invisible as requested ("just plot the bezier orbit")
+        this.orbitLine.visible = false;
     }
 
     updateBezierLine(points: THREE.Vector3[]): void {
         this.bezierLine.geometry.setFromPoints(points);
-        this.bezierLine.computeLineDistances(); // Required for dashed lines
+        // computeLineDistances not needed for solid line
     }
 
     updateBezierCurves(curves: BezierCurve[]): void {
-        // Clean up old bezier renderers
         this.bezierRenderers.forEach(renderer => renderer.cleanup());
         this.bezierRenderers = [];
-
-        // Create new bezier renderers
         curves.forEach(curve => {
             const renderer = new BezierCurveRenderer(this.scene, curve, this.color);
             this.bezierRenderers.push(renderer);
         });
     }
 
-    updateMarkers(periapsisPos: THREE.Vector3, apoapsisPos: THREE.Vector3, visible: boolean, showApoapsis: boolean = true): void {
-        this.periapsisMarker.position.copy(periapsisPos);
-        this.apoapsisMarker.position.copy(apoapsisPos);
-        this.periapsisMarker.visible = visible;
-        this.apoapsisMarker.visible = visible && showApoapsis;
+    updateMarkers(periapsisPos: THREE.Vector3, apoapsisPos: THREE.Vector3, visible: boolean, showApoapsis: boolean = true, periDist?: Length, apoDist?: Length): void {
+        const periScale = 0.05; // Base scale for sprites
+
+        // Update Periapsis
+        this.periapsisIcon.position.copy(periapsisPos);
+        this.periapsisIcon.scale.set(periScale, periScale, 1);
+        this.periapsisIcon.visible = visible;
+
+        // Offset text slightly above icon
+        // We can't easily know "above" in screen space without projecting. 
+        // For simplicity, we just put it near the icon in 3D space, assuming typical view. 
+        // Or we use the same position and let them overlap/rendering order handle it? 
+        // Better: Offset in Y slightly.
+        this.periapsisText.position.copy(periapsisPos);
+        // To offset in screen space, we would need to do it in vertex shader or manipulate matrix.
+        // For now, let's just create the texture such that text is at bottom/top?
+        // Or create a combined texture?
+        // Actually, just placing them at same position is fine if texture has offset.
+        // My createTextTexture centers text.
+        // Let's just create a new texture with the label.
+
+        if (visible && periDist) {
+            const label = `Pe: ${formatDistanceWithAstronomicalUnits(periDist)}`;
+            const newTex = this.createTextTexture(label, 0x00ff00);
+            if (this.periapsisText.material.map) this.periapsisText.material.map.dispose();
+            this.periapsisText.material.map = newTex;
+            // Scale text sprite to maintain aspect ratio (256x64 = 4:1)
+            this.periapsisText.scale.set(periScale * 4, periScale, 1);
+            // Offset text sprite slightly in Y to not overlap icon
+            // Note: This is 3D offset, so it scales with distance...
+            // Screen space constant offset needs a different approach (Canvas texture with both?)
+            // For now, simplified:
+            this.periapsisText.center.set(0.5, -0.5); // Anchor at top-center
+        }
+        this.periapsisText.visible = visible;
+
+        // Update Apoapsis
+        this.apoapsisIcon.position.copy(apoapsisPos);
+        this.apoapsisIcon.scale.set(periScale, periScale, 1);
+        this.apoapsisIcon.visible = visible && showApoapsis;
+
+        this.apoapsisText.position.copy(apoapsisPos);
+        if (visible && showApoapsis && apoDist) {
+            const label = `Ap: ${formatDistanceWithAstronomicalUnits(apoDist)}`;
+            const newTex = this.createTextTexture(label, 0xff0000);
+            if (this.apoapsisText.material.map) this.apoapsisText.material.map.dispose();
+            this.apoapsisText.material.map = newTex;
+            this.apoapsisText.scale.set(periScale * 4, periScale, 1);
+            this.apoapsisText.center.set(0.5, -0.5);
+        }
+        this.apoapsisText.visible = visible && showApoapsis;
+    }
+
+    setMarkersVisible(visible: boolean): void {
+        this.periapsisIcon.visible = visible;
+        this.periapsisText.visible = visible;
+        this.apoapsisIcon.visible = visible;
+        this.apoapsisText.visible = visible;
     }
 
     updateLUTMarkers(points: THREE.Vector3[]): void {
         this.lutPoints.geometry.setFromPoints(points);
-        // Ensure geometry bounding sphere is updated for frustum culling (though we disabled it)
         this.lutPoints.geometry.computeBoundingSphere();
     }
 
     setVisibility(show: boolean): void {
-        this.orbitLine.visible = show;
+        this.orbitLine.visible = false; // Always hidden
         this.bezierLine.visible = show;
         this.bezierRenderers.forEach(renderer => renderer.setVisibility(show, false));
-        this.periapsisMarker.visible = show;
-        this.apoapsisMarker.visible = show;
+        this.periapsisIcon.visible = show;
+        this.periapsisText.visible = show;
+        this.apoapsisIcon.visible = show;
+        this.apoapsisText.visible = show;
         this.lutPoints.visible = show;
     }
 
     cleanup(): void {
-        console.log('[DEBUG] TrajectoryRenderer.cleanup() called', {
-            bezierRenderersCount: this.bezierRenderers.length,
-            orbitLineInScene: this.orbitLine.parent === this.scene,
-            bezierLineInScene: this.bezierLine.parent === this.scene,
-            periapsisMarkerInScene: this.periapsisMarker.parent === this.scene,
-            apoapsisMarkerInScene: this.apoapsisMarker.parent === this.scene,
-            sceneChildrenBefore: this.scene.children.length
-        });
+        console.log('[DEBUG] TrajectoryRenderer.cleanup() called');
 
-        // Hide all objects first
         this.orbitLine.visible = false;
         this.bezierLine.visible = false;
-        this.periapsisMarker.visible = false;
-        this.apoapsisMarker.visible = false;
+        this.periapsisIcon.visible = false;
+        this.periapsisText.visible = false;
+        this.apoapsisIcon.visible = false;
+        this.apoapsisText.visible = false;
 
-        // Clean up bezier renderers
-        this.bezierRenderers.forEach((renderer, index) => {
-            console.log(`[DEBUG] Cleaning up bezier renderer ${index}`);
-            renderer.cleanup();
-        });
-
-        // Remove all objects from scene (check if they're actually in the scene first)
-        if (this.orbitLine.parent === this.scene) {
-            console.log('[DEBUG] Removing orbitLine from scene');
-            this.scene.remove(this.orbitLine);
-        } else {
-            console.log('[DEBUG] orbitLine not in scene, parent:', this.orbitLine.parent);
-        }
-        if (this.bezierLine.parent === this.scene) {
-            console.log('[DEBUG] Removing bezierLine from scene');
-            this.scene.remove(this.bezierLine);
-        } else {
-            console.log('[DEBUG] bezierLine not in scene, parent:', this.bezierLine.parent);
-        }
-        if (this.periapsisMarker.parent === this.scene) {
-            console.log('[DEBUG] Removing periapsisMarker from scene');
-            this.scene.remove(this.periapsisMarker);
-        } else {
-            console.log('[DEBUG] periapsisMarker not in scene, parent:', this.periapsisMarker.parent);
-        }
-        if (this.apoapsisMarker.parent === this.scene) {
-            console.log('[DEBUG] Removing apoapsisMarker from scene');
-            this.scene.remove(this.apoapsisMarker);
-        } else {
-            console.log('[DEBUG] apoapsisMarker not in scene, parent:', this.apoapsisMarker.parent);
-        }
-        if (this.lutPoints.parent === this.scene) {
-            console.log('[DEBUG] Removing lutPoints from scene');
-            this.scene.remove(this.lutPoints);
-        }
-
-        // Dispose of geometry and material to free resources
-        this.orbitLine.geometry.dispose();
-        if (this.orbitLine.material instanceof THREE.Material) {
-            this.orbitLine.material.dispose();
-        }
-        this.bezierLine.geometry.dispose();
-        if (this.bezierLine.material instanceof THREE.Material) {
-            this.bezierLine.material.dispose();
-        }
-        this.periapsisMarker.geometry.dispose();
-        if (this.periapsisMarker.material instanceof THREE.Material) {
-            this.periapsisMarker.material.dispose();
-        }
-        this.apoapsisMarker.geometry.dispose();
-        if (this.apoapsisMarker.material instanceof THREE.Material) {
-            this.apoapsisMarker.material.dispose();
-        }
-        this.lutPoints.geometry.dispose();
-        if (this.lutPoints.material instanceof THREE.Material) {
-            this.lutPoints.material.dispose();
-            if ((this.lutPoints.material as any).map) {
-                (this.lutPoints.material as any).map.dispose();
-            }
-        }
-
-        // Clear arrays
+        this.bezierRenderers.forEach(renderer => renderer.cleanup());
         this.bezierRenderers = [];
 
-        console.log('[DEBUG] TrajectoryRenderer.cleanup() completed', {
-            sceneChildrenAfter: this.scene.children.length,
-            bezierRenderersCleared: true
+        [
+            this.orbitLine,
+            this.bezierLine,
+            this.periapsisIcon,
+            this.periapsisText,
+            this.apoapsisIcon,
+            this.apoapsisText,
+            this.lutPoints
+        ].forEach(obj => {
+            if (obj.parent === this.scene) this.scene.remove(obj);
+            if (obj instanceof THREE.Mesh || obj instanceof THREE.Line || obj instanceof THREE.Points || obj instanceof THREE.Sprite) {
+                if (obj.geometry) obj.geometry.dispose();
+                if (obj.material instanceof THREE.Material) {
+                    obj.material.dispose();
+                    if ((obj.material as any).map) (obj.material as any).map.dispose();
+                }
+            }
         });
+
+        console.log('[DEBUG] TrajectoryRenderer.cleanup() completed');
     }
 }
 
@@ -555,6 +621,7 @@ export class Trajectory {
     private _initialVelocity: THREE.Vector3 = new THREE.Vector3();
     private _centralBodyMass: number = 0;
     private _timeWarpFunction: ((t: number) => number) | null = null;
+    private _markersVisible: boolean = true;
 
     constructor(scene: THREE.Scene, color: number = 0xff6666) {
         this._scene = scene;
@@ -568,6 +635,17 @@ export class Trajectory {
             _h: ZERO_LENGTH_VECTOR3,
             _eVec: ZERO_LENGTH_VECTOR3
         };
+    }
+
+    /**
+     * Set visibility of periapsis/apoapsis markers
+     */
+    setMarkersVisible(visible: boolean): void {
+        this._markersVisible = visible;
+        // Also update renderer immediately if it exists
+        if (this._renderer) {
+            this._renderer.setMarkersVisible(visible);
+        }
     }
 
     /**
@@ -727,8 +805,10 @@ export class Trajectory {
             this._renderer.updateMarkers(
                 this._periapsisPoint!.getVector3(),
                 this._apoapsisPoint!.getVector3(),
+                this._markersVisible,
                 true,
-                true
+                this.periapsis,
+                this.apoapsis
             );
             this._renderer.setVisibility(true);
 
@@ -787,7 +867,7 @@ export class Trajectory {
             this._renderer.updateBezierCurves(bezierResult.curves);
             // Extract THREE.Vector3 for renderer
             const periapsisVec3 = this._periapsisPoint!.getVector3();
-            this._renderer.updateMarkers(periapsisVec3, periapsisVec3, true, false);
+            this._renderer.updateMarkers(periapsisVec3, periapsisVec3, this._markersVisible, false, this.periapsis);
             this._renderer.setVisibility(true);
 
         } else {

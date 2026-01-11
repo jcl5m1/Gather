@@ -55,48 +55,48 @@ export class CommandProcessor {
             switch (cmd) {
                 case 'RESET':
                     return this.handleReset(parts.slice(1));
-                
+
                 case 'RESET_ALL':
                     return this.handleResetAll();
-                
+
                 case 'SET_TIME_SCALE':
                 case 'TIMESCALE':
                     return this.handleTimeScale(parts.slice(1));
-                
+
                 case 'GET_ORBIT_INFO':
                 case 'ORBIT_INFO':
                     return this.handleGetOrbitInfo(parts.slice(1));
-                
+
                 case 'GET_STATE':
                 case 'STATE':
                     return this.handleGetState(parts.slice(1));
-                
+
                 case 'ADD_BODY':
                     return this.handleAddBody(parts.slice(1));
-                
+
                 case 'REMOVE_BODY':
                     return this.handleRemoveBody(parts.slice(1));
-                
+
                 case 'LIST_BODIES':
                     return this.handleListBodies();
-                
+
                 case 'SET_CAMERA_FOCUS':
                 case 'CAMERA_FOCUS':
                     return this.handleSetCameraFocus(parts.slice(1));
-                
+
                 case 'START':
                     return this.handleStart();
-                
+
                 case 'STOP':
                     return this.handleStop();
-                
+
                 case 'TEST_BEZIER_ORBIT':
                 case 'TEST_BEZIER':
                     return this.handleTestBezierOrbit(parts.slice(1));
-                
+
                 case 'HELP':
                     return this.handleHelp();
-                
+
                 default:
                     return {
                         success: false,
@@ -118,7 +118,7 @@ export class CommandProcessor {
         }
 
         const params = this.parseKeyValuePairs(args);
-        
+
         const position = this.parseVector3(params.position || '15,5,3');
         const velocity = this.parseVector3(params.velocity || '2,10,0');
         const mass = parseFloat(params.mass || '1.0');
@@ -178,7 +178,7 @@ export class CommandProcessor {
 
     private handleResetToInitial(): CommandResult {
         console.log('[CommandProcessor] RESET command called (no parameters) - performing full reset');
-        
+
         if (!this.initializeSimulationCallback) {
             console.error('[CommandProcessor] ERROR: Initialize simulation callback not set');
             return {
@@ -186,7 +186,7 @@ export class CommandProcessor {
                 message: 'Initialize simulation callback not set. Cannot perform full reset.'
             };
         }
-        
+
         // Call the initialization method (same as page load)
         // This will:
         // - Clear the command processor's body map
@@ -195,12 +195,12 @@ export class CommandProcessor {
         // - Re-add the Moon
         // The Moon will be added to orbitalBodyIdMap automatically via ADD_BODY command
         this.initializeSimulationCallback();
-        
+
         // Get the Moon body name for the response
         const moonConfig = config.bodies.moon;
-        
+
         console.log('[CommandProcessor] RESET complete');
-        
+
         return {
             success: true,
             message: 'Reset simulation to initial state (same as page refresh)',
@@ -217,7 +217,7 @@ export class CommandProcessor {
         return {
             success: true,
             message: 'Reset all simulation parameters and all orbital bodies to initial conditions',
-            data: { 
+            data: {
                 timeScale: this.gameLoop.getTimeScale(),
                 currentTime: this.gameLoop.getCurrentTime()
             }
@@ -320,7 +320,7 @@ export class CommandProcessor {
 
         // Calculate orbital elements
         const specificEnergy = (v * v / 2) - (mu / r);
-        
+
         // Only handle elliptical orbits (bound orbits)
         if (specificEnergy >= 0) {
             return null; // Hyperbolic or parabolic, not valid for our requirements
@@ -341,10 +341,10 @@ export class CommandProcessor {
 
     private handleAddBody(args: string[]): CommandResult {
         const params = this.parseKeyValuePairs(args);
-        
+
         // Check if any parameters were provided
         const hasParams = args.length > 0 && Object.keys(params).length > 0;
-        
+
         let position: THREE.Vector3 | null = null;
         let velocity: THREE.Vector3 | null = null;
         let mass: number = 0;
@@ -361,36 +361,36 @@ export class CommandProcessor {
             let validOrbit = false;
             let attempts = 0;
             const maxAttempts = 1000;
-            
+
             // Generate random color (same for all attempts)
             const hue = Math.random() * 360;
             const colorObj = new THREE.Color().setHSL(hue / 360, 0.7, 0.5);
             const colorHex = colorObj.getHexString();
             const trajectoryColorObj = new THREE.Color().setHSL(hue / 360, 0.5, 0.7);
             const trajectoryColorHex = trajectoryColorObj.getHexString();
-            
+
             // Small mass and radius for the body
             mass = 1e10; // Small mass in kg
             radius = 10; // 10 km radius
             color = parseInt(colorHex, 16);
             trajectoryColor = parseInt(trajectoryColorHex, 16);
             bodyId = params.id || `RandomBody_${this.nextBodyId++}`;
-            
+
             while (!validOrbit && attempts < maxAttempts) {
                 attempts++;
-                
+
                 // Generate random position (distance from origin)
                 // Try distances between 50km and 500000km
                 const distance = 50 + Math.random() * (500000 - 50);
                 const theta = Math.random() * 2 * Math.PI; // Azimuth angle
                 const phi = Math.acos(2 * Math.random() - 1); // Polar angle (uniform distribution on sphere)
-                
+
                 position = new THREE.Vector3(
                     distance * Math.sin(phi) * Math.cos(theta),
                     distance * Math.sin(phi) * Math.sin(theta),
                     distance * Math.cos(phi)
                 );
-                
+
                 // Generate random velocity
                 // Velocity magnitude should be reasonable for orbit (not too fast, not too slow)
                 // For circular orbit at distance r: v = sqrt(G*M/r)
@@ -398,29 +398,29 @@ export class CommandProcessor {
                 const GValue = (G as any).over(gravitationalConstantUnit).value;
                 const circularVel = Math.sqrt(GValue * centralMass / distance);
                 const velMagnitude = circularVel * (0.5 + Math.random() * 1.5); // 0.5x to 2x circular velocity
-                
+
                 const velTheta = Math.random() * 2 * Math.PI;
                 const velPhi = Math.acos(2 * Math.random() - 1);
-                
+
                 velocity = new THREE.Vector3(
                     velMagnitude * Math.sin(velPhi) * Math.cos(velTheta),
                     velMagnitude * Math.sin(velPhi) * Math.sin(velTheta),
                     velMagnitude * Math.cos(velPhi)
                 );
-                
+
                 // Compute orbit parameters from position and velocity
                 const orbitParams = this.computeOrbitParameters(position, velocity, centralMass);
-                
+
                 if (orbitParams && orbitParams.type === 'elliptical') {
                     // Check if orbit meets requirements:
                     // - Eccentricity between 0.2 and 0.8
                     // - Periapsis > 50km
                     // - Apoapsis < 500000km
                     if (orbitParams.e >= 0.2 && orbitParams.e <= 0.8 &&
-                        orbitParams.periapsis > 50 &&
-                        orbitParams.apoapsis < 500000) {
+                        orbitParams.periapsis > 10000 &&
+                        orbitParams.apoapsis > 10000) {
                         validOrbit = true;
-                        
+
                         // Store random values for output
                         randomValues = {
                             position: `${position.x.toFixed(2)},${position.y.toFixed(2)},${position.z.toFixed(2)}`,
@@ -434,11 +434,11 @@ export class CommandProcessor {
                     }
                 }
             }
-            
+
             if (!validOrbit) {
                 return {
                     success: false,
-                    message: `Failed to generate valid orbit after ${maxAttempts} attempts. Requirements: eccentricity 0.2-0.8, periapsis >50km, apoapsis <500000km.`
+                    message: `Failed to generate valid orbit after ${maxAttempts} attempts. Requirements: eccentricity 0.2-0.8, periapsis >10000km, apoapsis >10000km.`
                 };
             }
         } else {
@@ -486,7 +486,7 @@ export class CommandProcessor {
         const trajectory = body.getTrajectory();
         const orbitParams = trajectory.getParameters();
         const orbitType = trajectory.getType();
-        
+
         // Extract numeric values from Measure types
         const aValue = orbitParams._a.over(kilometers).value;
         const periodValue = orbitParams.period.over(seconds).value;
@@ -507,21 +507,21 @@ export class CommandProcessor {
         if (periodValue !== undefined && periodValue !== null && isFinite(periodValue)) {
             message += `, period=${periodValue.toFixed(2)}s`;
         }
-        
+
         // Verify orbit meets requirements
         if (randomValues) {
             const meetsEccentricity = orbitParams.e >= 0.2 && orbitParams.e <= 0.8;
-            const meetsPeriapsis = computedPeriapsis > 50;
-            const meetsApoapsis = computedApoapsis < 500000;
+            const meetsPeriapsis = computedPeriapsis > 10000;
+            const meetsApoapsis = computedApoapsis > 10000;
             if (meetsEccentricity && meetsPeriapsis && meetsApoapsis) {
-                message += `\n\n✓ Orbit meets requirements: e=${orbitParams.e.toFixed(3)} (0.2-0.8), rp=${computedPeriapsis.toFixed(2)}km (>50km), ra=${computedApoapsis.toFixed(2)}km (<500000km)`;
+                message += `\n\n✓ Orbit meets requirements: e=${orbitParams.e.toFixed(3)} (0.2-0.8), rp=${computedPeriapsis.toFixed(2)}km (>10000km), ra=${computedApoapsis.toFixed(2)}km (>10000km)`;
             }
         }
 
         return {
             success: true,
             message: message,
-            data: { 
+            data: {
                 bodyId,
                 randomValues: randomValues || undefined,
                 orbitType,
@@ -635,7 +635,7 @@ export class CommandProcessor {
         // Get body ID from args or use first orbital body
         const bodyId = args[0];
         let body: OrbitalBody | undefined | null;
-        
+
         if (bodyId) {
             body = this.orbitalBodyIdMap.get(bodyId);
             if (!body) {
@@ -657,7 +657,7 @@ export class CommandProcessor {
         // Get orbit parameters
         const trajectory = body.getTrajectory();
         const params = trajectory.getParameters();
-        
+
         if (trajectory.getType() !== 'elliptical') {
             return {
                 success: false,
@@ -668,7 +668,7 @@ export class CommandProcessor {
         // Extract numeric values
         const a = params._a.over(kilometers).value;
         const e = params.e;
-        
+
         // Get orbit plane basis vectors
         const hVec = params._h.getVector3();
         const eVec = params._eVec.getVector3();
@@ -676,7 +676,7 @@ export class CommandProcessor {
         const eNorm = eVec.clone().normalize();
         const periapsisDir = eNorm;
         const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-        
+
         // Run the test
         console.log('');
         console.log('========================================');

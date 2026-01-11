@@ -235,7 +235,6 @@ export class GameLoop {
      */
     setTimeScale(scale: number): void {
         this.timeScale = scale;
-        this._orbitalBodies.forEach(body => body.setTimeScale(scale));
     }
 
     /**

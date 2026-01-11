@@ -56,9 +56,9 @@ export class UIManager {
         this.cameraManager = cameraManager;
         this.initializeUI();
         this.setupEventListeners();
-        
+
         // Initial time scale is now set in initializeUI (default 1000, logarithmic)
-        
+
         // Setup camera target change callback for focused body updates
         // Camera section is now auto-generated and will update via updateAllSections()
         if (this.cameraManager) {
@@ -73,10 +73,10 @@ export class UIManager {
             this.updateFormForFocusedBody(initialTarget);
             this.startCurrentValuesUpdates(initialTarget);
         }
-        
+
         // Don't reset simulation here - let app.ts initialize the Moon first
         // The UI fields are already initialized with Moon parameters
-        
+
         // Start frame-by-frame updates for GameLoop section
         this.startGameLoopSectionUpdates();
     }
@@ -110,14 +110,14 @@ export class UIManager {
             border-bottom: 1px solid rgba(255,255,255,0.1);
             margin: 0;
         `;
-        
+
         const arrow = document.createElement('span');
         arrow.style.cssText = 'margin-right: 6px; font-size: 10px; width: 12px; display: inline-block;';
         arrow.innerHTML = defaultExpanded ? '&#9660;' : '&#9654;';
-        
+
         const titleSpan = document.createElement('span');
         titleSpan.textContent = title;
-        
+
         header.appendChild(arrow);
         header.appendChild(titleSpan);
 
@@ -158,23 +158,23 @@ export class UIManager {
         // Get the object to determine its class name for the title
         const obj = getObject();
         const className = obj ? this.getClassName(obj) : 'Unknown';
-        
+
         // Extract ID from class name by normalizing it (lowercase, remove spaces)
         const id = className.toLowerCase().replace(/\s+/g, '');
-        
+
         // Auto-generate empty message from class name
         const emptyMessage = `No ${className} available`;
-        
+
         const section = this.createCollapsibleSection(className, defaultExpanded);
         const contentContainer = document.createElement('div');
         contentContainer.style.cssText = 'width: 100%; margin: 0;';
         section.content.appendChild(contentContainer);
         propertyInspector.appendChild(section.container);
-        
+
         // Extract header title span (second span is the title, first is the arrow)
         const titleSpans = section.header.querySelectorAll('span');
         const headerTitle = titleSpans.length > 1 ? titleSpans[1] as HTMLSpanElement : titleSpans[0] as HTMLSpanElement;
-        
+
         return {
             id: id,
             title: className,
@@ -195,7 +195,7 @@ export class UIManager {
     private createPropertyRow(label: string, value: string | HTMLElement, readOnly: boolean = true): HTMLTableRowElement {
         const row = document.createElement('tr');
         row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
-        
+
         const labelCell = document.createElement('td');
         labelCell.style.cssText = `
             padding: 2px 2px;
@@ -205,7 +205,7 @@ export class UIManager {
             margin: 0;
         `;
         labelCell.textContent = label;
-        
+
         const valueCell = document.createElement('td');
         valueCell.style.cssText = `
             padding: 2px 2px;
@@ -213,13 +213,13 @@ export class UIManager {
             color: rgba(255,255,255,0.95);
             margin: 0;
         `;
-        
+
         if (typeof value === 'string') {
             valueCell.textContent = value;
         } else {
             valueCell.appendChild(value);
         }
-        
+
         row.appendChild(labelCell);
         row.appendChild(valueCell);
         return row;
@@ -234,11 +234,11 @@ export class UIManager {
         if (!variableName || variableName.length <= 1) {
             return variableName;
         }
-        
+
         // Split camelCase into words
         const words: string[] = [];
         let currentWord = variableName[0].toUpperCase();
-        
+
         for (let i = 1; i < variableName.length; i++) {
             const char = variableName[i];
             // If uppercase, start a new word
@@ -251,11 +251,11 @@ export class UIManager {
                 currentWord += char;
             }
         }
-        
+
         if (currentWord) {
             words.push(currentWord);
         }
-        
+
         return words.join(' ');
     }
 
@@ -275,7 +275,7 @@ export class UIManager {
     } {
         const row = document.createElement('tr');
         row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
-        
+
         const labelCell = document.createElement('td');
         labelCell.style.cssText = `
             padding: 2px 2px;
@@ -285,10 +285,10 @@ export class UIManager {
             margin: 0;
         `;
         labelCell.textContent = label;
-        
+
         const valueCell = document.createElement('td');
         valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
-        
+
         const input = document.createElement('input');
         input.type = 'number';
         input.id = id;
@@ -304,11 +304,11 @@ export class UIManager {
             font-size: 11px;
             font-family: monospace;
         `;
-        
+
         valueCell.appendChild(input);
         row.appendChild(labelCell);
         row.appendChild(valueCell);
-        
+
         return { row, input };
     }
 
@@ -322,7 +322,7 @@ export class UIManager {
     } {
         const row = document.createElement('tr');
         row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
-        
+
         const labelCell = document.createElement('td');
         labelCell.style.cssText = `
             padding: 2px 2px;
@@ -332,13 +332,13 @@ export class UIManager {
             margin: 0;
         `;
         labelCell.textContent = label;
-        
+
         const valueCell = document.createElement('td');
         valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
-        
+
         const sliderContainer = document.createElement('div');
         sliderContainer.style.cssText = 'display: flex; align-items: center; gap: 8px; margin: 0;';
-        
+
         const slider = document.createElement('input');
         slider.type = 'range';
         slider.id = id;
@@ -347,7 +347,7 @@ export class UIManager {
         slider.step = step;
         slider.value = value;
         slider.style.cssText = 'flex: 1; margin: 0;';
-        
+
         const valueDisplay = document.createElement('span');
         valueDisplay.style.cssText = `
             min-width: 50px;
@@ -358,13 +358,13 @@ export class UIManager {
             margin: 0;
         `;
         valueDisplay.textContent = value;
-        
+
         sliderContainer.appendChild(slider);
         sliderContainer.appendChild(valueDisplay);
         valueCell.appendChild(sliderContainer);
         row.appendChild(labelCell);
         row.appendChild(valueCell);
-        
+
         return { row, slider, valueDisplay };
     }
 
@@ -374,7 +374,7 @@ export class UIManager {
     private createButtonProperty(label: string, buttonText: string, onClick: () => void): HTMLTableRowElement {
         const row = document.createElement('tr');
         row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
-        
+
         const labelCell = document.createElement('td');
         labelCell.style.cssText = `
             padding: 2px 2px;
@@ -384,10 +384,10 @@ export class UIManager {
             margin: 0;
         `;
         labelCell.textContent = label;
-        
+
         const valueCell = document.createElement('td');
         valueCell.style.cssText = 'padding: 0; margin: 0; border: 0;';
-        
+
         const button = document.createElement('button');
         button.textContent = buttonText;
         button.style.cssText = `
@@ -400,11 +400,11 @@ export class UIManager {
             font-size: 11px;
         `;
         button.onclick = onClick;
-        
+
         valueCell.appendChild(button);
         row.appendChild(labelCell);
         row.appendChild(valueCell);
-        
+
         return row;
     }
 
@@ -417,7 +417,7 @@ export class UIManager {
     } {
         const row = document.createElement('tr');
         row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
-        
+
         const labelCell = document.createElement('td');
         labelCell.style.cssText = `
             padding: 2px 2px;
@@ -427,10 +427,10 @@ export class UIManager {
             margin: 0;
         `;
         labelCell.textContent = label;
-        
+
         const valueCell = document.createElement('td');
         valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
-        
+
         const select = document.createElement('select');
         select.id = id;
         select.style.cssText = `
@@ -442,7 +442,7 @@ export class UIManager {
             border: 1px solid rgba(255,255,255,0.2);
             font-size: 11px;
         `;
-        
+
         options.forEach(option => {
             const optionElement = document.createElement('option');
             optionElement.value = option;
@@ -452,13 +452,13 @@ export class UIManager {
             }
             select.appendChild(optionElement);
         });
-        
+
         select.addEventListener('change', () => onChange(select.value));
-        
+
         valueCell.appendChild(select);
         row.appendChild(labelCell);
         row.appendChild(valueCell);
-        
+
         return { row, select };
     }
 
@@ -473,10 +473,10 @@ export class UIManager {
             minWidth: 250,
             minHeight: 200
         });
-        
+
         // Dock to left by default
         this.propertyInspectorWindow.dockToSide('left');
-        
+
         // Get the content area to add sections
         const propertyInspector = this.propertyInspectorWindow.getPropertyInspectorContent();
 
@@ -499,7 +499,7 @@ export class UIManager {
         // Section 1: Dynamically generated from focused object's trajectory property
         // Title will be updated to the actual class name via introspection
         this.sections.push(this.createUISection(
-            () => this.currentFocusedBodyName 
+            () => this.currentFocusedBodyName
                 ? this.simulationController.getTrajectory(this.currentFocusedBodyName)
                 : null,
             true,
@@ -508,7 +508,7 @@ export class UIManager {
 
         // Section 2: Initial Parameters (dynamically generated from orbital body)
         this.sections.push(this.createUISection(
-            () => this.currentFocusedBodyName 
+            () => this.currentFocusedBodyName
                 ? this.simulationController.getBody(this.currentFocusedBodyName)
                 : null,
             false,
@@ -527,7 +527,7 @@ export class UIManager {
             propertyInspector,
             true
         ));
-        
+
         // Initialize time scale from gameLoop (which loads from config.json)
         const gameLoop = this.simulationController.getGameLoop();
         this.currentTimeScale = gameLoop.getTimeScale();
@@ -562,7 +562,7 @@ export class UIManager {
             display: flex;
             flex-direction: column;
         `;
-        
+
         // Create resize handle at the top
         const resizeHandle = document.createElement('div');
         resizeHandle.style.cssText = `
@@ -582,12 +582,12 @@ export class UIManager {
         resizeHandle.onmouseleave = () => {
             resizeHandle.style.background = 'rgba(100,150,255,0.3)';
         };
-        
+
         // Add resize functionality
         let isResizing = false;
         let startY = 0;
         let startHeight = 0;
-        
+
         resizeHandle.addEventListener('mousedown', (e) => {
             if (this.isCommandContainerCollapsed) return;
             isResizing = true;
@@ -595,7 +595,7 @@ export class UIManager {
             startHeight = this.commandContainerHeight;
             e.preventDefault();
         });
-        
+
         document.addEventListener('mousemove', (e) => {
             if (!isResizing) return;
             const deltaY = startY - e.clientY; // Inverted because we're at the bottom
@@ -603,24 +603,24 @@ export class UIManager {
             this.commandContainerHeight = newHeight;
             commandContainer.style.height = `${newHeight}px`;
         });
-        
+
         document.addEventListener('mouseup', () => {
             if (isResizing) {
                 isResizing = false;
             }
         });
-        
+
         // Add double-click to collapse/expand
         resizeHandle.addEventListener('dblclick', (e) => {
             e.preventDefault();
             e.stopPropagation();
             this.toggleCommandContainerCollapse();
         });
-        
+
         commandContainer.appendChild(resizeHandle);
         const commandInputContainer = document.createElement('div');
         commandInputContainer.style.cssText = 'display: flex; gap: 4px; margin-bottom: 4px; align-items: center; flex-shrink: 0; margin-top: 8px;';
-        
+
         this.commandInput = document.createElement('input');
         this.commandInput.type = 'text';
         this.commandInput.placeholder = 'Enter command (e.g., RESET position:20,5,3 velocity:2,8.5,0 mass:1.0)';
@@ -634,7 +634,7 @@ export class UIManager {
             font-family: monospace;
             font-size: 12px;
         `;
-        
+
         // Ensure input captures all events when focused
         this.commandInput.addEventListener('mousedown', (e) => {
             e.stopPropagation();
@@ -645,7 +645,7 @@ export class UIManager {
         this.commandInput.addEventListener('click', (e) => {
             e.stopPropagation();
         });
-        
+
         const commandButton = document.createElement('button');
         commandButton.textContent = 'Execute';
         commandButton.style.cssText = `
@@ -658,11 +658,11 @@ export class UIManager {
             font-size: 12px;
         `;
         commandButton.onclick = () => this.executeCommand();
-        
+
         commandInputContainer.appendChild(this.commandInput);
         commandInputContainer.appendChild(commandButton);
         commandContainer.appendChild(commandInputContainer);
-        
+
         this.commandOutput = document.createElement('div');
         this.commandOutput.id = 'commandOutput';
         this.commandOutput.style.cssText = `
@@ -689,13 +689,13 @@ export class UIManager {
         `;
         document.head.appendChild(style);
         commandContainer.appendChild(this.commandOutput);
-        
+
         document.body.appendChild(commandContainer);
-        
+
         // Start collapsed by default
         this.toggleCommandContainerCollapse();
     }
-    
+
     private toggleCommandContainerCollapse(): void {
         if (this.isCommandContainerCollapsed) {
             // Expand
@@ -738,8 +738,8 @@ export class UIManager {
             // Only handle game hotkeys when NOT in an input field
             if (event.key === ' ') {
                 event.preventDefault();
-                // Space key triggers ADD_BODY 50 times (with random values)
-                for (let i = 0; i < 50; i++) {
+                // Space key triggers ADD_BODY 10 times (with random values)
+                for (let i = 0; i < 10; i++) {
                     this.executeAndDisplayCommand('ADD_BODY');
                 }
             } else if (event.key === 'h' || event.key === 'H') {
@@ -786,7 +786,7 @@ export class UIManager {
                 if (timeScale !== undefined) {
                     this.currentTimeScale = timeScale;
                 }
-                
+
                 // Update all UI sections (camera dropdown and game loop will refresh automatically)
                 this.updateAllSections();
             }
@@ -815,21 +815,21 @@ export class UIManager {
      */
     private executeAndDisplayCommand(command: string): any {
         const result = this.simulationController.executeCommand(command);
-        
+
         // Display result
         const output = this.commandOutput;
         const timestamp = new Date().toLocaleTimeString();
         const status = result.success ? '✓' : '✗';
         const message = result.message || (result.success ? 'Command executed' : 'Command failed');
-        
+
         // Render message as markdown
         const renderedMessage = marked(message) as string;
-        
+
         output.innerHTML += `<div style="color: ${result.success ? '#90EE90' : '#FF6B6B'};">
             [${timestamp}] ${status} ${command}<br>
             ${renderedMessage}
         </div>`;
-        
+
         // Auto-scroll to bottom
         output.scrollTop = output.scrollHeight;
 
@@ -842,9 +842,9 @@ export class UIManager {
 
         // If command was ADD_BODY, REMOVE_BODY, or camera-related, update all sections
         // This will refresh the auto-generated camera dropdown with new options
-        if (command.toUpperCase().startsWith('ADD_BODY') || 
+        if (command.toUpperCase().startsWith('ADD_BODY') ||
             command.toUpperCase().startsWith('REMOVE_BODY') ||
-            command.toUpperCase().startsWith('SET_CAMERA_FOCUS') || 
+            command.toUpperCase().startsWith('SET_CAMERA_FOCUS') ||
             command.toUpperCase().startsWith('CAMERA_FOCUS')) {
             if (result.success) {
                 this.updateAllSections();
@@ -862,7 +862,7 @@ export class UIManager {
         if (!command) return;
 
         this.executeAndDisplayCommand(command);
-        
+
         // Clear input
         this.commandInput.value = '';
     }
@@ -874,29 +874,29 @@ export class UIManager {
      */
     private getPublicProperties(obj: any): { [key: string]: any } {
         const props: { [key: string]: any } = {};
-        
+
         if (!obj) return props;
-        
+
         // Get ALL own property names (including non-enumerable)
         const allPropertyNames = Object.getOwnPropertyNames(obj);
-        
+
         // Also get enumerable properties from Object.keys
         const enumerableKeys = Object.keys(obj);
-        
+
         // Combine and deduplicate
         const allKeys = [...new Set([...allPropertyNames, ...enumerableKeys])];
-        
+
         for (const key of allKeys) {
             // Skip functions
             if (typeof obj[key] === 'function') {
                 continue;
             }
-            
+
             // Skip properties starting with underscore (convention for private members)
             if (key.startsWith('_')) {
                 continue;
             }
-            
+
             // Get property descriptor to analyze the property
             let descriptor: PropertyDescriptor | undefined;
             try {
@@ -904,12 +904,12 @@ export class UIManager {
             } catch (e) {
                 continue;
             }
-            
+
             // Skip if property doesn't exist or can't be accessed
             if (!descriptor) {
                 continue;
             }
-            
+
             // Skip non-enumerable properties that are likely internal
             // Exception: allow enumerable data properties
             if (!descriptor.enumerable) {
@@ -922,23 +922,23 @@ export class UIManager {
                     continue;
                 }
             }
-            
+
             // Skip if it's a getter-only property without a setter (might be read-only/internal)
             if (descriptor.get && !descriptor.set && descriptor.enumerable === false) {
                 continue;
             }
-            
+
             try {
                 const value = obj[key];
-                
+
                 // Skip if it's a THREE.js internal object
                 if (value !== null && typeof value === 'object') {
-                    if (value.isObject3D || value.isScene || value.isMesh || value.isLine || 
+                    if (value.isObject3D || value.isScene || value.isMesh || value.isLine ||
                         value.isMaterial || value.isGeometry || value.isBufferGeometry) {
                         continue;
                     }
                 }
-                
+
                 // Skip common internal properties that shouldn't be displayed
                 const commonInternalProps = [
                     'constructor', 'prototype', '__proto__', 'toString', 'valueOf',
@@ -948,14 +948,14 @@ export class UIManager {
                 if (commonInternalProps.includes(key)) {
                     continue;
                 }
-                
+
                 props[key] = value;
             } catch (e) {
                 // If we can't access the property, skip it
                 continue;
             }
         }
-        
+
         return props;
     }
 
@@ -986,9 +986,9 @@ export class UIManager {
 
         // Check if any input in the container has focus - if so, don't regenerate
         const activeElement = document.activeElement;
-        const hasFocusedInput = container.contains(activeElement) && 
-                                 (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLSelectElement);
-        
+        const hasFocusedInput = container.contains(activeElement) &&
+            (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLSelectElement);
+
         if (hasFocusedInput) {
             // Don't regenerate if user is typing - just update non-focused inputs
             // Update existing input values without recreating them
@@ -1037,17 +1037,17 @@ export class UIManager {
         // Generate input fields for each editable property
         for (const key of sortedKeys) {
             const value = publicProps[key];
-            
+
             // Handle dropdown properties: object with { value, options } structure
-            if (value !== null && typeof value === 'object' && 
-                'value' in value && 'options' in value && 
+            if (value !== null && typeof value === 'object' &&
+                'value' in value && 'options' in value &&
                 Array.isArray(value.options)) {
                 const dropdownValue = value as { value: any; options: any[] };
-                
+
                 // Create a single row with label and dropdown
                 const row = document.createElement('tr');
                 row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
-                
+
                 // Label cell
                 const labelCell = document.createElement('td');
                 labelCell.style.cssText = `
@@ -1058,11 +1058,11 @@ export class UIManager {
                     margin: 0;
                 `;
                 labelCell.textContent = this.formatLabelFromVariableName(key);
-                
+
                 // Value cell with dropdown
                 const valueCell = document.createElement('td');
                 valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
-                
+
                 const select = document.createElement('select');
                 select.id = idPrefix + key;
                 select.disabled = shouldDisable;
@@ -1076,14 +1076,14 @@ export class UIManager {
                     font-size: 11px;
                     font-family: monospace;
                 `;
-                
+
                 // Populate dropdown with options
                 dropdownValue.options.forEach((option, index) => {
                     const optionElement = document.createElement('option');
                     // Handle different option types
                     let optionText: string;
                     let optionValue: string;
-                    
+
                     if (option === null) {
                         optionText = 'Free Camera';
                         optionValue = String(index);
@@ -1102,10 +1102,10 @@ export class UIManager {
                         optionText = String(option);
                         optionValue = String(option);
                     }
-                    
+
                     optionElement.value = optionValue;
                     optionElement.textContent = optionText;
-                    
+
                     // Check if this option matches the current value
                     // Value can be a number (index) or the option itself
                     const currentValue = dropdownValue.value;
@@ -1116,23 +1116,23 @@ export class UIManager {
                     } else if (option === currentValue || String(option) === String(currentValue)) {
                         optionElement.selected = true;
                     }
-                    
+
                     select.appendChild(optionElement);
                 });
-                
+
                 // Handle change event
                 select.addEventListener('change', () => {
                     // Get the selected index from the option value
                     const selectedIndex = parseInt(select.value, 10);
                     const newValue = isNaN(selectedIndex) ? select.value : selectedIndex;
-                    
+
                     // Update the property - preserve options and update value
                     try {
                         // Get fresh options in case they've changed (e.g., new bodies added)
                         const currentProperty = obj[key];
                         const updatedOptions = (currentProperty && currentProperty.options) ? currentProperty.options : dropdownValue.options;
                         obj[key] = { value: newValue, options: updatedOptions };
-                        
+
                         // If this is CameraManager's cameraFocus property, apply the change
                         const className = this.getClassName(obj);
                         if (className === 'CameraManager' && key === 'cameraFocus' && typeof obj.applyCameraFocusChange === 'function') {
@@ -1143,23 +1143,23 @@ export class UIManager {
                         console.warn(`Could not set ${key} property:`, e);
                     }
                 });
-                
+
                 valueCell.appendChild(select);
                 row.appendChild(labelCell);
                 row.appendChild(valueCell);
                 table.appendChild(row);
                 continue;
             }
-            
+
             // Handle THREE.Vector3 - create inputs for x, y, z on a single row
             if (value instanceof THREE.Vector3) {
                 const vec = value as THREE.Vector3;
                 const step = key.includes('velocity') || key.includes('vel') ? '0.001' : '1000';
-                
+
                 // Create a single row with label and three inputs (X, Y, Z) side by side
                 const row = document.createElement('tr');
                 row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
-                
+
                 // Label cell
                 const labelCell = document.createElement('td');
                 labelCell.style.cssText = `
@@ -1170,14 +1170,14 @@ export class UIManager {
                     margin: 0;
                 `;
                 labelCell.textContent = this.formatLabelFromVariableName(key);
-                
+
                 // Value cell with three inputs
                 const valueCell = document.createElement('td');
                 valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
-                
+
                 const inputsContainer = document.createElement('div');
                 inputsContainer.style.cssText = 'display: flex; gap: 4px; align-items: center; margin: 0;';
-                
+
                 // X input
                 const xInput = document.createElement('input');
                 xInput.type = 'number';
@@ -1203,7 +1203,7 @@ export class UIManager {
                         this.updateBodyFromObject(obj);
                     }
                 });
-                
+
                 // Y input
                 const yInput = document.createElement('input');
                 yInput.type = 'number';
@@ -1229,7 +1229,7 @@ export class UIManager {
                         this.updateBodyFromObject(obj);
                     }
                 });
-                
+
                 // Z input
                 const zInput = document.createElement('input');
                 zInput.type = 'number';
@@ -1255,12 +1255,12 @@ export class UIManager {
                         this.updateBodyFromObject(obj);
                     }
                 });
-                
+
                 inputsContainer.appendChild(xInput);
                 inputsContainer.appendChild(yInput);
                 inputsContainer.appendChild(zInput);
                 valueCell.appendChild(inputsContainer);
-                
+
                 row.appendChild(labelCell);
                 row.appendChild(valueCell);
                 table.appendChild(row);
@@ -1269,7 +1269,7 @@ export class UIManager {
             else if (typeof value === 'number') {
                 const className = this.getClassName(obj);
                 const step = key === 'mass' ? '1e20' : (key === 'timeScale' ? '1' : '0.001');
-                
+
                 const numInput = this.createReadWriteProperty(
                     this.formatLabelFromVariableName(key),
                     idPrefix + key,
@@ -1299,10 +1299,10 @@ export class UIManager {
             // Handle string types
             else if (typeof value === 'string') {
                 const className = this.getClassName(obj);
-                
+
                 const row = document.createElement('tr');
                 row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
-                
+
                 const labelCell = document.createElement('td');
                 labelCell.style.cssText = `
                     padding: 2px 2px;
@@ -1312,10 +1312,10 @@ export class UIManager {
                     margin: 0;
                 `;
                 labelCell.textContent = this.formatLabelFromVariableName(key);
-                
+
                 const valueCell = document.createElement('td');
                 valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
-                
+
                 const textInput = document.createElement('input');
                 textInput.type = 'text';
                 textInput.id = idPrefix + key;
@@ -1337,7 +1337,7 @@ export class UIManager {
                         this.updateBodyFromObject(obj);
                     }
                 });
-                
+
                 valueCell.appendChild(textInput);
                 row.appendChild(labelCell);
                 row.appendChild(valueCell);
@@ -1353,17 +1353,17 @@ export class UIManager {
      */
     private updateBodyFromObject(body: any): void {
         if (!this.currentFocusedBodyName || !body) return;
-        
+
         // Get the central body mass for trajectory recalculation
         const centralBody = this.simulationController.getGameLoop().getCentralBody();
         const centralMass = centralBody.getMass();
-        
+
         // Update the body using RESET command with new values
         const pos = body.initialPosition;
         const vel = body.initialVelocity;
         const mass = body.mass;
         const radius = body.radius;
-        
+
         const command = `RESET position:${pos.x},${pos.y},${pos.z} velocity:${vel.x},${vel.y},${vel.z} mass:${mass} radius:${radius} bodyId:${this.currentFocusedBodyName}`;
         this.executeAndDisplayCommand(command);
     }
@@ -1374,13 +1374,13 @@ export class UIManager {
      */
     private updateBodyFromObjectWithValue(body: any, propertyKey: string, newValue: number): void {
         if (!this.currentFocusedBodyName || !body) return;
-        
+
         // Get current values, but use newValue for the changed property
         const pos = body.initialPosition;
         const vel = body.initialVelocity;
         const mass = propertyKey === 'mass' ? newValue : body.mass;
         const radius = propertyKey === 'radius' ? newValue : body.radius;
-        
+
         const command = `RESET position:${pos.x},${pos.y},${pos.z} velocity:${vel.x},${vel.y},${vel.z} mass:${mass} radius:${radius} bodyId:${this.currentFocusedBodyName}`;
         this.executeAndDisplayCommand(command);
     }
@@ -1408,7 +1408,7 @@ export class UIManager {
         // Generate property rows for each public property
         for (const key of sortedKeys) {
             const value = publicProps[key];
-            
+
             // Handle nested objects (like parameters)
             if (typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof THREE.Vector3)) {
                 // Check if the value itself is a Measure - if so, format it directly instead of recursing
@@ -1422,7 +1422,7 @@ export class UIManager {
                     // For nested objects, display their properties individually
                     const nestedProps = this.getPublicProperties(value);
                     const nestedKeys = Object.keys(nestedProps).sort();
-                    
+
                     for (const nestedKey of nestedKeys) {
                         const nestedValue = nestedProps[nestedKey];
                         // Check if nested value is a Measure - format it directly
@@ -1467,12 +1467,12 @@ export class UIManager {
      * Check if a value is a safe-units Measure type
      */
     private isMeasure(value: any): value is GenericMeasure<number, any, any> {
-        return value !== null && 
-               value !== undefined && 
-               typeof value === 'object' && 
-               'value' in value && 
-               'unit' in value &&
-               'unitSystem' in value;
+        return value !== null &&
+            value !== undefined &&
+            typeof value === 'object' &&
+            'value' in value &&
+            'unit' in value &&
+            'unitSystem' in value;
     }
 
     /**
@@ -1495,12 +1495,12 @@ export class UIManager {
         if (value === null || value === undefined) {
             return 'N/A';
         }
-        
+
         // Check if value is a safe-units Measure type
         if (this.isMeasure(value)) {
             const measure: GenericMeasure<number, any, any> = value;
             const dims = this.getUnitDimensions(measure);
-            
+
             // Use unit dimensions to determine formatting
             // Length: length=1, mass=0, time=0
             if (dims.length === 1 && dims.mass === 0 && dims.time === 0) {
@@ -1530,7 +1530,7 @@ export class UIManager {
             // Replace the number part in the string (handles both "123.456 unit" and "123.456unit" formats)
             return str.replace(/^[\d.e+-]+/, formattedNumber);
         }
-        
+
         // Handle plain numbers (backward compatibility)
         if (typeof value === 'number') {
             if (isNaN(value) || !isFinite(value)) {
@@ -1538,12 +1538,12 @@ export class UIManager {
             }
             return this.formatNumber(value);
         }
-        
+
         // Handle strings
         if (typeof value === 'string') {
             return value;
         }
-        
+
         // Handle objects (should be handled by caller, but fallback here)
         if (typeof value === 'object') {
             if (value instanceof THREE.Vector3) {
@@ -1552,12 +1552,12 @@ export class UIManager {
             }
             return JSON.stringify(value);
         }
-        
+
         // Handle booleans
         if (typeof value === 'boolean') {
             return value ? 'true' : 'false';
         }
-        
+
         return String(value);
     }
 
@@ -1594,7 +1594,7 @@ export class UIManager {
         // Try to find by ID first
         let section = this.getSection('trajectory');
         if (section) return section;
-        
+
         // If not found by ID, try to find by checking if getObject returns a Trajectory
         // This handles the case where the section was created with null object and got ID 'unknown'
         section = this.sections.find(s => {
@@ -1604,12 +1604,12 @@ export class UIManager {
             }
             return false;
         });
-        
+
         // If still not found, use section index 1 (trajectory is always section 1)
         if (!section && this.sections.length > 1) {
             section = this.sections[1];
         }
-        
+
         return section;
     }
 
@@ -1629,9 +1629,9 @@ export class UIManager {
      */
     private updateSectionForUISection(section: UISection, obj: any): void {
         if (!section.contentContainer) return;
-        
+
         const emptyMessage = section.emptyMessage || 'No object available';
-        
+
         if (!obj) {
             // If no object available, show a message
             section.contentContainer.innerHTML = '';
@@ -1641,18 +1641,18 @@ export class UIManager {
             section.contentContainer.appendChild(table);
             return;
         }
-        
+
         // Update section header with class name from introspection
         const className = this.getClassName(obj);
         section.headerTitle.textContent = className;
         section.title = className; // Update stored title
-        
+
         // Update section ID if it was set to 'unknown' initially (when object was null)
         const correctId = className.toLowerCase().replace(/\s+/g, '');
         if (section.id === 'unknown' && correctId !== 'unknown') {
             section.id = correctId;
         }
-        
+
         // Use editable property section if this is an editable section, otherwise use read-only
         if (section.isEditable) {
             this.generateEditablePropertySection(obj, section.contentContainer);
@@ -1673,7 +1673,7 @@ export class UIManager {
      */
     private updateSection(obj: any, container: HTMLDivElement, header?: HTMLSpanElement, emptyMessage: string = 'No object available'): void {
         if (!container) return;
-        
+
         if (!obj) {
             // If no object available, show a message
             container.innerHTML = '';
@@ -1683,13 +1683,13 @@ export class UIManager {
             container.appendChild(table);
             return;
         }
-        
+
         // Update section header with class name from introspection
         if (header) {
             const className = this.getClassName(obj);
             header.textContent = className;
         }
-        
+
         // Dynamically generate property section from object using introspection
         this.generatePropertySectionFromObject(obj, container);
     }
@@ -1700,10 +1700,10 @@ export class UIManager {
      */
     private updateFormForFocusedBody(targetName: string | null): void {
         this.currentFocusedBodyName = targetName;
-        
+
         // Check if this is the central body (Earth) - inputs should be disabled
         const isCentralBody = targetName === config.bodies.earth.name;
-        
+
         // Update heading
         if (this.bodyParamsHeading) {
             if (targetName === null) {
@@ -1736,7 +1736,7 @@ export class UIManager {
      */
     private formatDistance(km: number): string {
         const absKm = Math.abs(km);
-        
+
         // Light-day: 1 Ld = 2.59e10 km
         if (absKm >= 1.295e10) {
             return `${this.formatNumber(km / 2.59e10)} Ld`;
@@ -1774,7 +1774,7 @@ export class UIManager {
      */
     private formatVelocity(kmPerS: number): string {
         const absKmPerS = Math.abs(kmPerS);
-        
+
         // For velocity, we'll use km/s, m/s, or cm/s
         // km/s
         if (absKmPerS >= 0.5) {
@@ -1801,7 +1801,7 @@ export class UIManager {
             const obj = trajectorySection.getObject();
             this.updateSectionForUISection(trajectorySection, obj);
         }
-        
+
         // Also update the OrbitalBody section to show current position/velocity
         const bodySection = this.getInitialParametersSection();
         if (bodySection && bodySection.getObject && bodySection.contentContainer) {
@@ -1824,7 +1824,7 @@ export class UIManager {
         if (targetName) {
             // Update immediately
             this.updateCurrentValuesDisplay();
-            
+
             // Update every 100ms for smooth display
             this.updateInterval = window.setInterval(() => {
                 this.updateCurrentValuesDisplay();
@@ -1848,7 +1848,7 @@ export class UIManager {
             }
             this.gameLoopUpdateFrameId = requestAnimationFrame(updateGameLoopSection);
         };
-        
+
         // Start the update loop
         this.gameLoopUpdateFrameId = requestAnimationFrame(updateGameLoopSection);
     }

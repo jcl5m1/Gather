@@ -15,13 +15,16 @@ The primary codebase for the orbital mechanics simulation.
 - `config.json` - **ALL STATIC VALUES** - physics constants, scene settings, body definitions
 
 **Game Objects:**
-- `orbitalBody.ts` - OrbitalBody class (extends Body) for orbital mechanics; OrbitalBodyRenderer class handles 3D rendering with automatic mesh/sprite switching based on screen size
-- `trajectory.ts` - Trajectory class for orbit calculation and visualization; BezierCurve class for curve math; TrajectoryRenderer and BezierCurveRenderer classes for rendering orbit paths
+- `orbitalBody.ts` - OrbitalBody class (extends Body) with physics update logic (numerical/analytical/bezier), dual-rendering support, and dynamic LOD rendering (mesh vs dot)
+- `trajectory.ts` - Trajectory class for orbit calculation (elliptical/hyperbolic), Bezier approximation, and visualization; includes BezierCurve and TrajectoryRenderer classes
 - `types.ts` - Body base class (properties: position, velocity, mass, radius, name, color, etc.); JSON serialization utilities (Vector3fromJSON, Vector3toJSON, toJSON, fromJSON); OrbitControls interface
 
 **Simulation & Physics:**
 - `simulationController.ts` - Controls time scaling and simulation state
-- `orbitUtils.ts` - Utility functions for orbital calculations
+- `orbitUtils.ts` - Utility functions for orbital calculations (Kepler, Bezier generation)
+- `gpuOrbitCompute.ts` - GPU-accelerated massive batch orbit position computation using Data Textures and Shaders (GPGPU)
+- `rationalBezierCurve.ts` - Implementation of Exact Rational Bezier Curves for conic sections (Quadratic/Cubic with weights)
+- `rationalBezierOrbit.ts` - Utilities for generating and testing Rational Bezier representations of orbits
 
 **UI & Interaction:**
 - `uiManager.ts` - UI rendering and **formatters for unit display** (use these for displaying values!)
@@ -35,6 +38,11 @@ The primary codebase for the orbital mechanics simulation.
 **Utilities:**
 - `units.ts` - Unit system (kilometers, kilograms, seconds, etc.)
 - `unitsVector3.ts` - Vector3 with unit support
+
+**Testing & Benchmarking:**
+- `performanceTest.ts` - Benchmarking suite comparing CPU Analytical, CPU Bezier (Linear/Cubic), and GPU Batch compute performance
+- `testBezierOrbit.ts` - Auto-running test to verify accuracy of rational Bezier orbit representation
+- `testCommands.ts` - Command interface testing script
 
 **Documentation:**
 - `COMMAND_INTERFACE.md` - Documentation for text commands
