@@ -6,6 +6,24 @@ import { generateStateFromOrbitalElements } from './orbitUtils';
 import { kilometers, kilograms, seconds, Mass, Measure, Length, Velocity } from './units';
 import { MeasureVector3, LengthVector3, VelocityVector3 } from './unitsVector3';
 
+// Shader for fading trail
+const TRAIL_VERTEX_SHADER = `
+attribute float alpha;
+varying float vAlpha;
+void main() {
+    vAlpha = alpha;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const TRAIL_FRAGMENT_SHADER = `
+uniform vec3 color;
+varying float vAlpha;
+void main() {
+    gl_FragColor = vec4(color, vAlpha);
+}
+`;
+
 /**
  * Main game loop class that manages the simulation, rendering, and update cycle
  */
@@ -169,16 +187,23 @@ export class GameLoop {
         const centralMass = Measure.of(this._centralBody.getMass(), kilograms);
         body.getTrajectory().calculateFromState(positionVec, velocityVec, centralMass);
 
-        // Create trail line
+        // Create trail line with ShaderMaterial for fading effect
         const trailConfig = config.trail;
         const trailGeometry = new THREE.BufferGeometry();
-        const trailLine = new THREE.Line(
-            trailGeometry,
-            new THREE.LineBasicMaterial({
-                color: hexToNumber(trailConfig.color),
-                opacity: trailConfig.opacity
-            })
-        );
+
+        // Use custom shader material for fading trail
+        const trailMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                color: { value: new THREE.Color(hexToNumber(trailConfig.color)) }
+            },
+            vertexShader: TRAIL_VERTEX_SHADER,
+            fragmentShader: TRAIL_FRAGMENT_SHADER,
+            transparent: true,
+            depthWrite: false, // Prevents z-fighting and ensures proper transparency
+            blending: THREE.NormalBlending
+        });
+
+        const trailLine = new THREE.Line(trailGeometry, trailMaterial);
         this._scene.add(trailLine);
         this._trailLines.set(body, trailLine);
 
@@ -362,7 +387,20 @@ export class GameLoop {
             // Update trail
             const trailLine = this._trailLines.get(body);
             if (trailLine) {
-                trailLine.geometry.setFromPoints(body.getTrailPoints());
+                const points = body.getTrailPoints();
+                trailLine.geometry.setFromPoints(points);
+
+                // Update alpha attribute for fading effect
+                const alphas = new Float32Array(points.length);
+                const maxIndex = points.length > 1 ? points.length - 1 : 1;
+
+                // Set alphas: 0 at start (tail), 1 at end (head/body)
+                for (let i = 0; i < points.length; i++) {
+                    // Linear fade from 0 to 1
+                    alphas[i] = i / maxIndex;
+                }
+
+                trailLine.geometry.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1));
             }
         });
     }
