@@ -7,10 +7,21 @@ import { G } from './config';
 import { gravitationalConstantUnit } from './units';
 import * as THREE from 'three';
 import './performanceTest'; // Import to register benchmark function
+import { OrbitalBody } from './orbitalBody';
 
+// Global state for plot window tracking (simple singleton-ish pattern to avoid duplicates if desired, 
+// though the user might want multiple. For now, we'll replace the existing ones if they exist 
+// to avoid clutter or create new ones if requested.)
+interface PlotSet {
+    warp: PlotWindow;
+    error: PlotWindow;
+    cleanup: () => void;
+    bodyName: string;
+}
 
+let activePlotSet: PlotSet | null = null;
 
-export function createOrbitErrorPlot(): PlotWindow | null {
+export function createOrbitErrorPlot(targetBody?: OrbitalBody | null): PlotWindow | null {
     // Get the simulation controller from window
     const simulationController = (window as any).simulationController;
     if (!simulationController) {
@@ -25,132 +36,47 @@ export function createOrbitErrorPlot(): PlotWindow | null {
         return null;
     }
 
-    // Get the Moon body (now has dual-rendering capability)
-    const bodies = gameLoop.getOrbitalBodies();
-    const moon = bodies.find((b: any) => b.getName() === 'Moon');
+    // Determine initial body to track
+    let currentBody: OrbitalBody | null = targetBody || null;
 
-    if (!moon) {
-        console.error('[OrbitErrorPlot] Moon body not found');
+    if (!currentBody) {
+        // Find Moon by default
+        const bodies = gameLoop.getOrbitalBodies();
+        const moon = bodies.find((b: any) => b.getName() === 'Moon');
+        if (moon) {
+            currentBody = moon;
+        } else if (bodies.length > 0) {
+            currentBody = bodies[0];
+        }
+    }
+
+    if (!currentBody) {
+        console.error('[OrbitErrorPlot] No orbital body found to track');
         return null;
     }
 
-    // Check if dual-rendering is enabled
-    if (!moon.isDualRenderingEnabled()) {
-        console.warn('[OrbitErrorPlot] Dual-rendering not enabled on Moon');
+    console.log(`[OrbitErrorPlot] Initializing plots for body: ${currentBody.getName()}`);
+
+    // Clean up existing plots if they exist (optional, but good for "resetting" the view)
+    // The requirement is "refactor... to take an orbitalBody as a parameter".
+    // If we call this multiple times, maybe we want multiple windows?
+    // But `index.ts` calls it once. And `createSinePlotDemo` is an alias.
+    // Let's assume we want one set of "Analysis Windows" that tracks the "Selected" body or the "Passed" body.
+
+    // If we already have an active plot set, we might want to close it? 
+    // Or just return it if it's the same body?
+    if (activePlotSet) {
+        // For now, let's close the old ones to avoid overlapping windows unless we want multi-window comparison.
+        // Given the UI layout (fixed x/y), overlapping is likely.
+        activePlotSet.warp.close();
+        activePlotSet.error.close();
+        activePlotSet.cleanup();
+        activePlotSet = null;
     }
 
-    // Get trajectory and orbital parameters
-    const trajectory = moon.getTrajectory();
-    const params = trajectory.getParameters();
-    const bezierCurves = trajectory.getBezierCurves();
-
-    if (!bezierCurves || bezierCurves.length === 0) {
-        console.error('[OrbitErrorPlot] No bezier curves available');
-        return null;
-    }
-
-    // Extract orbital parameters
-    const period = (params.period as any).over(require('./units').seconds).value;
-    const semiMajorAxis = (params._a as any).over(require('./units').kilometers).value;
-    const eccentricity = params.e;
-
-    console.log(`[OrbitErrorPlot] Period: ${period}s, a: ${semiMajorAxis}km, e: ${eccentricity}`);
-
-    // Get initial position and velocity
-    const initialPos = moon.getInitialPosition();
-    const initialVel = moon.getInitialVelocity();
-    const centralBodyMass = gameLoop.getCentralBody().getMass();
-
-    // Pre-compute 100 positions
-    const numPoints = 2048;
-    const xData: number[] = [];
-    const warpData: number[] = [];
-    const errorData: number[] = [];
-
-    const GValue = (G as any).over(gravitationalConstantUnit).value;
-    const mu = GValue * centralBodyMass;
-
-    // Calculate initial eccentric anomaly
-    const r0 = initialPos.length();
-    const radialVel0 = initialVel.dot(initialPos.clone().normalize());
-    const h = new THREE.Vector3().crossVectors(initialPos, initialVel);
-    const hMag = h.length();
-    const theta0 = Math.atan2(hMag * radialVel0, hMag * hMag / r0 - mu);
-    const E0 = 2 * Math.atan(Math.sqrt((1 - eccentricity) / (1 + eccentricity)) * Math.tan(theta0 / 2));
-    const M0 = E0 - eccentricity * Math.sin(E0);
-
-    const hNorm = h.clone().normalize();
-    const vCrossH = new THREE.Vector3().crossVectors(initialVel, h);
-    const eVec = vCrossH.multiplyScalar(1 / mu).sub(initialPos.clone().normalize());
-    const eNorm = eVec.clone().normalize();
-    const periapsisDir = eNorm;
-    const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-
-    // Get the warp function from Moon (single body with dual-rendering)
-    const warpFunction = moon.getTimeWarpFunction();
-
-    // Get LUT sample positions to generate 8 points per interval
-    const lutSamplePositions = moon.getLUTSamplePositions();
-
-    // Use LUT sample positions plus intermediate samples for smoother plots
-    const sortedLutPositions = [...lutSamplePositions].sort((a, b) => a - b);
-    const sampleXPositions: number[] = [];
-    const samplesPerInterval = 32;
-
-    if (sortedLutPositions.length > 0) {
-        for (let i = 0; i < sortedLutPositions.length - 1; i++) {
-            const start = sortedLutPositions[i];
-            const end = sortedLutPositions[i + 1];
-
-            // Add start point
-            sampleXPositions.push(start);
-
-            // Add intermediate points
-            for (let j = 1; j <= samplesPerInterval; j++) {
-                const t = j / (samplesPerInterval + 1);
-                sampleXPositions.push(start + (end - start) * t);
-            }
-        }
-        // Add the last point
-        sampleXPositions.push(sortedLutPositions[sortedLutPositions.length - 1]);
-    }
-
-    for (let i = 0; i < sampleXPositions.length; i++) {
-        const normalizedTime = sampleXPositions[i];
-
-        // Get warped time from the warp function
-        const warpedTime = warpFunction(normalizedTime);
-
-        // Calculate analytical position using shared function from OrbitalBody
-        const analyticalPos = moon.computeAnalyticalPositionFromNormalizedTime(normalizedTime);
-
-        if (!analyticalPos) continue;
-
-        // Calculate bezier position using warped time (from single Moon body)
-        const bezierPos = moon.computeWarpedBezierPosition(normalizedTime);
-
-        // Calculate distance if bezier position exists
-        let distance = 0;
-        if (bezierPos) {
-            distance = analyticalPos.distanceTo(bezierPos);
-        }
-
-        xData.push(normalizedTime);
-        warpData.push(warpedTime);
-        errorData.push(distance + 1); // Add 1 to avoid log(0) issues
-    }
-
-    // Find max values for y-axis scaling
-    const maxError = Math.max(...errorData);
-    const maxWarp = Math.max(...warpData);
-
-    console.log(`[OrbitErrorPlot] Max error: ${maxError.toFixed(2)} km, Max warp: ${maxWarp.toFixed(3)}`);
-
-    // Create separate plot windows for time warp and distance error
-
-    // Time Warp Plot
+    // Initialize Plot Windows
     const warpPlotWindow = new PlotWindow({
-        title: 'Time Warp Function',
+        title: `Time Warp: ${currentBody.getName()}`,
         x: 50,
         y: 50,
         width: 600,
@@ -158,70 +84,13 @@ export function createOrbitErrorPlot(): PlotWindow | null {
         xMin: 0,
         xMax: 1,
         yMin: 0,
-        yMax: Math.max(maxWarp, 1.0) * 1.1,
+        yMax: 1,
         xLabel: 'Normalized Time (0-1)',
         yLabel: 'Warped Time',
     });
 
-    // Add the warp function output
-    warpPlotWindow.addData({
-        x: xData,
-        y: warpData,
-        color: '#00ff00',  // Green for warp function
-        lineWidth: 2.5,
-    });
-
-    // Add vertical lines at LUT sample positions
-    const yMax = Math.max(maxWarp, 1.0) * 1.1;
-    for (const sampleX of lutSamplePositions) {
-        warpPlotWindow.addData({
-            x: [sampleX, sampleX],
-            y: [0, yMax],
-            color: '#888888',  // Gray for sample markers
-            lineWidth: 1.0,
-        });
-    }
-
-    const lutData = moon.getLUTData();
-
-    // Add scatter plot of LUT samples to the warp function plot
-    if (lutData) {
-        // Extract M and bezierT values (handling padding/wraparound if needed)
-        // lutSamplePositions contains the M values (without padding)
-        const scatterM: number[] = [];
-        const scatterT: number[] = [];
-        const scatterTooltips: string[] = [];
-        const lutIndexOffset = 0; // No offset, samples align with data
-
-        for (let i = 0; i < lutSamplePositions.length; i++) {
-            const lutIdx = i + lutIndexOffset;
-            if (lutIdx < lutData.M.length && lutIdx < lutData.bezierT.length) {
-                const mVal = lutData.M[lutIdx];
-                const tVal = lutData.bezierT[lutIdx];
-                scatterM.push(mVal);
-                scatterT.push(tVal);
-
-                scatterTooltips.push(`
-                    <div><strong>LUT Sample ${i}</strong></div>
-                    <div>M: ${mVal.toFixed(4)}</div>
-                    <div>T: ${tVal.toFixed(4)}</div>
-                 `);
-            }
-        }
-
-        warpPlotWindow.addData({
-            x: scatterM,
-            y: scatterT,
-            color: '#0000ff', // Blue for scatter points
-            plotType: 'scatter',
-            pointSize: 4,
-            tooltips: scatterTooltips
-        });
-    }
-
-    // Distance Error Plot
     const errorPlotWindow = new PlotWindow({
-        title: 'Bezier Position Error',
+        title: `Bezier Position Error: ${currentBody.getName()}`,
         x: 50,
         y: 420,
         width: 600,
@@ -229,168 +98,264 @@ export function createOrbitErrorPlot(): PlotWindow | null {
         xMin: 0,
         xMax: 1,
         yMin: 0,
-        yMax: maxError * 1.1,
+        yMax: 1,
         xLabel: 'Normalized Time (0-1)',
         yLabel: 'Distance Error + 1 (km)',
         yLogScale: false,
-        xTickPositions: lutSamplePositions,
     });
 
-    // Add the error curve (no scaling needed now)
-    errorPlotWindow.addData({
-        x: xData,
-        y: errorData,
-        color: '#ff6666',  // Red for error
-        lineWidth: 2.5,
-    });
+    // Helper function to update plot data for a specific body
+    const updatePlotData = (body: OrbitalBody) => {
+        // Update titles
+        warpPlotWindow.setTitle(`Time Warp: ${body.getName()}`);
+        errorPlotWindow.setTitle(`Bezier Position Error: ${body.getName()}`);
 
-    // Use stored optimization errors from LUT for scatter plot and create tooltips
-    const lutSampleErrors: number[] = [];
-    const lutTooltips: string[] = [];
-    const lutIndexOffset = 0; // No offset, samples align with data
+        warpPlotWindow.clearData();
+        errorPlotWindow.clearData();
 
-    if (lutData && lutData.errors) {
-        for (let idx = 0; idx < lutSamplePositions.length; idx++) {
-            // Use stored optimization error from LUT (account for padding)
-            const lutIdx = idx + lutIndexOffset;
+        // Get trajectory and orbital parameters
+        const trajectory = body.getTrajectory();
+        if (!trajectory) return;
 
-            // Safety check
-            if (lutIdx >= lutData.errors.length || lutIdx >= lutData.M.length) continue;
+        // Check if dual-rendering is enabled (implying we have bezier + analytical comparison)
+        // Even if not enabled, we might have the trajectory data to plot "theoretical" error?
+        // But `computeWarpedBezierPosition` might rely on internal state or standard bezier logic.
 
-            const optimizationError = lutData.errors[lutIdx];
-            lutSampleErrors.push(optimizationError + 1); // Add 1 to match error curve offset
+        const params = trajectory.getParameters();
+        const bezierCurves = trajectory.getBezierCurves();
 
-            // Create custom tooltip
-            const M_value = lutData.M[lutIdx];
-            const bezierT_value = lutData.bezierT[lutIdx];
-
-            const tooltipHTML = `
-                <div><strong>LUT Sample ${idx}</strong></div>
-                <div>M: ${M_value.toFixed(4)}</div>
-                <div>bezierT: ${bezierT_value.toFixed(4)}</div>
-                <div>Opt Error: ${optimizationError.toFixed(2)} km</div>
-            `;
-            lutTooltips.push(tooltipHTML);
+        if (!bezierCurves || bezierCurves.length === 0) {
+            return;
         }
-    }
 
-    // Add scatter plot of LUT sample errors with custom tooltips
-    errorPlotWindow.addData({
-        x: lutSamplePositions,
-        y: lutSampleErrors,
-        color: '#00ff00',  // Green for LUT samples
-        plotType: 'scatter',
-        pointSize: 5,
-        tooltips: lutTooltips,
-    });
+        // Get LUT sample positions
+        const lutSamplePositions = body.getLUTSamplePositions();
 
-    // Add vertical lines at LUT sample positions
-    const errorYMax = maxError * 1.1;
-    for (const sampleX of lutSamplePositions) {
-        errorPlotWindow.addData({
-            x: [sampleX, sampleX],
-            y: [0, errorYMax],
-            color: '#888888',  // Gray for sample markers
-            lineWidth: 1.0,
+        // Generate uniform sample points
+        const sampleXPositions: number[] = [];
+        const samplesPerInterval = 32;
+
+        // Combine LUT positions with intermediate points
+        const sortedLutPositions = [...lutSamplePositions].sort((a, b) => a - b);
+        if (sortedLutPositions.length > 0) {
+            // Ensure 0 and 1 are included? LUT usually covers full range if closed orbit.
+            // If open orbit (hyperbolic), normalized time might behave differently.
+
+            for (let i = 0; i < sortedLutPositions.length - 1; i++) {
+                const start = sortedLutPositions[i];
+                const end = sortedLutPositions[i + 1];
+                sampleXPositions.push(start);
+                for (let j = 1; j <= samplesPerInterval; j++) {
+                    const t = j / (samplesPerInterval + 1);
+                    sampleXPositions.push(start + (end - start) * t);
+                }
+            }
+            sampleXPositions.push(sortedLutPositions[sortedLutPositions.length - 1]);
+        } else {
+            for (let i = 0; i <= 100; i++) sampleXPositions.push(i / 100);
+        }
+
+        const xData: number[] = [];
+        const warpData: number[] = [];
+        const errorData: number[] = [];
+
+        // Warp function
+        const warpFunction = body.getTimeWarpFunction();
+        if (!warpFunction) return;
+
+        for (let i = 0; i < sampleXPositions.length; i++) {
+            const normalizedTime = sampleXPositions[i];
+            const warpedTime = warpFunction(normalizedTime);
+
+            // Analytical pos
+            const analyticalPos = body.computeAnalyticalPositionFromNormalizedTime(normalizedTime);
+            if (!analyticalPos) continue;
+
+            // Bezier pos (warped)
+            // Note: computeWarpedBezierPosition calls computeBezierPositionFromTime(warpFunction(t))
+            const bezierPos = body.computeWarpedBezierPosition(normalizedTime);
+
+            let distance = 0;
+            if (bezierPos) {
+                distance = analyticalPos.distanceTo(bezierPos);
+            }
+
+            xData.push(normalizedTime);
+            warpData.push(warpedTime);
+            errorData.push(distance + 1); // +1 for log scaling safety/visibility
+        }
+
+        // Max values
+        const maxError = Math.max(...errorData);
+        const maxWarp = Math.max(...warpData);
+
+        // -- Warp Plot --
+        warpPlotWindow.setYRange(0, Math.max(maxWarp, 1.0) * 1.1);
+        warpPlotWindow.addData({
+            x: xData,
+            y: warpData,
+            color: '#00ff00',
+            lineWidth: 2.5,
         });
-    }
 
-    // Hook into game loop to update animation indicator
-    const updatePlotIndicators = () => {
-        // Get the current normalized time from Moon (single body with dual-rendering)
-        const currentNormalizedTime = moon.getCurrentNormalizedTime();
+        // Vertical lines at LUT positions
+        const yMaxWarp = Math.max(maxWarp, 1.0) * 1.1;
+        for (const sampleX of lutSamplePositions) {
+            warpPlotWindow.addData({
+                x: [sampleX, sampleX],
+                y: [0, yMaxWarp],
+                color: '#888888',
+                lineWidth: 1.0,
+            });
+        }
 
-        if (currentNormalizedTime !== null && currentNormalizedTime !== undefined) {
-            warpPlotWindow.setAnimationPosition(currentNormalizedTime);
-            errorPlotWindow.setAnimationPosition(currentNormalizedTime);
+        // LUT Scatter (Warp)
+        const lutData = body.getLUTData();
+        if (lutData) {
+            const scatterM: number[] = [];
+            const scatterT: number[] = [];
+            const scatterTooltips: string[] = [];
+
+            for (let i = 0; i < lutSamplePositions.length; i++) {
+                if (i < lutData.M.length && i < lutData.bezierT.length) {
+                    const mVal = lutData.M[i];
+                    const tVal = lutData.bezierT[i];
+                    scatterM.push(mVal);
+                    scatterT.push(tVal);
+                    scatterTooltips.push(`
+                        <div><strong>LUT Sample ${i}</strong></div>
+                        <div>M: ${mVal.toFixed(4)}</div>
+                        <div>T: ${tVal.toFixed(4)}</div>
+                     `);
+                }
+            }
+            warpPlotWindow.addData({
+                x: scatterM,
+                y: scatterT,
+                color: '#0000ff',
+                plotType: 'scatter',
+                pointSize: 4,
+                tooltips: scatterTooltips
+            });
+        }
+
+        // -- Error Plot --
+        errorPlotWindow.setYRange(0, maxError * 1.1);
+        errorPlotWindow.setXTickPositions(lutSamplePositions);
+        errorPlotWindow.addData({
+            x: xData,
+            y: errorData,
+            color: '#ff6666',
+            lineWidth: 2.5,
+        });
+
+        // Optimization Errors Scatter
+        const lutSampleErrors: number[] = [];
+        const lutTooltips: string[] = [];
+        if (lutData && lutData.errors) {
+            for (let idx = 0; idx < lutSamplePositions.length; idx++) {
+                if (idx >= lutData.errors.length) continue;
+                const err = lutData.errors[idx];
+                lutSampleErrors.push(err + 1);
+                lutTooltips.push(`
+                    <div><strong>LUT Sample ${idx}</strong></div>
+                    <div>Opt Error: ${err.toFixed(4)} km</div>
+                `);
+            }
+        }
+        errorPlotWindow.addData({
+            x: lutSamplePositions,
+            y: lutSampleErrors,
+            color: '#00ff00',
+            plotType: 'scatter',
+            pointSize: 5,
+            tooltips: lutTooltips,
+        });
+
+        // Vertical lines (Error)
+        const errorYMax = maxError * 1.1;
+        for (const sampleX of lutSamplePositions) {
+            errorPlotWindow.addData({
+                x: [sampleX, sampleX],
+                y: [0, errorYMax],
+                color: '#888888',
+                lineWidth: 1.0,
+            });
         }
     };
 
-    // Register update function with game loop
+    // Initial Data Load
+    if (currentBody) {
+        updatePlotData(currentBody);
+    }
+
+    // Update Callback (Optimization: check for selection change if no specific body was passed?)
+    // The user said "tie the plots to that particular orbitalBody's trajectory". 
+    // This implies if I pass `Moon`, it should ALWAYS plot Moon, regardless of selection.
+    // BUT the previous request was "matches the currently selected body animation".
+    // AND "refactor ... to take an orbitalBody as a parameter".
+
+    // Combining these:
+    // If a body is passed, plot THAT body. 
+    // If NO body is passed (default call from index.ts), behave as "Track Selected".
+
+    // Variable to track which body we are currently viewing
+    let trackedBody: OrbitalBody | null = targetBody || null;
+    let trackedBodyName: string | null = trackedBody ? trackedBody.getName() : null;
+
+    // If we are in "Tracking Mode" (no explicit body), we rely on the camera manager
+    const isTrackingMode = !targetBody;
+
+    if (isTrackingMode && currentBody) {
+        // Initialize tracking with the default found body (Moon/First)
+        trackedBody = currentBody;
+        trackedBodyName = currentBody.getName();
+    }
+
+    const updatePlotIndicators = () => {
+        // 1. Handle Selection Change (Only in Tracking Mode)
+        if (isTrackingMode) {
+            const cameraManager = gameLoop.getCameraManager();
+            if (cameraManager) {
+                const selectedName = cameraManager.getCurrentTargetName();
+                if (selectedName && selectedName !== trackedBodyName && selectedName !== 'Earth') {
+                    // Try to find the new body
+                    const bodies = gameLoop.getOrbitalBodies();
+                    const newBody = bodies.find((b: any) => b.getName() === selectedName);
+                    if (newBody) {
+                        trackedBody = newBody;
+                        trackedBodyName = selectedName;
+                        updatePlotData(newBody);
+                    }
+                }
+            }
+        }
+
+        // 2. Update Animation Position (Cursor)
+        if (trackedBody) {
+            const currentNormalizedTime = trackedBody.getCurrentNormalizedTime();
+            if (currentNormalizedTime !== null && currentNormalizedTime !== undefined) {
+                warpPlotWindow.setAnimationPosition(currentNormalizedTime);
+                errorPlotWindow.setAnimationPosition(currentNormalizedTime);
+            }
+        }
+    };
+
     gameLoop.registerPlotUpdateCallback(updatePlotIndicators);
 
-    // Store references globally for cleanup
-    (window as any).plotWindows = {
+    // Save global state
+    activePlotSet = {
         warp: warpPlotWindow,
         error: errorPlotWindow,
         cleanup: () => {
             gameLoop.unregisterPlotUpdateCallback(updatePlotIndicators);
-        }
+        },
+        bodyName: trackedBodyName || 'Unknown'
     };
 
-    // Verify that recalculation at LUT positions matches stored errors
-    if (lutData && lutData.errors) {
-        console.log('\n=== LUT Error Verification (Detailed) ===');
-        const lutIndexOffset = 0; // No offset, samples align with data
-        let maxDiff = 0;
+    // Store references globally for console access/cleanup
+    (window as any).plotWindows = activePlotSet;
 
-        for (let idx = 0; idx < lutSamplePositions.length; idx++) {
-            const lutIdx = idx + lutIndexOffset;
-            if (lutIdx >= lutData.M.length || lutIdx >= lutData.errors.length) continue;
-
-            const sampleM = lutSamplePositions[idx];
-            const storedM = lutData.M[lutIdx];
-            const storedBezierT = lutData.bezierT[lutIdx];
-
-            // Get bezierT from time warp function
-            const warpedBezierT = warpFunction(sampleM);
-
-            // Recalculate analytical position using SHARED function
-            const analyticalPos = moon.computeAnalyticalPositionFromNormalizedTime(sampleM);
-
-            if (!analyticalPos) continue;
-
-            // Get bezier position using time warp (goes through computeWarpedBezierPosition)
-            const bezierPos = moon.computeWarpedBezierPosition(sampleM);
-
-            // Recalculate error
-            const recalcError = bezierPos ? analyticalPos.distanceTo(bezierPos) : Infinity;
-            const storedError = lutData.errors[lutIdx];
-            const diff = Math.abs(recalcError - storedError);
-            const bezierTDiff = Math.abs(warpedBezierT - storedBezierT);
-            maxDiff = Math.max(maxDiff, diff);
-
-            if (diff > 0.01 || bezierTDiff > 0.0001) { // Log if significant difference
-                console.log(`  LUT[${idx}]:`);
-                console.log(`    M: sample=${sampleM.toFixed(6)}, stored=${storedM.toFixed(6)}, diff=${Math.abs(sampleM - storedM).toFixed(9)}`);
-                console.log(`    bezierT: warped=${warpedBezierT.toFixed(6)}, stored=${storedBezierT.toFixed(6)}, diff=${bezierTDiff.toFixed(9)}`);
-                console.log(`    Error: recalc=${recalcError.toFixed(6)} km, stored=${storedError.toFixed(6)} km, diff=${diff.toFixed(6)} km`);
-            }
-        }
-        console.log(`Max error difference: ${maxDiff.toFixed(6)} km ${maxDiff < 0.01 ? '✓ MATCH' : '⚠ MISMATCH'}`);
-        console.log('==================================================\n');
-    }
-
-    // Print LUT table to console with stored optimization errors
-    if (lutData && lutData.errors) {
-        console.log('=== LUT (Look-Up Table) Data ===');
-        console.log(`Total entries: ${lutData.M.length}`);
-        console.log('\nIndex | Mean Anomaly (M) | Bezier Parameter (t) | Optimization Error (km)');
-        console.log('------|------------------|----------------------|------------------------');
-
-        for (let i = 0; i < lutData.M.length; i++) {
-            const idx = String(i).padStart(5, ' ');
-            const M_val = lutData.M[i].toFixed(6).padStart(10, ' ');
-            const t_val = lutData.bezierT[i].toFixed(6).padStart(10, ' ');
-
-            // Get stored optimization error (not interpolated)
-            let error_val = '                  N/A';
-            if (i < lutData.errors.length) {
-                const optError = lutData.errors[i];
-                error_val = optError.toFixed(6).padStart(22, ' ');
-            }
-
-            console.log(`${idx} | ${M_val} | ${t_val} | ${error_val}`);
-        }
-        console.log('================================\n');
-        console.log('Note: These are the optimization errors from LUT build time,');
-        console.log('      NOT the interpolated errors through the cubic spline.');
-    } else {
-        console.warn('[OrbitErrorPlot] LUT data not available');
-    }
-
-    // Return the warp plot window (for backward compatibility)
-    // Both windows will be displayed
     return warpPlotWindow;
 }
 
@@ -399,8 +364,6 @@ export function createSinePlotDemo(): PlotWindow | null {
     return createOrbitErrorPlot();
 }
 
-// Make it available globally for easy testing via console
+// Make it available globally
 (window as any).createSinePlotDemo = createSinePlotDemo;
 (window as any).createOrbitErrorPlot = createOrbitErrorPlot;
-// Alias for backward compatibility
-
