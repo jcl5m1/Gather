@@ -33,7 +33,7 @@ export class UIWindow {
     protected buttonContainer: HTMLDivElement;
     protected contentArea: HTMLDivElement;
     protected config: Required<UIWindowConfig>;
-    
+
     private isDragging: boolean = false;
     private isResizing: boolean = false;
     private resizeDirection: string = '';
@@ -239,7 +239,7 @@ export class UIWindow {
     private createResizeHandles(): void {
         const edgeSize = 5;
         const cornerSize = 16;
-        
+
         // Create edge resize handles
         const edges = [
             { name: 'top', cursor: 'ns-resize', style: `top: 0; left: ${cornerSize}px; right: ${cornerSize}px; height: ${edgeSize}px;` },
@@ -247,7 +247,7 @@ export class UIWindow {
             { name: 'bottom', cursor: 'ns-resize', style: `bottom: 0; left: ${cornerSize}px; right: ${cornerSize}px; height: ${edgeSize}px;` },
             { name: 'left', cursor: 'ew-resize', style: `top: ${cornerSize}px; left: 0; bottom: ${cornerSize}px; width: ${edgeSize}px;` }
         ];
-        
+
         for (const edge of edges) {
             const handle = document.createElement('div');
             handle.className = `resize-${edge.name}`;
@@ -261,7 +261,7 @@ export class UIWindow {
             this.container.appendChild(handle);
             this.edgeResizeHandles[edge.name] = handle;
         }
-        
+
         // Create corner resize handles
         const corners = [
             { name: 'top-left', cursor: 'nwse-resize', style: `top: 0; left: 0; width: ${cornerSize}px; height: ${cornerSize}px;` },
@@ -269,7 +269,7 @@ export class UIWindow {
             { name: 'bottom-right', cursor: 'nwse-resize', style: `bottom: 0; right: 0; width: ${cornerSize}px; height: ${cornerSize}px;` },
             { name: 'bottom-left', cursor: 'nesw-resize', style: `bottom: 0; left: 0; width: ${cornerSize}px; height: ${cornerSize}px;` }
         ];
-        
+
         for (const corner of corners) {
             const handle = document.createElement('div');
             handle.className = `resize-${corner.name}`;
@@ -350,13 +350,13 @@ export class UIWindow {
 
     private startDrag(e: MouseEvent): void {
         if (this.isMaximized || this.isDocked) return;
-        
+
         this.isDragging = true;
         this.dragStartX = e.clientX;
         this.dragStartY = e.clientY;
         this.windowStartX = this.container.offsetLeft;
         this.windowStartY = this.container.offsetTop;
-        
+
         this.bringToFront();
         e.preventDefault();
     }
@@ -366,10 +366,10 @@ export class UIWindow {
 
         const dx = e.clientX - this.dragStartX;
         const dy = e.clientY - this.dragStartY;
-        
+
         const newX = this.windowStartX + dx;
         const newY = this.windowStartY + dy;
-        
+
         this.container.style.left = `${newX}px`;
         this.container.style.top = `${newY}px`;
 
@@ -381,7 +381,7 @@ export class UIWindow {
 
     private endDrag(): void {
         this.isDragging = false;
-        
+
         // Check if we should dock
         if (this.config.dockable && this.dockIndicator) {
             const dockZone = this.getDockZone(event as MouseEvent);
@@ -394,7 +394,7 @@ export class UIWindow {
 
     private startResize(e: MouseEvent): void {
         if (this.isMaximized) return;
-        
+
         this.isResizing = true;
         this.resizeDirection = 'bottom-right';
         this.resizeStartX = e.clientX;
@@ -403,14 +403,14 @@ export class UIWindow {
         this.windowStartY = this.container.offsetTop;
         this.windowStartWidth = this.container.offsetWidth;
         this.windowStartHeight = this.container.offsetHeight;
-        
+
         e.preventDefault();
         e.stopPropagation();
     }
 
     private startEdgeResize(e: MouseEvent, direction: string): void {
         if (this.isMaximized) return;
-        
+
         // Allow resizing when docked, but only on certain edges
         if (this.isDocked) {
             // If docked left/right, only allow horizontal resizing on right/left edge
@@ -421,7 +421,7 @@ export class UIWindow {
                 return;
             }
         }
-        
+
         this.isResizing = true;
         this.resizeDirection = direction;
         this.resizeStartX = e.clientX;
@@ -430,7 +430,7 @@ export class UIWindow {
         this.windowStartY = this.container.offsetTop;
         this.windowStartWidth = this.container.offsetWidth;
         this.windowStartHeight = this.container.offsetHeight;
-        
+
         e.preventDefault();
         e.stopPropagation();
     }
@@ -440,12 +440,12 @@ export class UIWindow {
 
         const dx = e.clientX - this.resizeStartX;
         const dy = e.clientY - this.resizeStartY;
-        
+
         let newX = this.windowStartX;
         let newY = this.windowStartY;
         let newWidth = this.windowStartWidth;
         let newHeight = this.windowStartHeight;
-        
+
         // Handle different resize directions
         if (this.resizeDirection.includes('right')) {
             newWidth = Math.max(this.config.minWidth, this.windowStartWidth + dx);
@@ -467,7 +467,7 @@ export class UIWindow {
                 newY = this.windowStartY + (this.windowStartHeight - newHeight);
             }
         }
-        
+
         // Apply changes
         if (!this.isDocked) {
             this.container.style.left = `${newX}px`;
@@ -483,12 +483,12 @@ export class UIWindow {
     }
 
     private getDockZone(e: MouseEvent): DockZone | null {
-        const margin = 50; // Pixels from edge to trigger docking
+        const margin = 10; // Pixels from edge to trigger docking
         const w = window.innerWidth;
         const h = window.innerHeight;
         const currentWidth = this.container.offsetWidth;
         const currentHeight = this.container.offsetHeight;
-        
+
         if (e.clientX < margin) {
             // Left dock - preserve width
             return { side: 'left', x: 0, y: 0, width: currentWidth, height: h };
@@ -502,7 +502,7 @@ export class UIWindow {
             // Bottom dock - preserve height
             return { side: 'bottom', x: 0, y: h - currentHeight, width: w, height: currentHeight };
         }
-        
+
         return null;
     }
 
@@ -510,9 +510,9 @@ export class UIWindow {
         if (!this.dockIndicator) {
             this.dockIndicator = this.createDockIndicator();
         }
-        
+
         const dockZone = this.getDockZone({ clientX: x, clientY: y } as MouseEvent);
-        
+
         if (dockZone) {
             this.dockIndicator.style.left = `${dockZone.x}px`;
             this.dockIndicator.style.top = `${dockZone.y}px`;
@@ -598,10 +598,21 @@ export class UIWindow {
         this.isDocked = false;
         this.dockedSide = null;
 
-        this.container.style.left = `${this.preDockState.x}px`;
-        this.container.style.top = `${this.preDockState.y}px`;
-        this.container.style.width = `${this.preDockState.width}px`;
-        this.container.style.height = `${this.preDockState.height}px`;
+        let { x, y, width, height } = this.preDockState;
+
+        // Ensure bounds are inside browser window
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        if (x + width > viewportWidth) x = Math.max(0, viewportWidth - width);
+        if (y + height > viewportHeight) y = Math.max(0, viewportHeight - height);
+
+        this.container.style.left = `${x}px`;
+        this.container.style.top = `${y}px`;
+        this.container.style.width = `${width}px`;
+        this.container.style.height = `${height}px`;
 
         this.preDockState = null;
 
@@ -612,6 +623,11 @@ export class UIWindow {
     }
 
     public maximize(): void {
+        if (this.isDocked) {
+            this.undock();
+            return;
+        }
+
         if (this.isMaximized) {
             this.restore();
             return;
@@ -658,7 +674,7 @@ export class UIWindow {
 
         this.isMinimized = true;
         this.contentArea.style.display = 'none';
-        
+
         // Hide all resize handles when minimized
         if (this.resizeHandle) {
             this.resizeHandle.style.display = 'none';
@@ -666,7 +682,7 @@ export class UIWindow {
         Object.values(this.edgeResizeHandles).forEach(handle => {
             handle.style.display = 'none';
         });
-        
+
         // Remove minHeight constraint and set height to just the title bar
         this.container.style.minHeight = '0';
         const titleBarHeight = this.titleBar.offsetHeight;
@@ -691,10 +707,10 @@ export class UIWindow {
         if (this.isMinimized && this.preMaximizeState) {
             this.isMinimized = false;
             this.contentArea.style.display = 'block';
-            
+
             // Restore minHeight constraint
             this.container.style.minHeight = `${this.config.minHeight}px`;
-            
+
             // Restore all resize handles
             if (this.resizeHandle) {
                 this.resizeHandle.style.display = 'block';
@@ -702,7 +718,7 @@ export class UIWindow {
             Object.values(this.edgeResizeHandles).forEach(handle => {
                 handle.style.display = 'block';
             });
-            
+
             // Restore to saved height
             this.container.style.height = `${this.preMaximizeState.height}px`;
             this.preMaximizeState = null;

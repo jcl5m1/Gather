@@ -34,30 +34,30 @@ export class CameraManager extends Body {
     private _camera: THREE.PerspectiveCamera;              // Private - use underscore prefix
     private _controls!: OrbitControls;                    // Private - use underscore prefix
     private _renderer: THREE.WebGLRenderer;               // Private - use underscore prefix
-    
+
     // Camera target tracking
     private _cameraTarget: OrbitalBody | null = null;     // Private - use underscore prefix
     private _cameraTargetIndex: number = -1;              // Private - use underscore prefix (-1 = no target, -2 = central body, >= 0 = orbital body index)
     private _cameraOffset: THREE.Vector3 = new THREE.Vector3(); // Private - use underscore prefix (relative offset from target to camera)
     private _previousTargetPosition: THREE.Vector3 = new THREE.Vector3(); // Private - use underscore prefix (previous target position for tracking)
-    
+
     // Storage for camera state per body (to restore when switching back)
     // Now stores full Body state with position, velocity, etc.
     private _bodyCameraStates: Map<string, any> = new Map(); // Private - use underscore prefix (maps body name to serialized camera state)
-    
+
     // Storage for free camera state (position and target)
     private _freeCameraPosition: THREE.Vector3 | null = null; // Private - use underscore prefix
     private _freeCameraTarget: THREE.Vector3 | null = null;    // Private - use underscore prefix
-    
+
     // Keyboard state for free camera movement
     private _keysPressed: Set<string> = new Set();         // Private - use underscore prefix
     private _minMovementSpeed: number = 50000;            // Private - use underscore prefix (minimum movement speed in km per second)
     private _lastUpdateTime: number = 0;                  // Private - use underscore prefix (timestamp of last update for delta time calculation)
-    
+
     // References to bodies for target switching
     private _centralBody: OrbitalBody;                     // Private - use underscore prefix
     private _orbitalBodies: OrbitalBody[] = [];           // Private - use underscore prefix
-    
+
     // Callback for when target changes (for UI updates)
     private _onTargetChangeCallback?: (targetName: string | null) => void; // Private - use underscore prefix
 
@@ -85,7 +85,7 @@ export class CameraManager extends Body {
      */
     private getAllBodies(): (OrbitalBody | null)[] {
         const bodies: (OrbitalBody | null)[] = [null]; // null = Free Camera
-        
+
         // Get bodies from GameLoop if available
         if (this._gameLoop) {
             // Add central body
@@ -100,7 +100,7 @@ export class CameraManager extends Body {
                     bodies.push(this._centralBody);
                 }
             }
-            
+
             // Add orbital bodies from GameLoop
             try {
                 const orbitalBodies = this._gameLoop.getOrbitalBodies();
@@ -118,7 +118,7 @@ export class CameraManager extends Body {
             }
             bodies.push(...this._orbitalBodies);
         }
-        
+
         return bodies;
     }
 
@@ -130,16 +130,16 @@ export class CameraManager extends Body {
         if (this._cameraTarget === null) {
             return 0; // Free Camera (null at index 0)
         }
-        
+
         // Get all bodies from GameLoop to find the correct index
         const allBodies = this.getAllBodies();
-        
+
         // Find the index of the current target in the options array
         const index = allBodies.indexOf(this._cameraTarget);
         if (index >= 0) {
             return index;
         }
-        
+
         return 0; // Default to free camera if not found
     }
 
@@ -150,7 +150,7 @@ export class CameraManager extends Body {
     private updateCameraFocusProperty(): void {
         const allBodies = this.getAllBodies();
         const currentIndex = this.getCurrentFocusIndex();
-        
+
         this.cameraFocus = {
             value: currentIndex,
             options: allBodies
@@ -164,13 +164,13 @@ export class CameraManager extends Body {
     public applyCameraFocusChange(): void {
         const index = this.cameraFocus.value;
         const allBodies = this.cameraFocus.options;
-        
+
         if (index < 0 || index >= allBodies.length) {
             // Invalid index, switch to free camera
             this.switchToFreeCamera();
             return;
         }
-        
+
         const targetBody = allBodies[index];
         if (targetBody === null) {
             // Index 0 = Free Camera
@@ -196,22 +196,22 @@ export class CameraManager extends Body {
             radius: 1,
             id: 'camera-main'
         });
-        
+
         this._camera = camera;
         this._renderer = renderer;
         this._centralBody = centralBody;
         this._orbitalBodies = orbitalBodies;
-        
+
         // Sync Body position with camera
         this.position.copy(this._camera.position);
-        
+
         // Initialize cameraFocus property
         const allBodies = this.getAllBodies();
         this.cameraFocus = {
             value: 0, // 0 = Free Camera (null at index 0)
             options: allBodies
         };
-        
+
         this.initControls();
         this.setupKeyboardControls();
     }
@@ -221,7 +221,7 @@ export class CameraManager extends Body {
         const controlsConfig = config.scene.controls;
         this._controls.enableDamping = controlsConfig.enableDamping;
         this._controls.dampingFactor = controlsConfig.dampingFactor;
-        
+
     }
 
     private setupKeyboardControls(): void {
@@ -317,7 +317,7 @@ export class CameraManager extends Body {
             // Switching to free camera - restore stored position and target
             this._cameraTarget = null;
             this._cameraTargetIndex = -1;
-            
+
             if (this._freeCameraPosition && this._freeCameraTarget) {
                 // Restore stored free camera state
                 this._camera.position.copy(this._freeCameraPosition);
@@ -328,7 +328,7 @@ export class CameraManager extends Body {
                 this._freeCameraPosition = this._camera.position.clone();
                 this._freeCameraTarget = this._controls.target.clone();
             }
-            
+
             this.notifyTargetChange(null);
         } else if (newTarget === this._centralBody) {
             this._cameraTarget = this._centralBody;
@@ -377,10 +377,10 @@ export class CameraManager extends Body {
 
         const targetPosition = this._cameraTarget.getPosition();
         const bodyRadius = this._cameraTarget.getRadius();
-        
+
         // Initialize previous target position to current position to avoid jump on first frame
         this._previousTargetPosition.copy(targetPosition);
-        
+
         // If this is the first time targeting any body (or offset is zero), set up default position
         // Default distance is 10x the body radius
         if (this._cameraOffset.length() === 0) {
@@ -392,14 +392,18 @@ export class CameraManager extends Body {
                 cameraDistance * 0.7
             );
         }
-        
+
         // Set camera position based on target position + offset (restores stored camera state)
         this._camera.position.copy(targetPosition).add(this._cameraOffset);
-        
+
         // Update controls target to the body's position (this is the focus point)
         // This makes OrbitControls orbit around the body
         this._controls.target.copy(targetPosition);
-        
+
+        // Set minimum distance based on config factor * radius
+        // Default was 8x radius (4x diameter)
+        this._controls.minDistance = bodyRadius * config.scene.camera.minBodyDistanceFactor;
+
         // Update OrbitControls to sync with the camera position
         // This ensures OrbitControls' internal state matches our camera position
         this._controls.update();
@@ -418,42 +422,42 @@ export class CameraManager extends Body {
 
         if (this._cameraTarget) {
             const targetPosition = this._cameraTarget.getPosition();
-            
+
             // Calculate the offset that the target has moved
             const targetDelta = targetPosition.clone().sub(this._previousTargetPosition);
-            
+
             // Update camera position by the same offset to maintain relative position
             this._camera.position.add(targetDelta);
-            
+
             // Sync Body position with camera
             this.position.copy(this._camera.position);
-            
+
             // Update the controls target to follow the body
             this._controls.target.copy(targetPosition);
-            
+
             // Update OrbitControls (handles scroll wheel zoom and rotation)
             // OrbitControls manages camera.position internally, but we've already adjusted for target movement
             this._controls.update();
-        
+
             // After controls.update(), capture the current offset (includes scroll wheel changes)
             // This captures any zoom/rotation changes from user input
             this._cameraOffset = this._camera.position.clone().sub(targetPosition);
             this.position.copy(this._camera.position);
-            
+
             // Update stored camera state for this body using Body serialization
             const currentBodyName = this._cameraTarget.getName();
             this._bodyCameraStates.set(currentBodyName, this.toJSON());
-            
+
             // Store current target position for next frame
             this._previousTargetPosition.copy(targetPosition);
         } else {
             // Free camera mode - handle keyboard movement and update controls
             this.handleFreeCameraMovement(deltaTime);
             this._controls.update();
-            
+
             // Sync Body position with camera
             this.position.copy(this._camera.position);
-            
+
             // Update stored free camera state
             this._freeCameraPosition = this._camera.position.clone();
             this._freeCameraTarget = this._controls.target.clone();
@@ -472,11 +476,11 @@ export class CameraManager extends Body {
         // Get camera's forward direction (negative z-axis in camera space)
         const forward = new THREE.Vector3(0, 0, -1);
         forward.applyQuaternion(this._camera.quaternion);
-        
+
         // Get camera's right direction (positive x-axis in camera space)
         const right = new THREE.Vector3(1, 0, 0);
         right.applyQuaternion(this._camera.quaternion);
-        
+
         // Get world up direction
         const up = new THREE.Vector3(0, 1, 0);
 
@@ -492,7 +496,7 @@ export class CameraManager extends Body {
 
         // Calculate movement delta
         const movementDelta = new THREE.Vector3(0, 0, 0);
-        
+
         // w, s keys: move forward/backward along xz plane
         if (this._keysPressed.has('w')) {
             movementDelta.add(forwardXZ);
@@ -500,7 +504,7 @@ export class CameraManager extends Body {
         if (this._keysPressed.has('s')) {
             movementDelta.sub(forwardXZ);
         }
-        
+
         // a, d keys: move left/right along xz plane
         if (this._keysPressed.has('a')) {
             movementDelta.sub(rightXZ);
@@ -508,7 +512,7 @@ export class CameraManager extends Body {
         if (this._keysPressed.has('d')) {
             movementDelta.add(rightXZ);
         }
-        
+
         // r, f keys: move up/down along y-axis
         if (this._keysPressed.has('r')) {
             movementDelta.add(up);
@@ -519,12 +523,12 @@ export class CameraManager extends Body {
 
         // Calculate movement speed proportional to absolute y position, with minimum
         const currentSpeed = Math.max(this._minMovementSpeed, Math.abs(this._camera.position.y));
-        
+
         // Normalize and scale by movement speed and actual time delta
         if (movementDelta.length() > 0) {
             movementDelta.normalize();
             movementDelta.multiplyScalar(currentSpeed * deltaTime);
-            
+
             // Apply movement to both camera and controls target
             this._camera.position.add(movementDelta);
             this._controls.target.add(movementDelta);
@@ -554,7 +558,7 @@ export class CameraManager extends Body {
     private notifyTargetChange(targetName: string | null): void {
         // Update cameraFocus property to reflect the change
         this.updateCameraFocusProperty();
-        
+
         if (this._onTargetChangeCallback) {
             this._onTargetChangeCallback(targetName);
         }
@@ -567,7 +571,7 @@ export class CameraManager extends Body {
      */
     updateOrbitalBodies(orbitalBodies: OrbitalBody[], newlyAddedBody?: OrbitalBody): void {
         this._orbitalBodies = orbitalBodies;
-        
+
         // If current target was removed, switch to free camera
         if (this._cameraTarget && this._cameraTargetIndex >= 0) {
             if (!this._orbitalBodies.includes(this._cameraTarget)) {
@@ -579,10 +583,10 @@ export class CameraManager extends Body {
                 this._cameraTargetIndex = this._orbitalBodies.indexOf(this._cameraTarget);
             }
         }
-        
+
         // Update cameraFocus options to reflect new body list
         this.updateCameraFocusProperty();
-        
+
         // If a new body was added, always switch to it so the user can see its stats
         // Use setTimeout to ensure the body is registered in the command processor's map first
         if (newlyAddedBody) {
@@ -591,7 +595,7 @@ export class CameraManager extends Body {
             }, 0);
         }
     }
-    
+
     /**
      * Switch camera to a specific body by name
      * @param bodyName - Name of the body to switch to
@@ -602,14 +606,14 @@ export class CameraManager extends Body {
             this.switchToBody(this._centralBody);
             return true;
         }
-        
+
         // Check orbital bodies
         const body = this._orbitalBodies.find(b => b.getName() === bodyName);
         if (body) {
             this.switchToBody(body);
             return true;
         }
-        
+
         return false;
     }
 
@@ -633,21 +637,22 @@ export class CameraManager extends Body {
         // Switch to free camera
         this._cameraTarget = null;
         this._cameraTargetIndex = -1;
-        
+
         if (this._freeCameraPosition && this._freeCameraTarget) {
             // Restore stored free camera state
             this._camera.position.copy(this._freeCameraPosition);
             this._controls.target.copy(this._freeCameraTarget);
+            this._controls.minDistance = 0; // Reset min distance for free camera
             this._controls.update();
         } else {
             // First time entering free camera - initialize state from current position
             this._freeCameraPosition = this._camera.position.clone();
             this._freeCameraTarget = this._controls.target.clone();
         }
-        
+
         this.notifyTargetChange(null);
     }
-    
+
     /**
      * Switch camera to a specific body
      * @param body - The body to switch to
@@ -662,11 +667,11 @@ export class CameraManager extends Body {
             this._freeCameraTarget = this._controls.target.clone();
             this._keysPressed.clear();
         }
-        
+
         // Store current offset before switching
         const oldTargetPosition = this._cameraTarget ? this._cameraTarget.getPosition() : this._controls.target;
         const currentCameraOffset = this._camera.position.clone().sub(oldTargetPosition);
-        
+
         // Update camera target
         if (body === this._centralBody) {
             this._cameraTarget = this._centralBody;
@@ -696,7 +701,7 @@ export class CameraManager extends Body {
                 this.notifyTargetChange(body.getName());
             }
         }
-        
+
         // Update camera position immediately
         this.updateCameraToTarget();
     }
@@ -731,8 +736,9 @@ export class CameraManager extends Body {
         const cameraConfig = config.scene.camera;
         this._camera.position.copy(cameraConfig.position);
         this._controls.target.set(0, 0, 0);
+        this._controls.minDistance = 0; // Reset min distance
         this._controls.update();
-        
+
         // Reset camera target tracking
         this._cameraTarget = null;
         this._cameraTargetIndex = -1;
@@ -740,7 +746,7 @@ export class CameraManager extends Body {
         this._freeCameraPosition = this._camera.position.clone();
         this._freeCameraTarget = this._controls.target.clone();
         this._bodyCameraStates.clear();
-        
+
         this.notifyTargetChange(null);
     }
 }

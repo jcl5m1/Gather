@@ -87,6 +87,7 @@ export interface CameraConfig {
     near: Length;
     far: Length;
     position: THREE.Vector3;
+    minBodyDistanceFactor: number; // Dimensionless
 }
 
 export interface GridConfig {
@@ -140,6 +141,12 @@ export interface SimulationConfig {
     bodies: BodiesConfig;
     scene: SceneConfig;
     trail: TrailConfig;
+    visualization: VisualizationConfig;
+}
+
+export interface VisualizationConfig {
+    enablePlots: boolean;
+    showLUT: boolean;
 }
 
 // Helper function to convert hex color string to number
@@ -152,7 +159,7 @@ function createBodyFromConfig(bodyData: any, distance?: Length): Body {
     // Parse position and velocity from config
     const position = bodyData.position ? parseVector3(bodyData.position) : new THREE.Vector3(0, 0, 0);
     const velocity = bodyData.velocity ? parseVector3(bodyData.velocity) : new THREE.Vector3(0, 0, 0);
-    
+
     const body = new Body({
         name: bodyData.name,
         mass: parseMass(bodyData.mass).over(kilograms).value,
@@ -193,7 +200,8 @@ function parseConfig(data: any): SimulationConfig {
                 fov: parseValueWithUnit(data.scene.camera.fov),
                 near: parseLength(data.scene.camera.near),
                 far: parseLength(data.scene.camera.far),
-                position: parseVector3(data.scene.camera.position)
+                position: parseVector3(data.scene.camera.position),
+                minBodyDistanceFactor: parseValueWithUnit(data.scene.camera.minBodyDistanceFactor || { value: 8, unit: "dimensionless" })
             },
             grid: {
                 size: parseLength(data.scene.grid.size),
@@ -226,6 +234,10 @@ function parseConfig(data: any): SimulationConfig {
         trail: {
             color: data.trail.color,
             opacity: parseValueWithUnit(data.trail.opacity)
+        },
+        visualization: {
+            enablePlots: data.visualization?.enablePlots === true,
+            showLUT: data.visualization?.showLUT === true
         }
     };
 }

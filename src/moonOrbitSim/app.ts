@@ -90,6 +90,8 @@ export class MoonOrbitSimulation {
 
         // Enable bezier animation on Moon - this automatically enables dual-rendering
         // The single Moon body will now render both analytical and bezier positions
+        /* 
+        // Dual rendering disabled per user request
         if (addResult.success) {
             const bodies = this.gameLoop.getOrbitalBodies();
             const moon = bodies.find(b => b.getName() === 'Moon');
@@ -99,7 +101,8 @@ export class MoonOrbitSimulation {
                 moon.setDualRenderingEnabled(true);
                 console.log('[initializeSimulation] Enabled bezier animation with dual-rendering for Moon');
             }
-        }
+        } 
+        */
 
         // Update all UI sections
         if (addResult.success) {

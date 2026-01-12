@@ -468,7 +468,7 @@ export class UIManager {
             title: 'Property Inspector',
             x: 10,
             y: 10,
-            width: 300,
+            width: 250,
             height: 600,
             minWidth: 250,
             minHeight: 200
@@ -685,6 +685,16 @@ export class UIManager {
             }
             #commandOutput br {
                 line-height: 1;
+            }
+            /* Hide spin buttons in WebKit/Blink */
+            input[type=number]::-webkit-inner-spin-button, 
+            input[type=number]::-webkit-outer-spin-button { 
+                -webkit-appearance: none; 
+                margin: 0; 
+            }
+            /* Hide spin buttons in Firefox */
+            input[type=number] {
+                -moz-appearance: textfield;
             }
         `;
         document.head.appendChild(style);
@@ -1026,7 +1036,7 @@ export class UIManager {
 
         // Create table for property rows
         const table = document.createElement('table');
-        table.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
+        table.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0; table-layout: fixed;';
 
         // Get public properties using introspection
         const publicProps = this.getPublicProperties(obj);
@@ -1176,7 +1186,7 @@ export class UIManager {
                 valueCell.style.cssText = 'padding: 2px 2px; margin: 0;';
 
                 const inputsContainer = document.createElement('div');
-                inputsContainer.style.cssText = 'display: flex; gap: 4px; align-items: center; margin: 0;';
+                inputsContainer.style.cssText = 'display: flex; gap: 1px; align-items: center; margin: 0; width: 100%;';
 
                 // X input
                 const xInput = document.createElement('input');
@@ -1188,8 +1198,9 @@ export class UIManager {
                 xInput.placeholder = 'X';
                 xInput.style.cssText = `
                     flex: 1;
-                    padding: 0px 2px;
+                    padding: 0;
                     margin: 0;
+                    min-width: 0;
                     background: rgba(255,255,255,0.1);
                     color: white;
                     border: 1px solid rgba(255,255,255,0.2);
@@ -1214,8 +1225,9 @@ export class UIManager {
                 yInput.placeholder = 'Y';
                 yInput.style.cssText = `
                     flex: 1;
-                    padding: 0px 2px;
+                    padding: 0;
                     margin: 0;
+                    min-width: 0;
                     background: rgba(255,255,255,0.1);
                     color: white;
                     border: 1px solid rgba(255,255,255,0.2);
@@ -1240,8 +1252,9 @@ export class UIManager {
                 zInput.placeholder = 'Z';
                 zInput.style.cssText = `
                     flex: 1;
-                    padding: 0px 2px;
+                    padding: 0;
                     margin: 0;
+                    min-width: 0;
                     background: rgba(255,255,255,0.1);
                     color: white;
                     border: 1px solid rgba(255,255,255,0.2);
@@ -1397,7 +1410,7 @@ export class UIManager {
 
         // Create table for property rows
         const table = document.createElement('table');
-        table.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0;';
+        table.style.cssText = 'width: 100%; border-collapse: collapse; margin: 0; border-spacing: 0; table-layout: fixed;';
 
         // Get public properties using introspection
         const publicProps = this.getPublicProperties(obj);
@@ -1491,6 +1504,10 @@ export class UIManager {
      * Format a value for display based on its type
      * Uses safe-units type introspection instead of hardcoded key names
      */
+    /**
+     * Format a value for display based on its type
+     * Uses safe-units type introspection instead of hardcoded key names
+     */
     private formatValueForDisplay(key: string, value: any): string {
         if (value === null || value === undefined) {
             return 'N/A';
@@ -1504,7 +1521,8 @@ export class UIManager {
             // Use unit dimensions to determine formatting
             // Length: length=1, mass=0, time=0
             if (dims.length === 1 && dims.mass === 0 && dims.time === 0) {
-                return formatDistanceWithAstronomicalUnits(measure as Length);
+                // Use compact formatting (true) as requested by user
+                return formatDistanceWithAstronomicalUnits(measure as Length, true);
             }
             // Velocity: length=1, mass=0, time=-1
             if (dims.length === 1 && dims.mass === 0 && dims.time === -1) {
@@ -1525,7 +1543,7 @@ export class UIManager {
             if (absValue >= 0.001 && absValue < 1e6) {
                 formattedNumber = measure.value.toFixed(3);
             } else {
-                formattedNumber = measure.value.toExponential(3);
+                formattedNumber = measure.value.toExponential(2).replace(/e\+/g, 'e');
             }
             // Replace the number part in the string (handles both "123.456 unit" and "123.456unit" formats)
             return str.replace(/^[\d.e+-]+/, formattedNumber);
@@ -1726,7 +1744,7 @@ export class UIManager {
     private formatNumber(value: number): string {
         const absValue = Math.abs(value);
         if (absValue > 1e3 || absValue < 1e-3) {
-            return value.toExponential(3);
+            return value.toExponential(2).replace(/e\+/g, 'e');
         }
         return value.toFixed(3);
     }

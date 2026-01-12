@@ -157,7 +157,7 @@ export class PlotWindow extends UIWindow {
         const container = document.createElement('div');
         container.style.cssText = `
             position: absolute;
-            top: 10px;
+            top: 31px;
             right: 10px;
             display: flex;
             flex-direction: column;
@@ -760,15 +760,15 @@ export class PlotWindow extends UIWindow {
     }
 
     public setXRange(min: number, max: number): void {
-        this.plotConfig.xMin = min;
-        this.plotConfig.xMax = max;
-        this.render();
+        this.originalXMin = min;
+        this.originalXMax = max;
+        this.resetView();
     }
 
     public setYRange(min: number, max: number): void {
-        this.plotConfig.yMin = min;
-        this.plotConfig.yMax = max;
-        this.render();
+        this.originalYMin = min;
+        this.originalYMax = max;
+        this.resetView();
     }
 
     public setAxisLabels(xLabel: string, yLabel: string): void {

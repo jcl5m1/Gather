@@ -17,8 +17,7 @@ export interface OrbitalBodyRender {
     // Methods for updating the visual representation
     updateRenderingMode(position: THREE.Vector3, camera: THREE.Camera): void;
     getTrailPoints(): THREE.Vector3[];
-    addTrailPoint(point: THREE.Vector3): void;
-    clearTrail(initialPoint: THREE.Vector3): void;
+    updateTrail(points: THREE.Vector3[]): void;
     updateRadius(radius: number, color: number): void;
     setVisibility(visible: boolean): void;
     cleanup(): void;
@@ -57,8 +56,8 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
         this.dotSprite.position.copy(position);
         // Don't add to scene yet - will be added when needed
 
-        // Initialize trail with starting position
-        this.trailPoints = [position.clone()];
+        // Initialize trail (empty until updated)
+        this.trailPoints = [];
     }
 
     /**
@@ -140,40 +139,17 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
     }
 
     /**
-     * Add a point to the trail
+     * Update trail points directly
      */
-    addTrailPoint(point: THREE.Vector3): void {
-        this.trailPoints.push(point.clone());
-        if (this.trailPoints.length > this.maxTrailPoints) {
-            this.trailPoints.shift();
-        }
+    updateTrail(points: THREE.Vector3[]): void {
+        this.trailPoints = points.map(p => p.clone());
     }
 
     /**
-     * Clear trail and set initial point
-     */
-    clearTrail(initialPoint: THREE.Vector3): void {
-        this.trailPoints = [initialPoint.clone()];
-    }
-
-    /**
-     * Get trail points (sub-sampled to 10 segments for rendering)
+     * Get trail points (return current stored points)
      */
     getTrailPoints(): THREE.Vector3[] {
-        if (this.trailPoints.length <= 11) {
-            return this.trailPoints;
-        }
-
-        // Sub-sample to approximately 10 line segments (11 points)
-        const sampledPoints: THREE.Vector3[] = [];
-        const step = (this.trailPoints.length - 1) / 10;
-
-        for (let i = 0; i < 11; i++) {
-            const index = Math.floor(i * step);
-            sampledPoints.push(this.trailPoints[index]);
-        }
-
-        return sampledPoints;
+        return this.trailPoints;
     }
 
     /**
@@ -334,12 +310,22 @@ export class OrbitalBody extends Body {
      * In dual-rendering mode, updates both analytical and bezier renderings
      */
     updateRenderingMode(camera: THREE.Camera): void {
-        // Update analytical position rendering
-        this._render.updateRenderingMode(this.position, camera);
+        // If dual-rendering is enabled, we only want to show the Bezier (ghost) render
+        // and hide the Analytical (primary) render, as per user request to "disable renderings of the analytical version".
 
-        // Update bezier position rendering if dual-rendering is enabled
-        if (this._dualRenderingEnabled && this._bezierPosition && this._bezierRender) {
-            this._bezierRender.updateRenderingMode(this._bezierPosition, camera);
+        if (this._dualRenderingEnabled) {
+            // Hide primary (analytical)
+            this._render.setVisibility(false);
+
+            // Show/Update bezier (ghost)
+            if (this._bezierPosition && this._bezierRender) {
+                this._bezierRender.setVisibility(true);
+                this._bezierRender.updateRenderingMode(this._bezierPosition, camera);
+            }
+        } else {
+            // Normal mode: Show primary, dual rendering logic handles visibility of ghost if it existed but here we ensure primary is visible
+            this._render.setVisibility(true);
+            this._render.updateRenderingMode(this.position, camera);
         }
     }
 
@@ -446,9 +432,10 @@ export class OrbitalBody extends Body {
                 // If default is bezier, I ask for bezier.
                 pos = this._trajectory.getPosition(currentTime, 'bezier');
 
-                // Fallback if bezier fails (e.g. not ready)
-                if (!pos) {
-                    pos = this._trajectory.getPosition(currentTime, 'analytical');
+                // Strict compliance: Do NOT fall back to analytical math.
+                // If Bezier fails (should not happen for initialized elliptical orbits), we skip update.
+                if (!pos && this._trajectoryInitialized) {
+                    // console.warn('Bezier position failed?');
                 }
 
                 if (pos) {
@@ -471,8 +458,32 @@ export class OrbitalBody extends Body {
         const velocityVec = MeasureVector3.fromVector3<Velocity>(this.velocity, kilometers.per(seconds));
         this._trajectory.updateCurrentState(positionVec, velocityVec);
 
-        // Add to trail
-        this._render.addTrailPoint(this.position);
+        // Update trail using simplified static method
+        // Use bezierT if available (closest to visual position on curve)
+        // If trajectory not initialized or not using bezier, we might need fallback?
+        // But user request implies trajectory-based tail.
+
+        if (this._trajectoryInitialized) {
+            // Visualization requires BEZIER T (warped), not linear T
+            const bezierT = this._trajectory.getBezierT(this._lastUpdateTime);
+
+            // 1. Update orbit visualization (line)
+            this._trajectory.updateOrbitVisualization(bezierT, this.position);
+
+            // 2. Update Trail (tail)
+            if (typeof this._trajectory.getStaticTrailPoints === 'function') {
+                // Get 16 previous points
+                const trailPoints = this._trajectory.getStaticTrailPoints(bezierT, 16);
+                // Append current body position to the end (newest)
+                trailPoints.push(this.position);
+                // Update renderer
+                this._render.updateTrail(trailPoints);
+            }
+        } else {
+            // Fallback for when trajectory is not ready? 
+            // Just set trail to current position
+            this._render.updateTrail([this.position]);
+        }
     }
 
     /**
@@ -503,7 +514,7 @@ export class OrbitalBody extends Body {
         }
 
         // Clear trail
-        this._render.clearTrail(position);
+        this._render.updateTrail([position]);
 
         // Clear trajectory visualization until initialized
         this._trajectory.clear();
@@ -521,7 +532,7 @@ export class OrbitalBody extends Body {
         this._trajectoryInitialized = false;
 
         // Clear trail
-        this._render.clearTrail(this.initialPosition);
+        this._render.updateTrail([this.initialPosition]);
 
         // Clear trajectory
         this._trajectory.clear();
@@ -709,19 +720,19 @@ export class OrbitalBody extends Body {
         const trajectory = this.getTrajectory();
         if (!trajectory) return 0;
 
+        // Use the trajectory's robust calculation which handles M0 and Epoch
+        // Returns 0-1 Linear Time relative to Apoapsis
+        if (typeof trajectory.getLinearNormalizedTime === 'function') {
+            return trajectory.getLinearNormalizedTime(this._lastUpdateTime);
+        }
+
+        // Fallback (should not be reached if trajectory is updated)
         const params = trajectory.getParameters();
         const period = (params.period as any).over(seconds).value;
         if (period === 0) return 0;
 
-        // Use stored last update time
-        // Calculate Mean Anomaly relative to Epoch (M0)
-        // M(t) = M0 + n * (t - t0)
-        // We assume M0 is handled by trajectory logic relative to startTime
-
         const startTime = (trajectory as any)._startTime || 0;
         const dt = this._lastUpdateTime - startTime;
-
-        const normalizedTime = (dt % period) / period;
-        return normalizedTime;
+        return (dt % period) / period;
     }
 }

@@ -127,6 +127,10 @@
           "value": 500000,
           "unit": "km"
         }
+      },
+      "minBodyDistanceFactor": {
+        "value": 8,
+        "unit": "dimensionless"
       }
     },
     "grid": {
@@ -199,5 +203,9 @@
       "value": 0.5,
       "unit": "dimensionless"
     }
+  },
+  "visualization": {
+    "enablePlots": false,
+    "showLUT": false
   }
 }

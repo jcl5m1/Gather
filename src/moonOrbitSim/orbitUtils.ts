@@ -511,9 +511,9 @@ export function generateBezierOrbitPoints(
     e: number,
     h: THREE.Vector3,
     eVec: THREE.Vector3
-): { points: THREE.Vector3[], curves: BezierCurve[] } {
-    const points: THREE.Vector3[] = [];
-    const numPointsPerCurve = 25;
+): { points: { position: THREE.Vector3, t: number }[], curves: BezierCurve[] } {
+    const points: { position: THREE.Vector3, t: number }[] = [];
+    const numPointsPerCurve = 32; // 4 curves * 32 = 128 points
     const b = a * Math.sqrt(1 - e * e); // semi-minor axis
     const c = a * e; // distance from center to focus
 
@@ -577,11 +577,26 @@ export function generateBezierOrbitPoints(
     curves.push(c1); // 0°-90°
     curves.push(c2); // 90°-180°
 
-    // Generate points for visualization
-    curves.forEach(curve => {
-        for (let i = 0; i <= numPointsPerCurve; i++) {
-            const t = i / numPointsPerCurve;
-            points.push(curve.getPoint(t));
+    // Generate points for visualization with t values
+    curves.forEach((curve, curveIndex) => {
+        // Curve 0: 0.0 - 0.25
+        // Curve 1: 0.25 - 0.50
+        // Curve 2: 0.50 - 0.75
+        // Curve 3: 0.75 - 1.00
+        const tOffset = curveIndex * 0.25;
+
+        for (let i = 0; i < numPointsPerCurve; i++) {
+            // Include start point, skip end point (it's the start of next curve)
+            // UNLESS it's the very last curve, then include end point (handled by closed loop plotting usually, but let's be safe)
+            // Actually Three.js LineLoop handles closed loop, OR we provide start/end match.
+            // Let's generate [0, 1) effectively.
+            const tLocal = i / numPointsPerCurve;
+            const tGlobal = tOffset + (tLocal * 0.25);
+
+            points.push({
+                position: curve.getPoint(tLocal),
+                t: tGlobal
+            });
         }
     });
 

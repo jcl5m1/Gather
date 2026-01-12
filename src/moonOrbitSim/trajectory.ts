@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { G, generateEllipsePoints, generateBezierOrbitPoints, generateHyperbolicPoints, generateHyperbolicBezierPoints, calculateOrbitBasis, OrbitBasis, calculateEllipticalPositionFromBasis, calculateEllipticalPosition } from './orbitUtils';
+import { config, hexToNumber } from './config';
 import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, kilograms, ZERO_LENGTH, ZERO_TIME, ZERO_VELOCITY, INFINITE_LENGTH, INFINITE_TIME, cubicKilometersPerSecondSquared, squareKilometersPerSecondSquared, kilometersPerSecond, secondsSquared, gravitationalConstantUnit, formatDistanceWithAstronomicalUnits } from './units';
 import { MeasureVector3, LengthVector3, VelocityVector3, ZERO_LENGTH_VECTOR3 } from './unitsVector3';
 
@@ -310,7 +311,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.bezierLine = new THREE.Line(
             bezierGeometry,
             new THREE.LineBasicMaterial({ // Solid line
-                color: orbitColor,
+                color: orbitColor, // Use instance-specific color (from OrbitalBody -> config.bodies)
                 opacity: 0.8,
                 transparent: true
             })
@@ -396,21 +397,13 @@ export class TrajectoryRenderer implements TrajectoryRender {
             canvas.height = 64;
             const ctx = canvas.getContext('2d');
             if (ctx) {
-                // Draw a circle with border
+                // Draw a simple filled circle (dot)
                 ctx.beginPath();
-                ctx.arc(32, 32, 24, 0, 2 * Math.PI);
-                ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}44`; // Transparent fill
+                ctx.arc(32, 32, 8, 0, 2 * Math.PI); // Reduced radius from 16 to 8 (50% size reduction)
+                ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
                 ctx.fill();
-                ctx.lineWidth = 4;
-                ctx.strokeStyle = `#${color.toString(16).padStart(6, '0')}`;
-                ctx.stroke();
 
-                // Draw label in center
-                ctx.font = 'bold 24px Arial';
-                ctx.fillStyle = '#ffffff';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(label, 32, 32);
+                // No text inside the marker anymore
             }
             const texture = new THREE.Texture(canvas);
             texture.needsUpdate = true;
@@ -426,7 +419,8 @@ export class TrajectoryRenderer implements TrajectoryRender {
             canvas.height = 64;
             const ctx = canvas.getContext('2d');
             if (ctx) {
-                ctx.font = 'bold 20px monospace';
+                // Reduced font size to 22.5px (25% reduction from 30px)
+                ctx.font = 'bold 22.5px monospace';
                 ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
@@ -482,17 +476,16 @@ export class TrajectoryRenderer implements TrajectoryRender {
         // Let's just create a new texture with the label.
 
         if (visible && periDist) {
-            const label = `Pe: ${formatDistanceWithAstronomicalUnits(periDist)}`;
+            // Use compact formatting (3 significant digits) for Pe label
+            const label = `Pe: ${formatDistanceWithAstronomicalUnits(periDist, true)}`;
             const newTex = this.createTextTexture(label, 0x00ff00);
             if (this.periapsisText.material.map) this.periapsisText.material.map.dispose();
             this.periapsisText.material.map = newTex;
+            // Offset text sprite slightly in Y to not overlap icon
+            // Reduced offset from -0.125 to -0.0625 (another 50% closer)
+            this.periapsisText.center.set(0.5, -0.0625); // Anchor at top-center
             // Scale text sprite to maintain aspect ratio (256x64 = 4:1)
             this.periapsisText.scale.set(periScale * 4, periScale, 1);
-            // Offset text sprite slightly in Y to not overlap icon
-            // Note: This is 3D offset, so it scales with distance...
-            // Screen space constant offset needs a different approach (Canvas texture with both?)
-            // For now, simplified:
-            this.periapsisText.center.set(0.5, -0.5); // Anchor at top-center
         }
         this.periapsisText.visible = visible;
 
@@ -503,12 +496,13 @@ export class TrajectoryRenderer implements TrajectoryRender {
 
         this.apoapsisText.position.copy(apoapsisPos);
         if (visible && showApoapsis && apoDist) {
-            const label = `Ap: ${formatDistanceWithAstronomicalUnits(apoDist)}`;
+            // Use compact formatting (3 significant digits) for Ap label
+            const label = `Ap: ${formatDistanceWithAstronomicalUnits(apoDist, true)}`;
             const newTex = this.createTextTexture(label, 0xff0000);
             if (this.apoapsisText.material.map) this.apoapsisText.material.map.dispose();
             this.apoapsisText.material.map = newTex;
             this.apoapsisText.scale.set(periScale * 4, periScale, 1);
-            this.apoapsisText.center.set(0.5, -0.5);
+            this.apoapsisText.center.set(0.5, -0.0625);
         }
         this.apoapsisText.visible = visible && showApoapsis;
     }
@@ -533,7 +527,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.periapsisText.visible = show;
         this.apoapsisIcon.visible = show;
         this.apoapsisText.visible = show;
-        this.lutPoints.visible = show;
+        this.lutPoints.visible = show && config.visualization.showLUT; // Use config flag
     }
 
     cleanup(): void {
@@ -602,7 +596,7 @@ export class Trajectory {
     private _renderer: TrajectoryRenderer; // Private - use underscore prefix
     public type: TrajectoryType;
     private _analyticalPoints: THREE.Vector3[] = [];  // Private - use underscore prefix
-    private _bezierPoints: THREE.Vector3[] = [];      // Private - use underscore prefix
+    private _bezierPoints: { position: THREE.Vector3, t: number }[] = [];      // Private - use underscore prefix
     private _bezierCurves: any[] = [];               // Private - use underscore prefix
     private _periapsisPoint?: LengthVector3;         // Private - use underscore prefix
     private _apoapsisPoint?: LengthVector3;          // Private - use underscore prefix
@@ -798,8 +792,9 @@ export class Trajectory {
             this.apoapsis = Measure.of(apoapsisValue, kilometers);
 
             // Update visualization - render BOTH analytical orbit and bezier approximation
+            const initialBezierPositions = bezierResult.points.map(p => p.position);
             this._renderer.updateOrbitLine(ellipsePoints);
-            this._renderer.updateBezierLine(bezierResult.points);
+            this._renderer.updateBezierLine(initialBezierPositions);
             this._renderer.updateBezierCurves(bezierResult.curves);
             // Extract THREE.Vector3 for renderer
             this._renderer.updateMarkers(
@@ -839,7 +834,8 @@ export class Trajectory {
 
             this.type = 'hyperbolic';
             this._analyticalPoints = hyperbolicPoints;
-            this._bezierPoints = bezierResult.points;
+            // Map Vector3[] to { position, t }[] with dummy t=0 for now as hyperbolic doesn't use the t-based insertion yet
+            this._bezierPoints = bezierResult.points.map(p => ({ position: p, t: 0 }));
             this._bezierCurves = bezierResult.curves;
             // Convert to LengthVector3
             this._periapsisPoint = MeasureVector3.fromVector3<Length>(periapsisPoint, kilometers);
@@ -863,6 +859,7 @@ export class Trajectory {
 
             // Update visualization - render BOTH analytical orbit and bezier approximation
             this._renderer.updateOrbitLine(hyperbolicPoints);
+            // Points are already Vector3[] in bezierResult (hyperbolic version)
             this._renderer.updateBezierLine(bezierResult.points);
             this._renderer.updateBezierCurves(bezierResult.curves);
             // Extract THREE.Vector3 for renderer
@@ -910,6 +907,86 @@ export class Trajectory {
         if (this.type === 'elliptical' && this._useBezierEstimation) {
             this.buildTimeWarpLUT(this._centralBodyMass);
         }
+    }
+
+    /**
+     * Update the orbit visualization with the current position inserted dynamically
+     * @param currentT Current normalized time (0-1)
+     * @param currentPos Current position vector
+     */
+    updateOrbitVisualization(currentT: number, currentPos: THREE.Vector3): void {
+        if (!this._renderer || this._bezierPoints.length === 0) return;
+
+        // High-density sampling parameters
+        // Base density is 128 points. 4x density means step size is (1/128)/4
+        const baseStep = 1.0 / 128.0;
+        const highDefStep = baseStep / 4.0;
+
+        // Collect dynamic points to insert (current + 3 before + 3 after)
+        const dynamicPoints: { position: THREE.Vector3, t: number }[] = [];
+
+        // Add current position
+        dynamicPoints.push({ position: currentPos, t: currentT });
+
+        // Add 3 points before and 3 after
+        for (let i = 1; i <= 3; i++) {
+            // Before
+            let tBefore = currentT - i * highDefStep;
+            // Wrap t to 0-1 for sorting
+            if (tBefore < 0) tBefore += 1.0;
+            const posBefore = this.computeBezierPositionFromTime(tBefore);
+            if (posBefore) dynamicPoints.push({ position: posBefore, t: tBefore });
+
+            // After
+            let tAfter = currentT + i * highDefStep;
+            // Wrap t to 0-1
+            if (tAfter >= 1.0) tAfter -= 1.0;
+            const posAfter = this.computeBezierPositionFromTime(tAfter);
+            if (posAfter) dynamicPoints.push({ position: posAfter, t: tAfter });
+        }
+
+        // Sort dynamic points by t to simplify insertion
+        dynamicPoints.sort((a, b) => a.t - b.t);
+
+        // Create a new array of points for rendering
+        const renderPoints: THREE.Vector3[] = [];
+
+        // Iterate through pre-calculated points and merge with dynamic points
+        let dynamicIdx = 0;
+
+        for (let i = 0; i < this._bezierPoints.length; i++) {
+            const point = this._bezierPoints[i];
+
+            // Insert any dynamic points that come before this static point
+            while (dynamicIdx < dynamicPoints.length) {
+                const dynPoint = dynamicPoints[dynamicIdx];
+                if (dynPoint.t < point.t) {
+                    renderPoints.push(dynPoint.position);
+                    dynamicIdx++;
+                } else {
+                    break;
+                }
+            }
+
+            renderPoints.push(point.position);
+        }
+
+        // Append any remaining dynamic points (those after the last static point)
+        while (dynamicIdx < dynamicPoints.length) {
+            renderPoints.push(dynamicPoints[dynamicIdx].position);
+            dynamicIdx++;
+        }
+
+        // Close the loop for elliptical orbits (connect updated list back to start)
+        if (this.type === 'elliptical' && this._bezierPoints.length > 0) {
+            // Usually start point is at t=0, so it's already in the list.
+            // But we want a visually closed loop. 
+            // Three.js Line doesn't close automatically unless it's LineLoop.
+            // We can append the first point (which is t=0) to the end.
+            renderPoints.push(this._bezierPoints[0].position);
+        }
+
+        this._renderer.updateBezierLine(renderPoints);
     }
 
     /**
@@ -974,9 +1051,16 @@ export class Trajectory {
     }
 
     /**
-     * Get bezier points
+     * Get bezier points (positions only for compatibility)
      */
     getBezierPoints(): THREE.Vector3[] {
+        return this._bezierPoints.map(p => p.position);
+    }
+
+    /**
+     * Get bezier data (positions and t values)
+     */
+    getBezierData(): { position: THREE.Vector3, t: number }[] {
         return this._bezierPoints;
     }
 
@@ -1380,10 +1464,94 @@ export class Trajectory {
 
 
     /**
+     * Get the bezier parameter t (0-1 relative to Apoapsis) for a specific time
+     * Handles Mean Anomaly offset and time warping
+     */
+    getBezierT(time: number): number {
+        const linearT = this.getLinearNormalizedTime(time);
+        return this.timeWarpFunction(linearT);
+    }
+
+    /**
+     * Get the linear normalized time (0-1 relative to Apoapsis) for a specific time
+     * Handles Mean Anomaly offset (M0)
+     */
+    getLinearNormalizedTime(time: number): number {
+        if (!this._cachedOrbitBasis || !this.parameters.period) return 0;
+
+        const p = this.parameters.period.over(seconds).value;
+        if (p === 0) return 0;
+
+        // Calculate Mean Anomaly relative to Periapsis
+        // M(t) = M0 + n * (t - t0)
+        const n = 2 * Math.PI / p;
+        const dt = time - this._startTime;
+        const M_current_peri = this._cachedOrbitBasis.M0 + n * dt;
+
+        // Normalize to 0-1 range (relative to Periapsis)
+        const M_norm_peri = M_current_peri / (2 * Math.PI);
+        const M_wrapped_peri = ((M_norm_peri % 1) + 1) % 1;
+
+        // Convert to Apoapsis-relative for timeWarpFunction
+        // M_apo = M_peri + PI. M_apo_norm = (M_peri_norm + 0.5) % 1.
+        return (M_wrapped_peri + 0.5) % 1.0;
+    }
+
+    /**
      * Get the time warp function
      */
     public getTimeWarpFunction(): (t: number) => number {
         return this.timeWarpFunction.bind(this);
+    }
+
+    /**
+     * Get static trail points from the pre-computed bezier points
+     * Returns 'count' points preceding 'currentT', handling wrap-around
+     * Returns points in order: [oldest, ..., newest] (closest to currentT)
+     */
+    getStaticTrailPoints(currentT: number, count: number): THREE.Vector3[] {
+        if (this._bezierPoints.length === 0) return [];
+
+        // Find the index of the point immediately preceding or equal to currentT
+        // _bezierPoints is sorted by t
+        // We can do a simple linear scan or finding the last point where t <= currentT
+
+        let endIndex = -1;
+        // Optimization: since points are sorted, we can search
+        // Check if we need to wrap around initially (e.g. t=0.01 but points start at 0.0)
+        // Actually, just find the largest t <= currentT
+
+        // Linear scan backwards from end might be faster if currentT is near 1, 
+        // but forward is standard. Given 128 points, linear is fine.
+
+        for (let i = this._bezierPoints.length - 1; i >= 0; i--) {
+            if (this._bezierPoints[i].t <= currentT) {
+                endIndex = i;
+                break;
+            }
+        }
+
+        // If not found (currentT < all points), wrap to the end
+        if (endIndex === -1) {
+            endIndex = this._bezierPoints.length - 1;
+        }
+
+        const result: THREE.Vector3[] = [];
+        const len = this._bezierPoints.length;
+
+        // Collect 'count' points backwards from endIndex
+        for (let i = 0; i < count; i++) {
+            // Index calculation with wrap-around
+            // let idx = (endIndex - i) % len; // JS % operator handles negatives poorly (-1 % 5 = -1)
+            let idx = endIndex - i;
+            while (idx < 0) idx += len;
+
+            result.push(this._bezierPoints[idx].position);
+        }
+
+        // Result is currently [newest, ..., oldest]
+        // We want [oldest, ..., newest]
+        return result.reverse();
     }
 
     /**
