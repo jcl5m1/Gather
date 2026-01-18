@@ -2,11 +2,15 @@ import { SimulationController } from './simulationController';
 import { CameraManager } from './cameraManager';
 import { config, G } from './config';
 import { gravitationalConstantUnit } from './units';
-import { kilometers, kilograms, Length, Velocity, Time, Mass, formatDistanceWithAstronomicalUnits, formatVelocity, formatTime, GenericMeasure } from './units';
+import { kilometers, kilograms, seconds, Length, Velocity, Time, Mass, Measure, formatDistanceWithAstronomicalUnits, formatVelocity, formatTime, GenericMeasure } from './units';
 import * as THREE from 'three';
 import { PropertyInspector } from './propertyInspector';
 import { TooltipManager } from './tooltipManager';
 import { OrbitalBody } from './orbitalBody';
+import { TransferCalculator } from './transferCalculator';
+import { Trajectory } from './trajectory';
+import { TransferTrajectory } from './transferTrajectory';
+import { MeasureVector3 } from './unitsVector3';
 
 // Use require for marked to avoid TypeScript module resolution issues
 const markedModule = require('marked');
@@ -93,6 +97,62 @@ export class UIManager {
                     this.tooltipManager?.hide();
                 };
 
+                this.tooltipManager.onUntarget = (body) => {
+                     const focusedBodyName = this.cameraManager?.getCurrentTargetName();
+                     if (focusedBodyName) {
+                         const bodies = (this.cameraManager as any).getAllBodies();
+                         const focusedBody = bodies.find((b: any) => b && b.getName() === focusedBodyName);
+                         if (focusedBody && typeof focusedBody.setTarget === 'function') {
+                             focusedBody.setTarget(null);
+                             // Also clear transfer if any
+                             focusedBody.clearTransfer();
+                             this.updateAllSections();
+                         }
+                     }
+                     this.tooltipManager?.hide();
+                };
+
+                this.tooltipManager.onComputeTransfer = (body) => {
+                    const focusedBodyName = this.cameraManager?.getCurrentTargetName();
+                    if (focusedBodyName) {
+                         const bodies = (this.cameraManager as any).getAllBodies();
+                         const focusedBody = bodies.find((b: any) => b && b.getName() === focusedBodyName);
+                         if (focusedBody && focusedBody.target === body) {
+                            // Calculate Transfer
+                            const centralBody = this.simulationController.getGameLoop().getCentralBody();
+                             const result = TransferCalculator.calculateHohmannTransfer(
+                                 focusedBody,
+                                 body,
+                                 centralBody.getMass()
+                             );
+                             
+                             if (result) {
+                                 const scene = this.simulationController.getGameLoop().getScene();
+                                 const transferTrajectory = new TransferTrajectory(scene, 0xffff00); // Yellow for transfer
+                                 
+                                 // Set start/end times
+                                 const currentTime = this.simulationController.getGameLoop().getCurrentTime();
+                                 transferTrajectory.setTimes(currentTime, currentTime + result.timeOfFlight);
+                                 transferTrajectory.deltaV = result.deltaV1 + result.deltaV2;
+
+                                 const posMeasure = MeasureVector3.fromVector3<Length>(result.position, kilometers);
+                                 const velMeasure = MeasureVector3.fromVector3<Velocity>(result.velocity, kilometers.per(seconds));
+                                 const centralMassMeasure = Measure.of(centralBody.getMass(), kilograms);
+                                 const startTimeMeasure = Measure.of(currentTime, seconds);
+                                 
+                                 transferTrajectory.calculateFromState(posMeasure, velMeasure, centralMassMeasure, startTimeMeasure);
+                                 
+                                 // Set it on the body
+                                 focusedBody.setTransferTrajectory(transferTrajectory, result.startPosition, result.endPosition);
+                                 
+                                 // Force UI update to show the new section
+                                 this.updateAllSections();
+                             }
+                         }
+                    }
+                    this.tooltipManager?.hide();
+                };
+
                 this.startTooltipUpdateLoop();
             }
         }
@@ -127,6 +187,15 @@ export class UIManager {
 
         const update = () => {
             if (this.tooltipManager && this.cameraManager) {
+                // Update context (selected body)
+                const selectedBodyName = this.cameraManager.getCurrentTargetName();
+                let selectedBody = null;
+                if (selectedBodyName) {
+                     const bodies = (this.cameraManager as any).getAllBodies();
+                     selectedBody = bodies.find((b: any) => b && b.getName() === selectedBodyName);
+                }
+                this.tooltipManager.setContext(selectedBody || null);
+
                 const hoveredBody = this.cameraManager.getHoveredBody();
                 
                 if (hoveredBody) {
@@ -249,11 +318,12 @@ export class UIManager {
         getObject: () => any,
         defaultExpanded: boolean,
         propertyInspector: HTMLDivElement,
-        isEditable: boolean = false
+        isEditable: boolean = false,
+        forcedTitle?: string
     ): UISection {
         // Get the object to determine its class name for the title
         const obj = getObject();
-        const className = obj ? this.getClassName(obj) : 'Unknown';
+        const className = forcedTitle ? forcedTitle : (obj ? this.getClassName(obj) : 'Unknown');
 
         // Extract ID from class name by normalizing it (lowercase, remove spaces)
         const id = className.toLowerCase().replace(/\s+/g, '');
@@ -587,7 +657,7 @@ export class UIManager {
         // Section 0: CameraManager (auto-generated from CameraManager object)
         this.sections.push(this.createUISection(
             () => this.simulationController.getGameLoop().getCameraManager(),
-            true,
+            false,
             propertyInspector,
             true
         ));
@@ -610,6 +680,23 @@ export class UIManager {
             false,
             propertyInspector,
             true
+        ));
+
+        // Section 3: Transfer Trajectory (dynamically generated from focused object's transferTrajectory property)
+        this.sections.push(this.createUISection(
+            () => {
+                if (this.currentFocusedBodyName) {
+                    const body = this.simulationController.getBody(this.currentFocusedBodyName) as OrbitalBody;
+                    if (body && typeof body.getTransferTrajectory === 'function') {
+                        return body.getTransferTrajectory();
+                    }
+                }
+                return null;
+            },
+            true,
+            propertyInspector,
+            false,
+            'Transfer Trajectory'
         ));
 
         // Store heading reference for compatibility

@@ -628,28 +628,28 @@ export interface TimeWarpLUT {
  * Trajectory class that consolidates all data required to represent and render an orbital trajectory
  */
 export class Trajectory {
-    private _scene: THREE.Scene;              // Private - use underscore prefix
-    private _renderer: TrajectoryRenderer; // Private - use underscore prefix
+    protected _scene: THREE.Scene;              // Protected - use underscore prefix
+    protected _renderer: TrajectoryRenderer; // Protected - use underscore prefix
     public type: TrajectoryType;
-    private _analyticalPoints: THREE.Vector3[] = [];  // Private - use underscore prefix
-    private _bezierPoints: { position: THREE.Vector3, t: number }[] = [];      // Private - use underscore prefix
-    private _bezierCurves: any[] = [];               // Private - use underscore prefix
-    private _periapsisPoint?: LengthVector3;         // Private - use underscore prefix
-    private _apoapsisPoint?: LengthVector3;          // Private - use underscore prefix
+    protected _analyticalPoints: THREE.Vector3[] = [];  // Protected - use underscore prefix
+    protected _bezierPoints: { position: THREE.Vector3, t: number }[] = [];      // Protected - use underscore prefix
+    protected _bezierCurves: any[] = [];               // Protected - use underscore prefix
+    protected _periapsisPoint?: LengthVector3;         // Protected - use underscore prefix
+    protected _apoapsisPoint?: LengthVector3;          // Protected - use underscore prefix
     public parameters: TrajectoryParameters;
-    private _color: number;                    // Private - use underscore prefix
+    protected _color: number;                    // Protected - use underscore prefix
     public periapsis: Length = ZERO_LENGTH;
     public apoapsis: Length = ZERO_LENGTH;
     public altitude: Length = ZERO_LENGTH;
     public velocity: Velocity = ZERO_VELOCITY;
 
-    private _useBezierEstimation: boolean = true;
-    private _timeWarpLUT: TimeWarpLUT | null = null;
-    private _cachedOrbitBasis: OrbitBasis | null = null;
-    private _startTime: number = 0;
-    private _initialPosition: THREE.Vector3 = new THREE.Vector3();
-    private _initialVelocity: THREE.Vector3 = new THREE.Vector3();
-    private _centralBodyMass: number = 0;
+    protected _useBezierEstimation: boolean = true;
+    protected _timeWarpLUT: TimeWarpLUT | null = null;
+    protected _cachedOrbitBasis: OrbitBasis | null = null;
+    protected _startTime: number = 0;
+    protected _initialPosition: THREE.Vector3 = new THREE.Vector3();
+    protected _initialVelocity: THREE.Vector3 = new THREE.Vector3();
+    protected _centralBodyMass: number = 0;
     private _timeWarpFunction: ((t: number) => number) | null = null;
     private _markersVisible: boolean = true;
 
@@ -665,6 +665,15 @@ export class Trajectory {
             _h: ZERO_LENGTH_VECTOR3,
             _eVec: ZERO_LENGTH_VECTOR3
         };
+    }
+
+    /**
+     * Cleanup resources
+     */
+    cleanup(): void {
+        if (this._renderer) {
+            this._renderer.cleanup();
+        }
     }
 
     /**

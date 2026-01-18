@@ -22,6 +22,11 @@ export class TooltipManager extends UIWindow {
     // Callbacks
     public onSelect: (body: OrbitalBody) => void = () => {};
     public onTarget: (body: OrbitalBody) => void = () => {};
+    public onUntarget: (body: OrbitalBody) => void = () => {};
+    public onComputeTransfer: (body: OrbitalBody) => void = () => {};
+
+    // Context
+    private selectedBody: OrbitalBody | null = null;
 
     constructor(renderer: THREE.WebGLRenderer, camera: THREE.Camera) {
         // Initialize as a UIWindow
@@ -58,18 +63,26 @@ export class TooltipManager extends UIWindow {
         // Remove default box shadow or adjust z-index if needed
         this.container.style.zIndex = '2000'; // Higher than other windows
         
-        // Setup Content Area
-        this.setupContent();
+        // Setup Content Area (Dynamic now)
+    }
+
+    /**
+     * Set the current context (selected body) to determine which actions to show
+     */
+    setContext(selectedBody: OrbitalBody | null): void {
+        this.selectedBody = selectedBody;
     }
     
-    private setupContent(): void {
+    private updateButtons(): void {
         const content = this.getContentArea();
+        content.innerHTML = ''; // Clear existing
+        
         content.style.padding = '4px 0';
         content.style.display = 'flex';
         content.style.flexDirection = 'column';
         content.style.gap = '2px';
         
-        // Select Button
+        // Select Button (Always available)
         const selectBtn = this.createActionButton('Select');
         selectBtn.onclick = (e) => {
             e.stopPropagation();
@@ -77,13 +90,38 @@ export class TooltipManager extends UIWindow {
         };
         content.appendChild(selectBtn);
         
-        // Target Button
-        const targetBtn = this.createActionButton('Target');
-        targetBtn.onclick = (e) => {
-            e.stopPropagation();
-            if (this.currentBody) this.onTarget(this.currentBody);
-        };
-        content.appendChild(targetBtn);
+        // Target Actions
+        // If the current body is the target of the selected body, show "Untarget" and "Compute Transfer"
+        if (this.selectedBody && this.currentBody && this.selectedBody.target === this.currentBody) {
+             // Untarget Button
+            const untargetBtn = this.createActionButton('Untarget');
+            untargetBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (this.currentBody) this.onUntarget(this.currentBody);
+            };
+            content.appendChild(untargetBtn);
+
+            // Compute Transfer Button
+            const transferBtn = this.createActionButton('Compute Transfer');
+            transferBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (this.currentBody) this.onComputeTransfer(this.currentBody);
+            };
+            content.appendChild(transferBtn);
+
+        } else {
+             // Target Button -> Now "Compute Transfer" which targets AND computes
+            const targetBtn = this.createActionButton('Compute Transfer');
+            targetBtn.onclick = (e) => {
+                e.stopPropagation();
+                const body = this.currentBody;
+                if (body) {
+                    this.onTarget(body);
+                    this.onComputeTransfer(body);
+                }
+            };
+            content.appendChild(targetBtn);
+        }
     }
     
     private createActionButton(text: string): HTMLButtonElement {
@@ -114,6 +152,9 @@ export class TooltipManager extends UIWindow {
         this.currentBody = body;
         // Update Title via UIWindow method
         this.setTitle(body.getName());
+        
+        // Update Buttons based on context
+        this.updateButtons();
         
         this.show(); // Call UIWindow.show()
         this.isVisible = true;

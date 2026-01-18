@@ -27,8 +27,9 @@ export class MoonOrbitSimulation {
             // Pass camera manager for target display
             this.uiManager = new UIManager(this.simulationController, this.gameLoop.getCameraManager());
 
-            // Initialize simulation to initial state
-            this.initializeSimulation();
+            // Initialize simulation to initial state via RESET command
+            // This ensures the SimulationController's wrapper callback is executed (auto-init)
+            this.simulationController.executeCommand('RESET');
         } catch (error) {
             console.error('Error initializing simulation:', error);
             throw error;

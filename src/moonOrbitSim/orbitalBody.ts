@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Trajectory } from './trajectory';
+import { TransferTrajectory } from './transferTrajectory';
 import { MeasureVector3, LengthVector3, VelocityVector3 } from './unitsVector3';
 import { Mass, Measure, Length, Velocity, kilograms, kilometers, seconds, GenericMeasure, gravitationalConstantUnit, Time } from './units';
 import { Body } from './types';
@@ -34,7 +35,7 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
     private useDotRendering: boolean = false;
     private radius: number;
     
-    private targetLine: THREE.Line;
+    private targetLine: THREE.LineSegments;
 
     private texture: THREE.Texture | null = null;
 
@@ -82,21 +83,16 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
         // Initialize trail (empty until updated)
         this.trailPoints = [];
 
-        // Create target line (dotted)
+        // Create target line (Herringbone pattern)
         const lineGeometry = new THREE.BufferGeometry();
-        // Initial dummy points
-        lineGeometry.setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,0)]);
-        
-        const lineMaterial = new THREE.LineDashedMaterial({
+        const lineMaterial = new THREE.LineBasicMaterial({
             color: 0xffffff,
-            dashSize: 5000, 
-            gapSize: 5000,
             opacity: 0.5,
             transparent: true,
             depthWrite: true,
             depthTest: true
         });
-        this.targetLine = new THREE.Line(lineGeometry, lineMaterial);
+        this.targetLine = new THREE.LineSegments(lineGeometry, lineMaterial);
         this.targetLine.visible = false;
         this.targetLine.frustumCulled = false;
         scene.add(this.targetLine);
@@ -189,37 +185,217 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
 
     /**
      * Update target line to point to a target position
+     * Generates a billboarded herringbone/chevron pattern
      */
     updateTargetLine(start: THREE.Vector3, end: THREE.Vector3 | null, camera?: THREE.Camera): void {
-        if (!end) {
+        if (!end || !camera) {
             this.targetLine.visible = false;
             return;
         }
 
-        const points = [start, end];
-        this.targetLine.geometry.setFromPoints(points);
-        this.targetLine.computeLineDistances();
+        // Constants
+        const PIXEL_SPACING = 15.0; // Distance in pixels between chevrons (Doubled density)
+        const CHEVRON_PIXEL_SIZE = 10.0; // Size of chevron wings in pixels
 
-        // Screen-space constant spacing logic
-        if (camera) {
-            // Calculate distance from camera to the midpoint of the line
-            const midPoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
-            const distance = camera.position.distanceTo(midPoint);
-            
-            // Adjust dash/gap size based on distance scaling
-            // Base size: 0.02 * distance (adjust factor as needed)
-            // Previous was 5000 fixed. 
-            // If distance is large (e.g. 100,000 km), we want big dashes.
-            // If distance is small (100 km), small dashes.
-            
-            // Factor tweak: let's try 0.025 * distance for dash (doubled density from 0.05)
-            const scale = distance * 0.025; 
-            
-            const material = this.targetLine.material as THREE.LineDashedMaterial;
-            material.dashSize = scale;
-            material.gapSize = scale * 0.5; // Gap slightly smaller? or same
+        // 1. Transform World Points to Camera Space for Clipping
+        const startView = start.clone().applyMatrix4(camera.matrixWorldInverse);
+        const endView = end.clone().applyMatrix4(camera.matrixWorldInverse);
+
+        // Near plane clip distance
+        const near = (camera as any).near || 0.1;
+        const CLIP_Z = -near;
+
+        if (startView.z > CLIP_Z && endView.z > CLIP_Z) {
+            this.targetLine.visible = false;
+            return;
         }
 
+        let sClipped = start.clone();
+        let eClipped = end.clone();
+        let wStart = -startView.z;
+        let wEnd = -endView.z;
+
+        const clipLine = (p1: THREE.Vector3, p2: THREE.Vector3, w1: number, w2: number) => {
+            if (p1.z > CLIP_Z) {
+                const diff = p2.z - p1.z;
+                const t = diff !== 0 ? (CLIP_Z - p1.z) / diff : 0;
+                const pNew = new THREE.Vector3().lerpVectors(p1, p2, t);
+                return { pos: pNew, w: -pNew.z, t: t }; 
+            }
+            return { pos: p1, w: w1, t: 0 };
+        };
+
+        let tStart = 0;
+        let tEnd = 1;
+
+        if (startView.z > CLIP_Z) {
+            const res = clipLine(startView, endView, wStart, wEnd);
+            startView.copy(res.pos);
+            wStart = res.w;
+            tStart = res.t;
+        }
+        if (endView.z > CLIP_Z) {
+            const res = clipLine(endView, startView, wEnd, wStart);
+            endView.copy(res.pos);
+            wEnd = res.w;
+            tEnd = 1.0 - res.t;
+        }
+
+        // Reconstruct clipped world points based on interpolation
+        sClipped.lerpVectors(start, end, tStart);
+        eClipped.lerpVectors(start, end, tEnd);
+
+        // 2. Project to Screen Space (Pixels)
+        const height = window.innerHeight;
+        const width = window.innerWidth;
+
+        const pScrStart = sClipped.clone().project(camera);
+        const pScrEnd = eClipped.clone().project(camera);
+
+        const sScr = new THREE.Vector2((pScrStart.x + 1) * width / 2, (-pScrStart.y + 1) * height / 2);
+        const eScr = new THREE.Vector2((pScrEnd.x + 1) * width / 2, (-pScrEnd.y + 1) * height / 2);
+
+        // Screen Segment Vector
+        const vScr = new THREE.Vector2().subVectors(eScr, sScr);
+        const lenScr = vScr.length();
+
+        if (lenScr < 1.0) {
+            this.targetLine.visible = false;
+            return;
+        }
+
+        const dirScr = vScr.clone().normalize();
+
+        // 3. Determine Anchor Point (Midpoint)
+        const midWorld = new THREE.Vector3().lerpVectors(start, end, 0.5);
+        const midView = midWorld.clone().applyMatrix4(camera.matrixWorldInverse);
+        
+        let anchorFromStartPixels = 0;
+        
+        if (midView.z <= CLIP_Z) {
+            const temp = midWorld.clone().project(camera);
+            const midScr = new THREE.Vector2((temp.x + 1) * width / 2, (-temp.y + 1) * height / 2);
+            const vMid = new THREE.Vector2().subVectors(midScr, sScr);
+            anchorFromStartPixels = vMid.dot(dirScr);
+        } else {
+            anchorFromStartPixels = 0;
+        }
+
+        // 4. Viewport Clipping (Liang-Barsky) to limit iterations
+        // We only want to draw chevrons that are actually on screen.
+        // Screen Rect: (0,0) to (width, height)
+        // Segment: P(sigma) = sScr + sigma * (eScr - sScr), sigma in [0,1]
+        
+        const dx = eScr.x - sScr.x;
+        const dy = eScr.y - sScr.y;
+        
+        let t0 = 0.0;
+        let t1 = 1.0;
+        
+        const p = [-dx, dx, -dy, dy];
+        const q = [sScr.x, width - sScr.x, sScr.y, height - sScr.y]; // Clip against Left, Right, Top, Bottom
+        // Note: Y is pixels, 0 at top?
+        // project formula: (-temp.y + 1) * height / 2.
+        // temp.y=1 -> 0. temp.y=-1 -> height.
+        // So 0 is Top. Height is Bottom.
+        // q calc:
+        // Left (x>0): -dx * t <= sScr.x -> -dx is p[0], sScr.x is q[0]
+        // Right (x<W): dx * t <= W - sScr.x
+        // Top (y>0): -dy * t <= sScr.y
+        // Bottom (y<H): dy * t <= H - sScr.y
+
+        let visible = true;
+        for(let i=0; i<4; i++) {
+            if (p[i] === 0) {
+                if (q[i] < 0) visible = false;
+            } else {
+                const r = q[i] / p[i];
+                if (p[i] < 0) {
+                    if (r > t1) visible = false;
+                    else if (r > t0) t0 = r;
+                } else {
+                    if (r < t0) visible = false;
+                    else if (r < t1) t1 = r;
+                }
+            }
+        }
+        
+        if (!visible) {
+            this.targetLine.visible = false;
+            return;
+        }
+
+        // 5. Generate Points
+        const points: THREE.Vector3[] = [];
+        
+        // Helper to solve 3D point from fraction 'sigma' along screen segment
+        const getPointAtSigma = (sigma: number): THREE.Vector3 => {
+            const numerator = sigma * wStart;
+            const denominator = wEnd * (1 - sigma) + wStart * sigma;
+            // Guard against division by zero (unlikely with near clip but safe)
+            const u = Math.abs(denominator) > 1e-6 ? numerator / denominator : sigma;
+            return new THREE.Vector3().lerpVectors(sClipped, eClipped, u);
+        };
+
+        // Range of pixels to cover: from t0*lenScr to t1*lenScr
+        // We step relative to anchor
+        // anchor + k*Spacing = pixDist
+        // We want pixDist between [t0 * lenScr, t1 * lenScr]
+        
+        const startPix = t0 * lenScr;
+        const endPix = t1 * lenScr;
+        
+        const minK = Math.ceil((startPix - anchorFromStartPixels) / PIXEL_SPACING);
+        const maxK = Math.floor((endPix - anchorFromStartPixels) / PIXEL_SPACING);
+        
+        // Safety cap to strictly prevent crashes/freezes
+        const count = maxK - minK + 1;
+        if (count > 2000) {
+            // Should not happen with viewport clipping unless screen is massive or spacing huge
+            // But good safety valve
+             this.targetLine.visible = false;
+             return;
+        }
+
+        const lineDir = new THREE.Vector3().subVectors(eClipped, sClipped).normalize();
+
+        for (let k = minK; k <= maxK; k++) {
+            const pixDist = anchorFromStartPixels + k * PIXEL_SPACING;
+            const sigma = pixDist / lenScr;
+            
+            // Should be bounded by t0/t1 but float errors might push slightly
+            if (sigma < 0 || sigma > 1) continue; 
+            
+            const centerPos = getPointAtSigma(sigma);
+            
+            const dist = centerPos.distanceTo(camera.position);
+            
+            // Assume FOV 50 if generic camera
+            const fov = (camera instanceof THREE.PerspectiveCamera) ? camera.fov : 50;
+            const tan = Math.tan((fov * Math.PI / 180) / 2);
+            const worldSize = (CHEVRON_PIXEL_SIZE / height) * 2 * dist * tan;
+            
+            const chevronWingLength = worldSize; 
+            const chevronWidthOffset = worldSize * 0.6; 
+
+            // Billboarding
+            const viewVec = new THREE.Vector3().subVectors(centerPos, camera.position).normalize();
+            const right = new THREE.Vector3().crossVectors(lineDir, viewVec).normalize();
+            if (right.lengthSq() < 0.001) {
+                right.crossVectors(lineDir, new THREE.Vector3(0, 1, 0)).normalize();
+            }
+
+            const tip = centerPos.clone().add(lineDir.clone().multiplyScalar(chevronWingLength * 0.5));
+            const base = centerPos.clone().sub(lineDir.clone().multiplyScalar(chevronWingLength * 0.5));
+            
+            const left = base.clone().add(right.clone().multiplyScalar(chevronWidthOffset));
+            const rightPos = base.clone().sub(right.clone().multiplyScalar(chevronWidthOffset));
+            
+            points.push(left, tip);
+            points.push(rightPos, tip);
+        }
+
+        this.targetLine.geometry.setFromPoints(points);
         this.targetLine.visible = true;
     }
 
@@ -286,6 +462,14 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
             this.texture.dispose();
             this.texture = null;
         }
+        
+        // Note: OrbitalBodyRenderer doesn't know about the OrbitalBody's transfer stuff.
+        // The transfer stuff is on the OrbitalBody class, not OrbitalBodyRenderer.
+        // So we need to handle cleanup in OrbitalBody.dispose() or similar?
+        // OrbitalBody extends Body, does it have dispose?
+        // existing code has `cleanup()` in OrbitalBodyRenderer.
+        // `OrbitalBody` likely needs a cleanup/dispose method.
+        // Let's check if OrbitalBody has one.
     }
 }
 
@@ -315,6 +499,18 @@ export class OrbitalBody extends Body {
     private _bezierPosition: THREE.Vector3 | null = null;
     private _bezierVelocity: THREE.Vector3 | null = null;
     private _trajectoryInitialized: boolean = false;
+    
+    // Transfer Trajectory (Hohmann)
+    private _transferTrajectory: TransferTrajectory | null = null;
+    // Unused properties removed during refactoring
+    // private _transferStartPoint: THREE.Mesh | null = null;
+    // private _transferEndPoint: THREE.Mesh | null = null;
+    private _transferBezierRender: OrbitalBodyRender | null = null; // Re-use renderer for transfer visualization? Or just use Trajectory renderer.
+    // Actually Trajectory has its own renderer. We just need to hold the Trajectory object.
+    
+    // Markers for transfer start/end
+    // private _transferStartMarker: THREE.Mesh | null = null; // Removed - moved to TransferTrajectory
+    // private _transferEndMarker: THREE.Mesh | null = null;   // Removed - moved to TransferTrajectory
 
     private _scene: THREE.Scene;
 
@@ -366,6 +562,17 @@ export class OrbitalBody extends Body {
      * Create an OrbitalBody from a Body configuration object
      * This allows each class to know how to serialize/deserialize itself
      */
+     
+    dispose(): void {
+        this.clearTransfer();
+        this._render.cleanup();
+        if (this._bezierRender) {
+            this._bezierRender.cleanup();
+        }
+        // Trajectory cleanup?
+        // this._trajectory... we might need to expose cleanup there.
+    }
+
     static fromConfig(scene: THREE.Scene, bodyConfig: Body): OrbitalBody {
         const colorHex = bodyConfig.color ? parseInt(bodyConfig.color.replace('#', ''), 16) : 0xcccccc;
         const trajectoryColorHex = bodyConfig.trajectoryColor ? parseInt(bodyConfig.trajectoryColor.replace('#', ''), 16) : 0xff6666;
@@ -792,6 +999,40 @@ export class OrbitalBody extends Body {
      */
     getTrajectory(): Trajectory {
         return this._trajectory;
+    }
+
+    /**
+     * Get transfer trajectory
+     */
+    getTransferTrajectory(): TransferTrajectory | null {
+        return this._transferTrajectory;
+    }
+
+    /**
+     * Set transfer trajectory to visualize
+     */
+    setTransferTrajectory(trajectory: TransferTrajectory, startPos: THREE.Vector3, endPos: THREE.Vector3): void {
+        this.clearTransfer();
+        
+        this._transferTrajectory = trajectory;
+        
+        // Delegate marker creation to the trajectory
+        this._transferTrajectory.createMarkers(startPos, endPos, this.radius * 0.5);
+        
+        // Ensure visibility
+        this._transferTrajectory.setVisibility(true);
+    }
+    
+    /**
+     * Clear transfer trajectory
+     */
+    clearTransfer(): void {
+        if (this._transferTrajectory) {
+             // Use cleanup method on trajectory
+             this._transferTrajectory.cleanup();
+             this._transferTrajectory.setVisibility(false);
+             this._transferTrajectory = null; // Release reference
+        }
     }
 
     /**
