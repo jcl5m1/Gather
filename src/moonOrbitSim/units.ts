@@ -167,64 +167,82 @@ export function formatDistanceWithAstronomicalUnits(length: Length, compact: boo
 
 // Helper to format velocity (km/s is the base unit)
 // Picks the largest unit where the value is >= 0.5
-export function formatVelocity(velocity: Velocity): string {
+// compact: if true, uses 3 significant digits
+export function formatVelocity(velocity: Velocity, compact: boolean = false): string {
     // Convert to km/s for display
     const kmPerS = velocity.over(kilometersPerSecond).value;
     const absKmPerS = Math.abs(kmPerS);
 
+    const format = (val: number): string => {
+        if (compact) {
+            if (val === 0) return "0";
+            return val.toPrecision(3);
+        }
+        return val.toFixed(3);
+    };
+
     // km/s: >= 0.5 km/s
     if (absKmPerS >= 0.5) {
-        return `${kmPerS.toFixed(3)} km/s`;
+        return `${format(kmPerS)} km/s`;
     }
     // m/s: 1 m/s = 1e-3 km/s, >= 0.5 m/s means >= 0.0005 km/s
     if (absKmPerS >= 0.0005) {
-        return `${(kmPerS * 1e3).toFixed(3)} m/s`;
+        return `${format(kmPerS * 1e3)} m/s`;
     }
     // cm/s: 1 cm/s = 1e-5 km/s, >= 0.5 cm/s means >= 0.000005 km/s
     if (absKmPerS >= 0.000005) {
-        return `${(kmPerS * 1e5).toFixed(3)} cm/s`;
+        return `${format(kmPerS * 1e5)} cm/s`;
     }
-    // For very small values, use exponential notation with 3 decimals
-    return `${kmPerS.toExponential(3)} km/s`;
+    // For very small values, use exponential notation
+    return `${kmPerS.toExponential(compact ? 2 : 3)} km/s`;
 }
 
 // Helper to format time
 // Picks the largest unit where the value is >= 0.5
-export function formatTime(time: Time): string {
+// compact: if true, uses 3 significant digits
+export function formatTime(time: Time, compact: boolean = false): string {
     if (!isFinite(time.value)) {
         return time.value === Infinity ? '∞' : 'NaN';
     }
+
+    const format = (val: number): string => {
+        if (compact) {
+            if (val === 0) return "0";
+            return val.toPrecision(3);
+        }
+        return val.toFixed(3);
+    };
 
     // Try days first: >= 0.5 d
     const daysValue = time.over(days).value;
     const absDays = Math.abs(daysValue);
     if (absDays >= 0.5) {
-        return `${daysValue.toFixed(3)} d`;
+        return `${format(daysValue)} d`;
     }
 
     // Try hours: 1 h = 1/24 d, >= 0.5 h means >= 0.5/24 d = 0.020833... d
     const hoursValue = time.over(hours).value;
     const absHours = Math.abs(hoursValue);
     if (absHours >= 0.5) {
-        return `${hoursValue.toFixed(3)} h`;
+        return `${format(hoursValue)} h`;
     }
 
-    // Try minutes: 1 min = 1/60 h, >= 0.5 min means >= 0.5/60 h = 0.008333... h
+    // Try minutes: 1 min = 1/60 h, >= 0.5 min means >= 0.008333... h
     const minutesValue = time.over(minutes).value;
     const absMinutes = Math.abs(minutesValue);
     if (absMinutes >= 0.5) {
-        return `${minutesValue.toFixed(3)} min`;
+        return `${format(minutesValue)} min`;
     }
 
     // Try seconds: >= 0.5 s
     const secondsValue = time.over(seconds).value;
     const absSeconds = Math.abs(secondsValue);
     if (absSeconds >= 0.5) {
-        return `${secondsValue.toFixed(3)} s`;
+        return `${format(secondsValue)} s`;
     }
 
-    // For very small values, use exponential notation with 3 decimals
-    return `${secondsValue.toExponential(3)} s`;
+    // For very small values, use exponential notation
+    return `${secondsValue.toExponential(compact ? 2 : 3)} s`;
 }
 
 // Convenience constants for initializing measures

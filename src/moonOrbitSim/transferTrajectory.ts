@@ -20,15 +20,19 @@ export class TransferTrajectory extends Trajectory {
     public deltaV2: Velocity = Measure.of(0, kilometers.per(seconds));
     public totalDeltaV: Velocity = Measure.of(0, kilometers.per(seconds));
     public timeOfFlight: Time = Measure.of(0, seconds);
+    public startDelay: Time = Measure.of(0, seconds);
 
     constructor(scene: THREE.Scene, color: number = 0xffff00) {
         super(scene, color);
     }
 
-    setTimes(startTime: number, endTime: number): void {
-        this._transferStartTime = startTime;
-        this._transferEndTime = endTime;
+    setTimes(startTime: number, endTime: number, startDelay: number = 0): void {
+        this._transferStartTime = startTime + startDelay;
+        this._transferEndTime = endTime + startDelay;
+        this._startTime = this._transferStartTime;
+        this._endTime = this._transferEndTime;
         this.timeOfFlight = Measure.of(endTime - startTime, seconds);
+        this.startDelay = Measure.of(startDelay, seconds);
     }
     
     setDeltaVs(dv1: number, dv2: number): void {
@@ -77,29 +81,30 @@ export class TransferTrajectory extends Trajectory {
     * Update annotations based on current simulation time
     */
     update(currentTime: number): void {
+        super.update(currentTime);
         const timeUntilStart = Measure.of(this._transferStartTime - currentTime, seconds);
         const timeUntilEnd = Measure.of(this._transferEndTime - currentTime, seconds);
         
         // Update Start Label
         const startPrefix = timeUntilStart.value > 0 ? "T- " : "T+ ";
         const startText = [
-            `Start: ${startPrefix}${formatTime(Measure.of(Math.abs(timeUntilStart.value), seconds))}`,
-            `Δv: ${formatVelocity(this.deltaV1)}`
+            `Start: ${startPrefix}${formatTime(Measure.of(Math.abs(timeUntilStart.value), seconds), true)}`,
+            `ΔV: ${formatVelocity(this.deltaV1, true)}`
         ];
         this.updateLabelTexture(this._startLabel, startText, 0x00ff00);
 
         // Update End Label
         const endPrefix = timeUntilEnd.value > 0 ? "T- " : "T+ ";
         const endText = [
-            `End: ${endPrefix}${formatTime(Measure.of(Math.abs(timeUntilEnd.value), seconds))}`,
-            `Insert Δv: ${formatVelocity(this.deltaV2)}`
+            `End: ${endPrefix}${formatTime(Measure.of(Math.abs(timeUntilEnd.value), seconds), true)}`,
+            `Insert ΔV: ${formatVelocity(this.deltaV2, true)}`
         ];
         this.updateLabelTexture(this._endLabel, endText, 0xff0000);
 
         // Update Mid Label (Static info mostly)
         const midText = [
-            `TOF: ${formatTime(this.timeOfFlight)}`,
-            `Total Δv: ${formatVelocity(this.totalDeltaV)}`
+            `TOF: ${formatTime(this.timeOfFlight, true)}`,
+            `Total ΔV: ${formatVelocity(this.totalDeltaV, true)}`
         ];
         this.updateLabelTexture(this._midLabel, midText, 0xffff00);
     }
@@ -112,7 +117,7 @@ export class TransferTrajectory extends Trajectory {
             depthWrite: false
         });
         const sprite = new THREE.Sprite(material);
-        sprite.scale.set(0.3, 0.15, 1); // Aspect 2:1 roughly (Increased 50% from 0.2, 0.1)
+        sprite.scale.set(0.24, 0.12, 1); // Aspect 2:1 roughly (Reduced 20% from 0.3, 0.15)
         sprite.renderOrder = 1000;
         return sprite;
     }
@@ -121,11 +126,11 @@ export class TransferTrajectory extends Trajectory {
         if (!sprite) return;
         
         const canvas = document.createElement('canvas');
-        canvas.width = 384;
-        canvas.height = 192;
+        canvas.width = 320;
+        canvas.height = 160;
         const ctx = canvas.getContext('2d');
         if (ctx) {
-            ctx.font = 'bold 30px monospace';
+            ctx.font = 'bold 24px monospace';
             ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -134,11 +139,11 @@ export class TransferTrajectory extends Trajectory {
             ctx.shadowBlur = 4;
             ctx.lineWidth = 2;
 
-            const lineHeight = 36;
+            const lineHeight = 30;
             const startY = (canvas.height - (lines.length - 1) * lineHeight) / 2;
 
             lines.forEach((line, index) => {
-                ctx.fillText(line, 192, startY + index * lineHeight);
+                ctx.fillText(line, 160, startY + index * lineHeight);
             });
         }
         
@@ -256,6 +261,22 @@ export class TransferTrajectory extends Trajectory {
              // Regenerate visual line
              const points = this._bezierPoints.map(p => p.position);
              this._renderer.updateBezierLine(points);
+        }
+
+        // Update markers to the actual analytical points if they exist
+        if (this._analyticalPoints.length > 0) {
+            const startPos = this._analyticalPoints[0];
+            const endPos = this._analyticalPoints[this._analyticalPoints.length - 1];
+            
+            if (this._startMarker) this._startMarker.position.copy(startPos);
+            if (this._endMarker) this._endMarker.position.copy(endPos);
+            if (this._startLabel) this._startLabel.position.copy(startPos).add(new THREE.Vector3(0, 5, 0));
+            if (this._endLabel) this._endLabel.position.copy(endPos).add(new THREE.Vector3(0, 5, 0));
+            
+            if (this._midLabel) {
+                 const midIdx = Math.floor(this._analyticalPoints.length / 2);
+                 this._midLabel.position.copy(this._analyticalPoints[midIdx]).add(new THREE.Vector3(0, 5, 0));
+            }
         }
     }
 }

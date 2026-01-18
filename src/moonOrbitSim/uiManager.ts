@@ -120,27 +120,28 @@ export class UIManager {
                          if (focusedBody && focusedBody.target === body) {
                             // Calculate Transfer
                             const centralBody = this.simulationController.getGameLoop().getCentralBody();
-                             const result = TransferCalculator.calculateHohmannTransfer(
-                                 focusedBody,
-                                 body,
-                                 centralBody.getMass()
-                             );
-                             
-                             if (result) {
-                                 const scene = this.simulationController.getGameLoop().getScene();
-                                 const transferTrajectory = new TransferTrajectory(scene, 0xffff00); // Yellow for transfer
-                                 
-                                 // Set start/end times
-                                 const currentTime = this.simulationController.getGameLoop().getCurrentTime();
-                                 transferTrajectory.setTimes(currentTime, currentTime + result.timeOfFlight);
-                                 transferTrajectory.setDeltaVs(result.deltaV1, result.deltaV2);
+                             const result = TransferCalculator.calculateOptimalHohmannTransfer(
+                                focusedBody,
+                                body,
+                                centralBody.getMass(),
+                                this.simulationController.getGameLoop().getCurrentTime()
+                            );
+                            
+                            if (result) {
+                                const scene = this.simulationController.getGameLoop().getScene();
+                                const transferTrajectory = new TransferTrajectory(scene, 0xffff00); // Yellow for transfer
+                                
+                                // Set start/end times
+                                const currentTime = this.simulationController.getGameLoop().getCurrentTime();
+                                transferTrajectory.setTimes(currentTime, currentTime + result.timeOfFlight, result.startDelay);
+                                transferTrajectory.setDeltaVs(result.deltaV1, result.deltaV2);
 
-                                 const posMeasure = MeasureVector3.fromVector3<Length>(result.position, kilometers);
-                                 const velMeasure = MeasureVector3.fromVector3<Velocity>(result.velocity, kilometers.per(seconds));
-                                 const centralMassMeasure = Measure.of(centralBody.getMass(), kilograms);
-                                 const startTimeMeasure = Measure.of(currentTime, seconds);
-                                 
-                                 transferTrajectory.calculateFromState(posMeasure, velMeasure, centralMassMeasure, startTimeMeasure);
+                                const posMeasure = MeasureVector3.fromVector3<Length>(result.position, kilometers);
+                                const velMeasure = MeasureVector3.fromVector3<Velocity>(result.velocity, kilometers.per(seconds));
+                                const centralMassMeasure = Measure.of(centralBody.getMass(), kilograms);
+                                const startTimeMeasure = Measure.of(currentTime + result.startDelay, seconds);
+                                
+                                transferTrajectory.calculateFromState(posMeasure, velMeasure, centralMassMeasure, startTimeMeasure);
                                  
                                  // Set it on the body
                                  focusedBody.setTransferTrajectory(transferTrajectory, result.startPosition, result.endPosition);
@@ -1814,11 +1815,11 @@ export class UIManager {
             }
             // Velocity: length=1, mass=0, time=-1
             if (dims.length === 1 && dims.mass === 0 && dims.time === -1) {
-                return formatVelocity(measure as Velocity);
+                return formatVelocity(measure as Velocity, true);
             }
             // Time: length=0, mass=0, time=1
             if (dims.length === 0 && dims.mass === 0 && dims.time === 1) {
-                return formatTime(measure as Time);
+                return formatTime(measure as Time, true);
             }
             // For other measure types, format with 3 decimal places
             if (!isFinite(measure.value)) {

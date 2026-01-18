@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { G, generateEllipsePoints, generateBezierOrbitPoints, generateHyperbolicPoints, generateHyperbolicBezierPoints, calculateOrbitBasis, OrbitBasis, calculateEllipticalPositionFromBasis, calculateEllipticalPosition } from './orbitUtils';
 import { config, hexToNumber } from './config';
-import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, kilograms, ZERO_LENGTH, ZERO_TIME, ZERO_VELOCITY, INFINITE_LENGTH, INFINITE_TIME, cubicKilometersPerSecondSquared, squareKilometersPerSecondSquared, kilometersPerSecond, secondsSquared, gravitationalConstantUnit, formatDistanceWithAstronomicalUnits } from './units';
+import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, kilograms, ZERO_LENGTH, ZERO_TIME, ZERO_VELOCITY, INFINITE_LENGTH, INFINITE_TIME, cubicKilometersPerSecondSquared, squareKilometersPerSecondSquared, kilometersPerSecond, secondsSquared, gravitationalConstantUnit, formatDistanceWithAstronomicalUnits, formatTime } from './units';
 import { MeasureVector3, LengthVector3, VelocityVector3, ZERO_LENGTH_VECTOR3 } from './unitsVector3';
 
 // ============================================================================
@@ -282,12 +282,15 @@ export interface TrajectoryRender {
     periapsisText: THREE.Sprite;
     apoapsisIcon: THREE.Sprite;
     apoapsisText: THREE.Sprite;
+    debugIcon: THREE.Sprite;
+    debugText: THREE.Sprite;
 
     // Methods for updating the visual representation
     updateOrbitLine(points: THREE.Vector3[]): void;
     updateBezierLine(points: THREE.Vector3[]): void;
     updateBezierCurves(curves: BezierCurve[]): void;
     updateMarkers(periapsisPos: THREE.Vector3, apoapsisPos: THREE.Vector3, visible: boolean, showApoapsis?: boolean, periDist?: Length, apoDist?: Length): void;
+    updateDebugMarker(position: THREE.Vector3 | null, visible: boolean, timeOffset?: number): void;
     updateLUTMarkers(points: THREE.Vector3[]): void;
     setMarkersVisible(visible: boolean): void;
     setVisibility(show: boolean): void;
@@ -302,6 +305,8 @@ export class TrajectoryRenderer implements TrajectoryRender {
     periapsisText: THREE.Sprite;
     apoapsisIcon: THREE.Sprite;
     apoapsisText: THREE.Sprite;
+    debugIcon: THREE.Sprite;
+    debugText: THREE.Sprite;
     lutPoints: THREE.Points;
 
     private scene: THREE.Scene;
@@ -361,6 +366,15 @@ export class TrajectoryRenderer implements TrajectoryRender {
         // scene.add(this.periapsisText);
         // scene.add(this.apoapsisIcon);
         // scene.add(this.apoapsisText);
+        // Debug Marker
+        const debugColor = 0xffffff;
+        this.debugIcon = this.createSprite(this.createIconTexture(debugColor, ''), 0.3);
+        this.debugText = this.createSprite(this.createTextTexture([''], debugColor), 1.0);
+        this.debugIcon.visible = false;
+        this.debugText.visible = false;
+        scene.add(this.debugIcon);
+        scene.add(this.debugText);
+
         console.log('[DEBUG] Added markers to scene, scene children:', scene.children.length);
 
         // Initialize LUT markers (Points for screen-space rendering)
@@ -444,23 +458,23 @@ export class TrajectoryRenderer implements TrajectoryRender {
         try {
             if (typeof document === 'undefined') return new THREE.Texture();
             const canvas = document.createElement('canvas');
-            canvas.width = 384; 
-            canvas.height = 192; 
+            canvas.width = 320; 
+            canvas.height = 160; 
             const ctx = canvas.getContext('2d');
             if (ctx) {
                 // Reduced font size to 22.5px
-                ctx.font = 'bold 33.75px monospace';
+                ctx.font = 'bold 27px monospace';
                 ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.shadowColor = 'black';
                 ctx.shadowBlur = 4;
 
-                const lineHeight = 45; // Spacing between lines
+                const lineHeight = 36; // Spacing between lines
                 const startY = (canvas.height - (lines.length - 1) * lineHeight) / 2;
 
                 lines.forEach((line, index) => {
-                    ctx.fillText(line, 192, startY + index * lineHeight);
+                    ctx.fillText(line, 160, startY + index * lineHeight);
                 });
             }
             const texture = new THREE.Texture(canvas);
@@ -517,7 +531,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
             // Previous was 4:1 (256x64), scaled 4*periScale x periScale
             // New is 2:1, so width should be 2*height? 
             // If height is 2*periScale (doubled height), width is 4*periScale.
-            this.periapsisText.scale.set(periScale * 6, periScale * 3, 1);
+            this.periapsisText.scale.set(periScale * 4.8, periScale * 2.4, 1);
         }
         this.periapsisText.visible = visible;
 
@@ -534,10 +548,34 @@ export class TrajectoryRenderer implements TrajectoryRender {
             
             if (this.apoapsisText.material.map) this.apoapsisText.material.map.dispose();
             this.apoapsisText.material.map = newTex;
-            this.apoapsisText.scale.set(periScale * 6, periScale * 3, 1);
+            this.apoapsisText.scale.set(periScale * 4.8, periScale * 2.4, 1);
             this.apoapsisText.center.set(0.5, -0.2);
         }
         this.apoapsisText.visible = visible && showApoapsis;
+    }
+
+    updateDebugMarker(position: THREE.Vector3 | null, visible: boolean, timeOffset: number = 0): void {
+        if (!position || !visible) {
+            this.debugIcon.visible = false;
+            this.debugText.visible = false;
+            return;
+        }
+
+        const scale = 0.05;
+        this.debugIcon.position.copy(position);
+        this.debugIcon.scale.set(scale * 0.6, scale * 0.6, 1);
+        this.debugIcon.visible = true;
+
+        this.debugText.position.copy(position);
+        this.debugText.visible = true;
+
+        const timeStr = `T+ ${formatTime(Measure.of(Math.abs(timeOffset), seconds), true)}`;
+        const newTex = this.createTextTexture([timeStr], 0xffffff);
+        
+        if (this.debugText.material.map) this.debugText.material.map.dispose();
+        this.debugText.material.map = newTex;
+        this.debugText.center.set(0.5, -0.5);
+        this.debugText.scale.set(scale * 4.8, scale * 2.4, 1);
     }
 
     setMarkersVisible(visible: boolean): void {
@@ -556,10 +594,9 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.orbitLine.visible = false; // Always hidden
         this.bezierLine.visible = show;
         this.bezierRenderers.forEach(renderer => renderer.setVisibility(show, false));
-        this.periapsisIcon.visible = show;
-        this.periapsisText.visible = show;
-        this.apoapsisIcon.visible = show;
         this.apoapsisText.visible = show;
+        this.debugIcon.visible = false; // Debug is managed by update()
+        this.debugText.visible = false;
         this.lutPoints.visible = show && config.visualization.showLUT; // Use config flag
     }
 
@@ -572,6 +609,8 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.periapsisText.visible = false;
         this.apoapsisIcon.visible = false;
         this.apoapsisText.visible = false;
+        this.debugIcon.visible = false;
+        this.debugText.visible = false;
 
         this.bezierRenderers.forEach(renderer => renderer.cleanup());
         this.bezierRenderers = [];
@@ -583,6 +622,8 @@ export class TrajectoryRenderer implements TrajectoryRender {
             this.periapsisText,
             this.apoapsisIcon,
             this.apoapsisText,
+            this.debugIcon,
+            this.debugText,
             this.lutPoints
         ].forEach(obj => {
             if (obj.parent === this.scene) this.scene.remove(obj);
@@ -646,6 +687,7 @@ export class Trajectory {
     protected _initialPosition: THREE.Vector3 = new THREE.Vector3();
     protected _initialVelocity: THREE.Vector3 = new THREE.Vector3();
     protected _centralBodyMass: number = 0;
+    protected _endTime: number | null = null;
     private _timeWarpFunction: ((t: number) => number) | null = null;
     private _markersVisible: boolean = true;
 
@@ -680,6 +722,22 @@ export class Trajectory {
         // Also update renderer immediately if it exists
         if (this._renderer) {
             this._renderer.setMarkersVisible(visible);
+        }
+    }
+
+    /**
+     * Update trajectory state and debugging annotations
+     */
+    update(currentTime: number): void {
+        const isActive = currentTime >= this._startTime && (this._endTime === null || currentTime <= this._endTime);
+        
+        if (isActive) {
+            const pos = this.getPosition(currentTime, 'bezier');
+            if (pos && this._renderer) {
+                this._renderer.updateDebugMarker(pos, true, currentTime - this._startTime);
+            }
+        } else if (this._renderer) {
+            this._renderer.updateDebugMarker(null, false, 0);
         }
     }
 

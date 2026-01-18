@@ -739,6 +739,9 @@ export class OrbitalBody extends Body {
         this.ensureTrajectoryInitialized(centralBodyMass, currentTime);
         this._lastUpdateTime = currentTime; // Store for getCurrentNormalizedTime
 
+        // Update trajectory debugging annotations
+        this._trajectory.update(currentTime);
+
         // If dual-rendering is enabled, calculate BOTH positions
         if (this._dualRenderingEnabled) {
             // Dual Rendering: One is "Primary" (Analytical), other is "Ghost" (Bezier)

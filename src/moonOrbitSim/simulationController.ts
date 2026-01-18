@@ -56,10 +56,11 @@ export class SimulationController {
              // 4. Compute Transfer
              try {
                  const centralBody = this.gameLoop.getCentralBody();
-                 const result = TransferCalculator.calculateHohmannTransfer(
+                 const result = TransferCalculator.calculateOptimalHohmannTransfer(
                      rocket,
                      moon,
-                     centralBody.getMass()
+                     centralBody.getMass(),
+                     this.gameLoop.getCurrentTime()
                  );
                  
                  if (result) {
@@ -67,13 +68,13 @@ export class SimulationController {
                      const transferTrajectory = new TransferTrajectory(scene, 0xffff00);
                      
                      const currentTime = this.gameLoop.getCurrentTime();
-                     transferTrajectory.setTimes(currentTime, currentTime + result.timeOfFlight);
+                     transferTrajectory.setTimes(currentTime, currentTime + result.timeOfFlight, result.startDelay);
                      transferTrajectory.setDeltaVs(result.deltaV1, result.deltaV2);
                      
                      const posMeasure = MeasureVector3.fromVector3<Length>(result.position, kilometers);
                      const velMeasure = MeasureVector3.fromVector3<Velocity>(result.velocity, kilometers.per(seconds));
                      const centralMassMeasure = Measure.of(centralBody.getMass(), kilograms);
-                     const startTimeMeasure = Measure.of(currentTime, seconds);
+                     const startTimeMeasure = Measure.of(currentTime + result.startDelay, seconds);
                      
                      transferTrajectory.calculateFromState(posMeasure, velMeasure, centralMassMeasure, startTimeMeasure);
                      
