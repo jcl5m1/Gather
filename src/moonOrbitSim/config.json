@@ -5,7 +5,7 @@
       "unit": "km³/(kg·s²)"
     },
     "defaultTimeScale": {
-      "value": 10000.0,
+      "value": 1000.0,
       "unit": "dimensionless"
     },
     "orbitUpdateMethod": {
@@ -55,7 +55,8 @@
         }
       },
       "parentId": "",
-      "color": "3366cc"
+      "color": "3366cc",
+      "texture": "https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg"
     },
     "moon": {
       "name": "Moon",
@@ -83,21 +84,64 @@
       },
       "velocity": {
         "x": {
-          "value": 0.4,
+          "value": 0,
           "unit": "km/s"
         },
         "y": {
-          "value": 0.3,
+          "value": 0,
           "unit": "km/s"
         },
         "z": {
-          "value": 0.522,
+          "value": 1.018,
           "unit": "km/s"
         }
       },
       "parentId": "Earth",
       "color": "cccccc",
-      "trajectoryColor": "ffffff"
+      "trajectoryColor": "ffffff",
+      "texture": "https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/moon_1024.jpg"
+    },
+    "rocket": {
+      "name": "Apollo 11",
+      "mass": {
+        "value": 45000,
+        "unit": "kg"
+      },
+      "radius": {
+        "value": 0.01,
+        "unit": "km"
+      },
+      "position": {
+        "x": {
+          "value": 6561,
+          "unit": "km"
+        },
+        "y": {
+          "value": 0,
+          "unit": "km"
+        },
+        "z": {
+          "value": 0,
+          "unit": "km"
+        }
+      },
+      "velocity": {
+        "x": {
+          "value": 0,
+          "unit": "km/s"
+        },
+        "y": {
+          "value": 0,
+          "unit": "km/s"
+        },
+        "z": {
+          "value": 7.794,
+          "unit": "km/s"
+        }
+      },
+      "parentId": "Earth",
+      "color": "ff0000",
+      "trajectoryColor": "ffcc00"
     }
   },
   "scene": {
@@ -205,7 +249,8 @@
     }
   },
   "visualization": {
-    "enablePlots": false,
+    "enablePlots": true,
+    "enableVelocityPlot": false,
     "showLUT": false
   }
 }

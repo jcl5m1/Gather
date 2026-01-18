@@ -546,6 +546,14 @@ export class CameraManager extends Body {
     }
 
     /**
+     * Get the current target body
+     */
+    getTarget(): OrbitalBody | null {
+        return this._cameraTarget;
+    }
+
+
+    /**
      * Set callback for when camera target changes
      */
     setOnTargetChange(callback: (targetName: string | null) => void): void {

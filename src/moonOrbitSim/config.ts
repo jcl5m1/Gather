@@ -78,8 +78,7 @@ export interface PhysicsConfig {
 }
 
 export interface BodiesConfig {
-    earth: Body;
-    moon: Body;
+    [key: string]: Body;
 }
 
 export interface CameraConfig {
@@ -146,6 +145,7 @@ export interface SimulationConfig {
 
 export interface VisualizationConfig {
     enablePlots: boolean;
+    enableVelocityPlot: boolean;
     showLUT: boolean;
 }
 
@@ -166,6 +166,7 @@ function createBodyFromConfig(bodyData: any, distance?: Length): Body {
         radius: parseLength(bodyData.radius).over(kilometers).value,
         color: bodyData.color,
         trajectoryColor: bodyData.trajectoryColor,
+        texture: bodyData.texture,
         position: position,
         velocity: velocity,
         parentId: bodyData.parentId || '',
@@ -188,13 +189,16 @@ function parseConfig(data: any): SimulationConfig {
             defaultTimeScale: parseValueWithUnit(data.physics.defaultTimeScale),
             orbitUpdateMethod: (data.physics.orbitUpdateMethod?.value || 'analytical') as 'analytical' | 'numerical'
         },
-        bodies: {
-            earth: createBodyFromConfig(data.bodies.earth),
-            moon: createBodyFromConfig(
-                data.bodies.moon,
-                data.bodies.moon.distance ? parseLength(data.bodies.moon.distance) : undefined
-            )
-        },
+        bodies: (() => {
+            const bodies: BodiesConfig = {};
+            Object.keys(data.bodies).forEach(key => {
+                const bodyData = data.bodies[key];
+                // Special handling for legacy moon distance if present
+                const distance = (key === 'moon' && bodyData.distance) ? parseLength(bodyData.distance) : undefined;
+                bodies[key] = createBodyFromConfig(bodyData, distance);
+            });
+            return bodies;
+        })(),
         scene: {
             camera: {
                 fov: parseValueWithUnit(data.scene.camera.fov),
@@ -237,6 +241,7 @@ function parseConfig(data: any): SimulationConfig {
         },
         visualization: {
             enablePlots: data.visualization?.enablePlots === true,
+            enableVelocityPlot: data.visualization?.enableVelocityPlot === true,
             showLUT: data.visualization?.showLUT === true
         }
     };

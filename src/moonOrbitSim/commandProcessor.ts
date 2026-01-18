@@ -4,7 +4,7 @@ import { OrbitalBody } from './orbitalBody';
 import { generateStateFromOrbitalElements } from './orbitUtils';
 import { G, config } from './config';
 import { kilograms, kilometers, seconds, gravitationalConstantUnit } from './units';
-import { testAndLogRationalBezierOrbit } from './rationalBezierOrbit';
+
 
 export interface CommandResult {
     success: boolean;
@@ -90,9 +90,7 @@ export class CommandProcessor {
                 case 'STOP':
                     return this.handleStop();
 
-                case 'TEST_BEZIER_ORBIT':
-                case 'TEST_BEZIER':
-                    return this.handleTestBezierOrbit(parts.slice(1));
+
 
                 case 'HELP':
                     return this.handleHelp();
@@ -468,6 +466,9 @@ export class CommandProcessor {
 
         // Get parentId if provided
         const parentId = params.parentid || params.parentId || '';
+        
+        // Get texture if provided
+        const texture = params.texture;
 
         const body = this.gameLoop.addOrbitalBody(
             position,
@@ -477,7 +478,8 @@ export class CommandProcessor {
             color,
             trajectoryColor,
             bodyId,
-            parentId
+            parentId,
+            texture
         );
         // Add to map immediately so it's available when camera switches to it
         this.orbitalBodyIdMap.set(bodyId, body);
@@ -631,70 +633,7 @@ export class CommandProcessor {
         };
     }
 
-    private handleTestBezierOrbit(args: string[]): CommandResult {
-        // Get body ID from args or use first orbital body
-        const bodyId = args[0];
-        let body: OrbitalBody | undefined | null;
 
-        if (bodyId) {
-            body = this.orbitalBodyIdMap.get(bodyId);
-            if (!body) {
-                return {
-                    success: false,
-                    message: `Body '${bodyId}' not found. Use LIST_BODIES to see available bodies.`
-                };
-            }
-        } else {
-            body = this.getDefaultBody();
-            if (!body) {
-                return {
-                    success: false,
-                    message: 'No orbital bodies found. Add a body first with ADD_BODY command.'
-                };
-            }
-        }
-
-        // Get orbit parameters
-        const trajectory = body.getTrajectory();
-        const params = trajectory.getParameters();
-
-        if (trajectory.getType() !== 'elliptical') {
-            return {
-                success: false,
-                message: 'Test only works for elliptical orbits.'
-            };
-        }
-
-        // Extract numeric values
-        const a = params._a.over(kilometers).value;
-        const e = params.e;
-
-        // Get orbit plane basis vectors
-        const hVec = params._h.getVector3();
-        const eVec = params._eVec.getVector3();
-        const hNorm = hVec.clone().normalize();
-        const eNorm = eVec.clone().normalize();
-        const periapsisDir = eNorm;
-        const perpDir = new THREE.Vector3().crossVectors(hNorm, periapsisDir).normalize();
-
-        // Run the test
-        console.log('');
-        console.log('========================================');
-        testAndLogRationalBezierOrbit(a, e, periapsisDir, perpDir, 100);
-        console.log('========================================');
-        console.log('');
-
-        return {
-            success: true,
-            message: `Test completed for body '${body.getName()}'. Check console for detailed results.`,
-            data: {
-                bodyId: body.getName(),
-                a,
-                e,
-                numSamples: 100
-            }
-        };
-    }
 
     private handleHelp(): CommandResult {
         return {

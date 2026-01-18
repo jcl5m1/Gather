@@ -152,7 +152,9 @@ export class GameLoop {
             earthBody.radius,
             hexToNumber(earthBody.color || '3366cc'),
             0x000000, // no trajectory color (central body doesn't orbit)
-            earthBody.name
+            earthBody.name,
+            '',
+            earthBody.texture
         );
     }
 
@@ -167,7 +169,8 @@ export class GameLoop {
         color: number = 0xcccccc,
         trajectoryColor: number = 0xff6666,
         name: string = 'Unnamed',
-        parentId: string = ''
+        parentId: string = '',
+        texture?: string
     ): OrbitalBody {
         const body = new OrbitalBody(
             this._scene,
@@ -178,7 +181,8 @@ export class GameLoop {
             color,
             trajectoryColor,
             name,
-            parentId
+            parentId,
+            texture
         );
 
         // Calculate initial trajectory
@@ -637,13 +641,12 @@ export class GameLoop {
         this._plotUpdateCallbacks.push(callback);
     }
 
-    /**
-     * Unregister a plot update callback
-     */
     unregisterPlotUpdateCallback(callback: () => void): void {
         const index = this._plotUpdateCallbacks.indexOf(callback);
         if (index > -1) {
             this._plotUpdateCallbacks.splice(index, 1);
         }
     }
+
+
 }

@@ -78,36 +78,24 @@ export class MoonOrbitSimulation {
         const cameraManager = this.gameLoop.getCameraManager();
         cameraManager.resetToInitial();
 
-        // Initialize Moon from config
-        const moonBody = config.bodies.moon;
-        const earthBody = config.bodies.earth;
-        console.log('[initializeSimulation] Loading moon from config:', moonBody);
-
-        // Use ADD_BODY command with position and velocity from config
-        const addResult = this.simulationController.executeCommand(
-            `ADD_BODY position:${moonBody.position.x},${moonBody.position.y},${moonBody.position.z} velocity:${moonBody.velocity.x},${moonBody.velocity.y},${moonBody.velocity.z} mass:${moonBody.mass} id:${moonBody.name} radius:${moonBody.radius} color:${moonBody.color || 'cccccc'} trajectoryColor:${moonBody.trajectoryColor || 'ffffff'} parentId:${moonBody.parentId || ''}`
-        );
-
-        // Enable bezier animation on Moon - this automatically enables dual-rendering
-        // The single Moon body will now render both analytical and bezier positions
-        /* 
-        // Dual rendering disabled per user request
-        if (addResult.success) {
-            const bodies = this.gameLoop.getOrbitalBodies();
-            const moon = bodies.find(b => b.getName() === 'Moon');
-
-            if (moon) {
-                const centralBodyMass = this.gameLoop.getCentralBody().getMass();
-                moon.setDualRenderingEnabled(true);
-                console.log('[initializeSimulation] Enabled bezier animation with dual-rendering for Moon');
+        // Initialize all bodies from config
+        console.log('[initializeSimulation] Loading bodies from config...');
+        Object.keys(config.bodies).forEach(key => {
+            const body = config.bodies[key];
+            
+            // Skip Earth as it is the central body
+            if (body.name === 'Earth' || key === 'earth') {
+                return;
             }
-        } 
-        */
+
+            console.log(`[initializeSimulation] Adding body: ${body.name}`);
+            this.simulationController.executeCommand(
+                `ADD_BODY position:${body.position.x},${body.position.y},${body.position.z} velocity:${body.velocity.x},${body.velocity.y},${body.velocity.z} mass:${body.mass} id:${body.name} radius:${body.radius} color:${body.color || 'cccccc'} trajectoryColor:${body.trajectoryColor || 'ffffff'} parentId:${body.parentId || ''} texture:${body.texture || ''}`
+            );
+        });
 
         // Update all UI sections
-        if (addResult.success) {
-            this.uiManager.updateAllSections();
-        }
+        this.uiManager.updateAllSections();
 
         // Restart the simulation after initialization
         // This ensures the simulation continues running after a reset

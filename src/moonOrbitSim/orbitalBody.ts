@@ -33,13 +33,33 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
     private useDotRendering: boolean = false;
     private radius: number;
 
-    constructor(scene: THREE.Scene, position: THREE.Vector3, radius: number, color: number) {
+    private texture: THREE.Texture | null = null;
+
+    constructor(scene: THREE.Scene, position: THREE.Vector3, radius: number, color: number, textureUrl?: string) {
         this.scene = scene;
         this.radius = radius;
 
         // Create mesh for the body
-        const geometry = new THREE.SphereGeometry(radius, 32, 32);
-        const material = new THREE.MeshPhongMaterial({ color });
+        const geometry = new THREE.SphereGeometry(radius, 64, 64); // Increased segments for better texture mapping
+        
+        let material: THREE.MeshPhongMaterial;
+
+        if (textureUrl) {
+            // Load texture
+            const textureLoader = new THREE.TextureLoader();
+            this.texture = textureLoader.load(textureUrl);
+            this.texture.colorSpace = THREE.SRGBColorSpace;
+            
+            // Use texture map and white color to avoid tinting
+            material = new THREE.MeshPhongMaterial({ 
+                map: this.texture,
+                color: 0xffffff 
+            });
+        } else {
+            // Fallback to solid color
+            material = new THREE.MeshPhongMaterial({ color });
+        }
+
         this.mesh = new THREE.Mesh(geometry, material);
         this.mesh.position.copy(position);
         scene.add(this.mesh);
@@ -196,6 +216,11 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
             this.dotSprite.material.map.dispose();
         }
         this.dotSprite.material.dispose();
+        
+        if (this.texture) {
+            this.texture.dispose();
+            this.texture = null;
+        }
     }
 }
 
@@ -219,6 +244,7 @@ export class OrbitalBody extends Body {
     // Dual-rendering mode: calculate both analytical and bezier positions
     private _dualRenderingEnabled: boolean = false;
     private _bezierPosition: THREE.Vector3 | null = null;
+    private _bezierVelocity: THREE.Vector3 | null = null;
     private _trajectoryInitialized: boolean = false;
 
     private _scene: THREE.Scene;
@@ -232,7 +258,8 @@ export class OrbitalBody extends Body {
         color: number = 0xcccccc,
         trajectoryColor: number = 0xff6666,
         name: string = 'Unnamed',
-        parentId: string = ''
+        parentId: string = '',
+        texture?: string
     ) {
         // Initialize Body with standard properties
         super({
@@ -244,7 +271,8 @@ export class OrbitalBody extends Body {
             color: `#${color.toString(16).padStart(6, '0')}`,
             trajectoryColor: `#${trajectoryColor.toString(16).padStart(6, '0')}`,
             parentId: parentId,
-            id: name
+            id: name,
+            texture: texture
         });
 
         this.initialPosition = position.clone();
@@ -254,7 +282,7 @@ export class OrbitalBody extends Body {
         this._scene = scene;
 
         // Create renderer for the body
-        this._render = new OrbitalBodyRenderer(scene, position, radius, color);
+        this._render = new OrbitalBodyRenderer(scene, position, radius, color, texture);
 
         // Create trajectory (one per body)
         this._trajectory = new Trajectory(scene, trajectoryColor);
@@ -283,7 +311,8 @@ export class OrbitalBody extends Body {
             colorHex,
             trajectoryColorHex,
             bodyConfig.name,
-            bodyConfig.parentId
+            bodyConfig.parentId,
+            bodyConfig.texture
         );
     }
 
@@ -414,6 +443,9 @@ export class OrbitalBody extends Body {
                 this._bezierPosition = null;
             }
 
+            // Secondary (Ghost) Velocity
+            this._bezierVelocity = this._trajectory.getBezierVelocity(currentTime);
+
         } else {
             // Normal single-position update
             // Default "Bezier" estimation preferred for speed/smoothness as per request? 
@@ -430,17 +462,19 @@ export class OrbitalBody extends Body {
                 // I will assume 'analytical' setting maps to 'bezier' optimized trajectory unless explicitly 'analytical' requested in getPosition call.
 
                 // If default is bezier, I ask for bezier.
-                pos = this._trajectory.getPosition(currentTime, 'bezier');
+                // Use optimized getBezierState to get both position and velocity efficiently
+                const state = this._trajectory.getBezierState(currentTime, { calcVelocity: true });
 
-                // Strict compliance: Do NOT fall back to analytical math.
-                // If Bezier fails (should not happen for initialized elliptical orbits), we skip update.
-                if (!pos && this._trajectoryInitialized) {
-                    // console.warn('Bezier position failed?');
+                if (state.position) {
+                    this.position.copy(state.position).add(centralBodyPosition);
+                    if (state.velocity) {
+                        this.velocity.copy(state.velocity);
+                    }
+                } else {
+                    // Fallback or skip if not ready
+                    // const pos = this._trajectory.getPosition(currentTime, 'bezier');
                 }
 
-                if (pos) {
-                    this.position.copy(pos).add(centralBodyPosition);
-                }
 
             } else {
                 this.updateNumerical(dt, centralBodyPosition, centralBodyMass, G);
@@ -550,6 +584,13 @@ export class OrbitalBody extends Body {
      */
     getBezierPosition(): THREE.Vector3 | null {
         return this._bezierPosition ? this._bezierPosition.clone() : null;
+    }
+
+    /**
+     * Get bezier velocity (only available in dual-rendering mode, or acts as fallback)
+     */
+    getBezierVelocity(): THREE.Vector3 | null {
+        return this._bezierVelocity ? this._bezierVelocity.clone() : null;
     }
 
     /**

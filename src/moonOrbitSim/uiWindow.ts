@@ -228,8 +228,8 @@ export class UIWindow {
             position: absolute;
             right: 0;
             bottom: 0;
-            width: 16px;
-            height: 16px;
+            width: 8px;
+            height: 8px;
             cursor: nwse-resize;
             background: linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.2) 50%);
         `;
@@ -238,7 +238,7 @@ export class UIWindow {
 
     private createResizeHandles(): void {
         const edgeSize = 5;
-        const cornerSize = 16;
+        const cornerSize = 8;
 
         // Create edge resize handles
         const edges = [

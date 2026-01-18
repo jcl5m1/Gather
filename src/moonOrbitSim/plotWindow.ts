@@ -354,8 +354,10 @@ export class PlotWindow extends UIWindow {
 
     private setupResizeObserver(): void {
         const resizeObserver = new ResizeObserver(() => {
-            this.updateCanvasSize();
-            this.render();
+            requestAnimationFrame(() => {
+                this.updateCanvasSize();
+                this.render();
+            });
         });
         resizeObserver.observe(this.getContentArea());
     }
@@ -710,6 +712,8 @@ export class PlotWindow extends UIWindow {
             this.ctx.stroke();
         }
     }
+
+
 
     private drawHoverPoint(point: { x: number; y: number; dataIndex: number }): void {
         const screenX = this.dataToScreenX(point.x);

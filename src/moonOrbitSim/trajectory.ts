@@ -41,6 +41,31 @@ export class BezierCurve {
         return this.points;
     }
 
+    getDerivative(t: number): THREE.Vector3 {
+        // Derivative of cubic Bezier curve:
+        // B'(t) = 3(1-t)^2(P1-P0) + 6(1-t)t(P2-P1) + 3t^2(P3-P2)
+        const derivative = new THREE.Vector3();
+        const mt = 1 - t;
+        const mt2 = mt * mt;
+        const t2 = t * t;
+
+        const p0 = this.points.p0;
+        const p1 = this.points.p1;
+        const p2 = this.points.p2;
+        const p3 = this.points.p3;
+
+        // Terms
+        // 3(1-t)^2 * (P1 - P0)
+        const term1 = new THREE.Vector3().subVectors(p1, p0).multiplyScalar(3 * mt2);
+        // 6(1-t)t * (P2 - P1)
+        const term2 = new THREE.Vector3().subVectors(p2, p1).multiplyScalar(6 * mt * t);
+        // 3t^2 * (P3 - P2)
+        const term3 = new THREE.Vector3().subVectors(p3, p2).multiplyScalar(3 * t2);
+
+        derivative.add(term1).add(term2).add(term3);
+        return derivative;
+    }
+
     // Generate points along the curve for visualization
     getPoints(numPoints: number = 25): THREE.Vector3[] {
         const points: THREE.Vector3[] = [];
@@ -1300,13 +1325,13 @@ export class Trajectory {
 
         // Golden section search
         const phi = (1 + Math.sqrt(5)) / 2;
-        const tolerance = 1e-6;
+        const tolerance = 1e-8;
         let a = Math.max(0, bestT - 0.02);
         let b = Math.min(1, bestT + 0.02);
         let c = b - (b - a) / phi;
         let d = a + (b - a) / phi;
 
-        for (let iter = 0; iter < 20; iter++) {
+        for (let iter = 0; iter < 40; iter++) {
             if (objectiveFunction(c) < objectiveFunction(d)) {
                 b = d; d = c; c = b - (b - a) / phi;
             } else {
@@ -1351,7 +1376,7 @@ export class Trajectory {
         }
 
         const det = c11 * c22 - c12 * c12;
-        if (Math.abs(det) < 1e-9) return { p1: y0 + (y3 - y0) / 3, p2: y0 + 2 * (y3 - y0) / 3 };
+        if (Math.abs(det) < 1e-12) return { p1: y0 + (y3 - y0) / 3, p2: y0 + 2 * (y3 - y0) / 3 };
 
         const invDet = 1.0 / det;
         return { p1: (c22 * r1 - c12 * r2) * invDet, p2: (c11 * r2 - c12 * r1) * invDet };
@@ -1414,6 +1439,198 @@ export class Trajectory {
         }
 
         return isMirrored ? 1.0 - result : result;
+    }
+
+    /**
+     * Calculate the derivative of the time warp function dt/dM at a given normalized time M (relative to Apoapsis)
+     */
+    private getTimeWarpDerivative(t: number): number {
+        t = Math.max(0, Math.min(1, t));
+        if (!this._timeWarpLUT || this._timeWarpLUT.M.length === 0) return 1.0;
+
+        const { M, bezierT, bezierPoints } = this._timeWarpLUT;
+
+        // t is normalized M relative to Apoapsis
+        let normalizedT = t;
+        let isMirrored = false;
+        if (t > 0.5) {
+            normalizedT = 1.0 - t;
+            isMirrored = true;
+        }
+
+        // Optimization: check bounds (derivative is roughly 1 or locally linear at ends if not captured)
+        if (normalizedT <= M[0] || normalizedT >= M[M.length - 1]) return 1.0;
+
+        // Find interval
+        let left = 0, right = M.length - 1;
+        while (right - left > 1) {
+            const mid = Math.floor((left + right) / 2);
+            if (M[mid] <= normalizedT) left = mid;
+            else right = mid;
+        }
+
+        const M0 = M[left], M1 = M[right];
+        const T0 = bezierT[left], T1 = bezierT[right];
+        const pts = bezierPoints[left];
+
+        const dM = M1 - M0;
+        if (dM < 1e-9) return 1.0;
+
+        // u = (M - M0) / (M1 - M0)
+        // du/dM = 1 / dM
+        const u = (normalizedT - M0) / dM;
+        const du_dM = 1.0 / dM;
+
+        let dT_du = 0;
+
+        if (pts && this._interpolationMode === 'cubic') {
+            // Cubic bezier derivative wrt u
+            // T(u) = (1-u)^3 T0 + 3(1-u)^2 u P1 + 3(1-u) u^2 P2 + u^3 T1
+            // T'(u) = 3(1-u)^2(P1-T0) + 6(1-u)u(P2-P1) + 3u^2(T1-P2)
+            const oneMinusU = 1 - u;
+            const term1 = 3 * oneMinusU * oneMinusU * (pts.p1 - T0);
+            const term2 = 6 * oneMinusU * u * (pts.p2 - pts.p1);
+            const term3 = 3 * u * u * (T1 - pts.p2);
+            dT_du = term1 + term2 + term3;
+        } else {
+            // Linear derivative
+            // T(u) = T0 + u(T1 - T0)
+            // T'(u) = T1 - T0
+            dT_du = T1 - T0;
+        }
+
+        // chain rule: dT/dM = dT/du * du/dM
+        const result = dT_du * du_dM;
+
+        // If mirrored, the map is T_mirrored(t) = 1 - T(1-t)
+        // dT_mirrored/dt = -T'(1-t) * (-1) = T'(1-t)
+        // So derivative is symmetric? Let's check:
+        // M_in = 1 - t. 
+        // T_out = 1 - T_func(M_in)
+        // dT_out / dt = - T_func'(M_in) * (d M_in / dt)
+        //             = - T_func'(1-t) * (-1)
+        //             = T_func'(1-t)
+        // So yes, result is just the derivative at the mirrored point.
+        return result;
+    }
+
+    public getBezierVelocity(time: number): THREE.Vector3 | null {
+        if (!this._useBezierEstimation || !this._timeWarpLUT || !this._cachedOrbitBasis || !this.parameters.period) return null;
+
+        const p = this.parameters.period.over(seconds).value;
+        if (p === 0) return null;
+
+        // Calculate normalized time M relative to Periapsis
+        const n = 2 * Math.PI / p;
+        const dt = time - this._startTime;
+        const M_current_peri = this._cachedOrbitBasis.M0 + n * dt;
+
+        // Normalize 0-1
+        const M_norm_peri = M_current_peri / (2 * Math.PI);
+        const M_wrapped_peri = ((M_norm_peri % 1) + 1) % 1;
+
+        // Convert to Apoapsis-relative for timeWarpFunction
+        const M_wrapped_apo = (M_wrapped_peri + 0.5) % 1.0;
+
+        // 1. Calculate time warp derivative dT/dM_apo
+        // T is the normalized Bezier time (0-1) used for curve evaluation
+        const dT_dM = this.getTimeWarpDerivative(M_wrapped_apo);
+
+        // 2. Calculate Bezier curve derivative dP/dT
+        const warpedTime = this.timeWarpFunction(M_wrapped_apo);
+
+        // Logic from computeBezierPositionFromTime to find curve index and local t
+        const bezierCurves = this._bezierCurves;
+        if (!bezierCurves || bezierCurves.length === 0) return null;
+
+        const numCurves = bezierCurves.length;
+        const totalProgress = warpedTime * numCurves;
+        const normalizedTotal = totalProgress - Math.floor(totalProgress);
+        let curveIndex = Math.floor(totalProgress) % numCurves;
+        if (curveIndex < 0) curveIndex += numCurves;
+
+        if (curveIndex >= numCurves || !bezierCurves[curveIndex]) return null;
+
+        const dP_dT_local = bezierCurves[curveIndex].getDerivative(normalizedTotal);
+
+        // dP/dT_global = dP/dT_local * (dT_local / dT_global)
+        // dT_local / dT_global = numCurves (since T_global goes 0-1, T_local goes 0-1 per curve inv)
+        const dP_dT = dP_dT_local.multiplyScalar(numCurves);
+
+        // 3. Chain rule: v = dP/dt_real
+        // v = (dP/dT) * (dT/dM) * (dM/dt_real)
+        // dM/dt_real = 1 / Period (since M is 0-1 normalized time)
+        const dM_dt = 1.0 / p;
+
+        const velocity = dP_dT.multiplyScalar(dT_dM * dM_dt);
+
+        return velocity;
+    }
+
+    /**
+     * Get both position and optional velocity in a single efficient call
+     * Reuses the expensive Time Warp LUT lookup
+     */
+    public getBezierState(time: number, options: { calcVelocity: boolean } = { calcVelocity: true }): { position: THREE.Vector3 | null, velocity: THREE.Vector3 | null } {
+        if (!this._useBezierEstimation || !this._timeWarpLUT || !this._cachedOrbitBasis || !this.parameters.period) {
+            return { position: null, velocity: null };
+        }
+
+        const p = this.parameters.period.over(seconds).value;
+        if (p === 0) return { position: null, velocity: null };
+
+        // Calculate normalized time M relative to Periapsis
+        const n = 2 * Math.PI / p;
+        const dt = time - this._startTime;
+        const M_current_peri = this._cachedOrbitBasis.M0 + n * dt;
+
+        // Normalize 0-1
+        const M_norm_peri = M_current_peri / (2 * Math.PI);
+        const M_wrapped_peri = ((M_norm_peri % 1) + 1) % 1;
+
+        // Convert to Apoapsis-relative for timeWarpFunction
+        const M_wrapped_apo = (M_wrapped_peri + 0.5) % 1.0;
+
+        // 1. Calculate warped time (needed for both)
+        const warpedTime = this.timeWarpFunction(M_wrapped_apo);
+
+        // 2. Position Calculation
+        const position = this.computeBezierPositionFromTime(warpedTime);
+
+        // 3. Velocity Calculation (Optional)
+        let velocity: THREE.Vector3 | null = null;
+        if (options.calcVelocity && position) { // Only calc velocity if position succeeded
+            // Calculate time warp derivative dT/dM
+            const dT_dM = this.getTimeWarpDerivative(M_wrapped_apo);
+
+            // Calculate Bezier curve derivative dP/dT
+            const bezierCurves = this._bezierCurves;
+
+            // Logic from computeBezierPositionFromTime to find curve index and local t
+            // (Re-calculated quickly here, can't easily reuse without refactoring computeBezierPositionFromTime)
+            if (bezierCurves && bezierCurves.length > 0) {
+                const numCurves = bezierCurves.length;
+                const totalProgress = warpedTime * numCurves;
+                const normalizedTotal = totalProgress - Math.floor(totalProgress);
+                let curveIndex = Math.floor(totalProgress) % numCurves;
+                if (curveIndex < 0) curveIndex += numCurves;
+
+                if (curveIndex < numCurves && bezierCurves[curveIndex]) {
+                    const dP_dT_local = bezierCurves[curveIndex].getDerivative(normalizedTotal);
+
+                    // dP/dT_global = dP/dT_local * numCurves
+                    const dP_dT = dP_dT_local.multiplyScalar(numCurves);
+
+                    // dM/dt_real = 1 / Period
+                    const dM_dt = 1.0 / p;
+
+                    // v = (dP/dT) * (dT/dM) * (dM/dt)
+                    velocity = dP_dT.multiplyScalar(dT_dM * dM_dt);
+                }
+            }
+        }
+
+        return { position, velocity };
     }
 
     /**

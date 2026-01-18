@@ -62,6 +62,7 @@ export class Body {
   // Rendering metadata (optional)
   color?: string;
   trajectoryColor?: string;
+  texture?: string;
   
   [property: string]: any;
 
