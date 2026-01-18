@@ -78,7 +78,8 @@ export class GameLoop {
             antialias: true,
             powerPreference: 'high-performance',
             stencil: false,
-            depth: true
+            depth: true,
+            logarithmicDepthBuffer: true
         });
         this._renderer.setSize(window.innerWidth, window.innerHeight);
         this._renderer.setPixelRatio(window.devicePixelRatio);
@@ -89,15 +90,23 @@ export class GameLoop {
         this._camera.lookAt(this._scene.position);
 
         // Add axes helper
-        const axesSize = config.scene.axes.size.over(kilometers).value;
-        const axesHelper = new THREE.AxesHelper(axesSize);
-        this._scene.add(axesHelper);
+        // const axesSize = config.scene.axes.size.over(kilometers).value;
+        // const axesHelper = new THREE.AxesHelper(axesSize);
+        // if (axesHelper.material instanceof THREE.Material) {
+        //     axesHelper.material.depthTest = true;
+        //     axesHelper.material.depthWrite = true;
+        // }
+        // this._scene.add(axesHelper);
 
         // Add dark grey grid on xz plane with 1000km intervals
         const gridConfig = config.scene.grid;
         const gridColor = hexToNumber(gridConfig.color);
         const gridSize = gridConfig.size.over(kilometers).value;
         const gridHelper = new THREE.GridHelper(gridSize, gridConfig.divisions, gridColor, gridColor);
+        if (gridHelper.material instanceof THREE.Material) {
+            gridHelper.material.depthTest = true;
+            gridHelper.material.depthWrite = true;
+        }
         this._scene.add(gridHelper);
 
         // Add fog if configured
@@ -421,12 +430,16 @@ export class GameLoop {
 
         // Update rendering mode for all orbital bodies based on camera distance
         // and set trajectory visibility based on selection
+        const selectedBody = this._cameraManager.getTarget();
+        const targetBody = selectedBody ? selectedBody.target : null;
+
         this._orbitalBodies.forEach(body => {
             body.updateRenderingMode(this._camera);
 
-            // Only show full trajectory for the currently selected body
-            const isSelected = body.getName() === selectedBodyName;
-            body.getTrajectory().setVisibility(isSelected && this._trajectoriesVisible);
+            // Only show full trajectory for the currently selected body OR its target
+            const isSelected = body === selectedBody;
+            const isTarget = body === targetBody;
+            body.getTrajectory().setVisibility((isSelected || isTarget) && this._trajectoriesVisible);
         });
 
         // Also update rendering mode for central body

@@ -151,11 +151,11 @@
         "unit": "dimensionless"
       },
       "near": {
-        "value": 0.1,
+        "value": 0.001,
         "unit": "km"
       },
       "far": {
-        "value": 3844000,
+        "value": 384400000,
         "unit": "km"
       },
       "position": {
@@ -173,7 +173,7 @@
         }
       },
       "minBodyDistanceFactor": {
-        "value": 8,
+        "value": 2,
         "unit": "dimensionless"
       }
     },
@@ -183,7 +183,7 @@
         "unit": "km"
       },
       "divisions": {
-        "value": 99,
+        "value": 100,
         "unit": "dimensionless"
       },
       "color": "333333",

@@ -5,6 +5,8 @@ import { gravitationalConstantUnit } from './units';
 import { kilometers, kilograms, Length, Velocity, Time, Mass, formatDistanceWithAstronomicalUnits, formatVelocity, formatTime, GenericMeasure } from './units';
 import * as THREE from 'three';
 import { PropertyInspector } from './propertyInspector';
+import { TooltipManager } from './tooltipManager';
+import { OrbitalBody } from './orbitalBody';
 
 // Use require for marked to avoid TypeScript module resolution issues
 const markedModule = require('marked');
@@ -50,12 +52,50 @@ export class UIManager {
     private updateInterval: number | null = null;
     private gameLoopUpdateFrameId: number = 0;
     private propertyInspectorWindow!: PropertyInspector;
+    private tooltipManager: TooltipManager | null = null;
 
     constructor(simulationController: SimulationController, cameraManager?: CameraManager) {
         this.simulationController = simulationController;
         this.cameraManager = cameraManager;
         this.initializeUI();
         this.setupEventListeners();
+
+        // Initialize TooltipManager
+        if (this.cameraManager) {
+            // Need renderer and camera from somewhere. 
+            // CameraManager has them but they are private.
+            // But we can get them from the gameLoop which is accessible via simulationController
+            const gameLoop = this.simulationController.getGameLoop();
+            // Access private members via casting for now as per plan adjustments in previous turns
+            const renderer = (gameLoop as any)._renderer;
+            const camera = (gameLoop as any)._camera;
+            
+            if (renderer && camera) {
+                this.tooltipManager = new TooltipManager(renderer, camera);
+                
+                // Configure callbacks
+                this.tooltipManager.onSelect = (body) => {
+                    if (this.cameraManager) this.cameraManager.switchToBody(body);
+                    this.tooltipManager?.hide();
+                };
+                
+                this.tooltipManager.onTarget = (body) => {
+                    const focusedBodyName = this.cameraManager?.getCurrentTargetName();
+                    if (focusedBodyName) {
+                        const bodies = (this.cameraManager as any).getAllBodies();
+                        const focusedBody = bodies.find((b: any) => b && b.getName() === focusedBodyName);
+                        if (focusedBody && typeof focusedBody.setTarget === 'function') {
+                            if (focusedBody.setTarget(body)) {
+                                this.updateAllSections();
+                            }
+                        }
+                    }
+                    this.tooltipManager?.hide();
+                };
+
+                this.startTooltipUpdateLoop();
+            }
+        }
 
         // Initial time scale is now set in initializeUI (default 1000, logarithmic)
 
@@ -79,6 +119,62 @@ export class UIManager {
 
         // Start frame-by-frame updates for GameLoop section
         this.startGameLoopSectionUpdates();
+    }
+
+    private startTooltipUpdateLoop(): void {
+        let hideTimeout: number | null = null;
+        const GRACE_PERIOD = 300; // ms
+
+        const update = () => {
+            if (this.tooltipManager && this.cameraManager) {
+                const hoveredBody = this.cameraManager.getHoveredBody();
+                
+                if (hoveredBody) {
+                    // Start showing immediately if on a body
+                    if (hideTimeout !== null) {
+                        clearTimeout(hideTimeout);
+                        hideTimeout = null;
+                    }
+                    
+                    // Show if not already showing for this body
+                    if (!this.tooltipManager.isActive() || (this.tooltipManager as any).currentBody !== hoveredBody) {
+                        this.tooltipManager.showTooltip(hoveredBody);
+                    }
+                    this.tooltipManager.updatePosition();
+                } else {
+                    // Not hovering a body
+                    if (this.tooltipManager.isActive()) {
+                        // Check if mouse is over tooltip
+                        const isOverTooltip = this.tooltipManager.isMouseOver();
+                        
+                        if (isOverTooltip) {
+                            // If over tooltip, keep it open and cancel any hide timer
+                            if (hideTimeout !== null) {
+                                clearTimeout(hideTimeout);
+                                hideTimeout = null;
+                            }
+                            this.tooltipManager.updatePosition();
+                        } else {
+                            // Neither hovering body nor tooltip -> start hide timer if not already running
+                            if (hideTimeout === null) {
+                                hideTimeout = window.setTimeout(() => {
+                                    this.tooltipManager?.hide();
+                                    hideTimeout = null;
+                                }, GRACE_PERIOD);
+                            }
+                        }
+                    } else {
+                         // Tooltip not active and not hovering body -> ensure timer is clear
+                         if (hideTimeout !== null) {
+                             clearTimeout(hideTimeout);
+                             hideTimeout = null;
+                         }
+                    }
+                }
+            }
+            requestAnimationFrame(update);
+        };
+        update();
     }
 
     /**
@@ -1047,6 +1143,111 @@ export class UIManager {
         // Generate input fields for each editable property
         for (const key of sortedKeys) {
             const value = publicProps[key];
+
+            // Handle target property for OrbitalBody - Custom UI with Select/Clear buttons
+            if (className === 'OrbitalBody' && key === 'target') {
+                const row = document.createElement('tr');
+                row.style.cssText = 'border-bottom: 1px solid rgba(255,255,255,0.1); margin: 0; padding: 0;';
+
+                const labelCell = document.createElement('td');
+                labelCell.style.cssText = `
+                    padding: 2px 2px;
+                    width: 40%;
+                    font-size: 11px;
+                    color: rgba(255,255,255,0.8);
+                    margin: 0;
+                `;
+                labelCell.textContent = 'Target';
+
+                const valueCell = document.createElement('td');
+                valueCell.style.cssText = 'padding: 2px 2px; margin: 0; display: flex; align-items: center; gap: 4px;';
+
+                // Target Name Display
+                const targetNameSpan = document.createElement('span');
+                targetNameSpan.style.cssText = 'flex: 1; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+                const targetBody = value as any; // OrbitalBody or null
+                targetNameSpan.textContent = targetBody ? targetBody.getName() : 'None';
+                
+                valueCell.appendChild(targetNameSpan);
+
+                // Select Button
+                const selectBtn = document.createElement('button');
+                selectBtn.textContent = 'Select';
+                selectBtn.style.cssText = `
+                    padding: 1px 4px;
+                    margin: 0;
+                    background: rgba(100,150,255,0.6);
+                    color: white;
+                    border: 1px solid rgba(255,255,255,0.3);
+                    cursor: pointer;
+                    font-size: 10px;
+                `;
+                
+                // Get CameraManager
+                const cameraManager = this.cameraManager || this.simulationController.getGameLoop().getCameraManager();
+
+                selectBtn.onclick = () => {
+                    if (cameraManager.isSelectionMode()) {
+                        // Cancel selection
+                        cameraManager.setSelectionMode(false);
+                        selectBtn.textContent = 'Select';
+                        selectBtn.style.background = 'rgba(100,150,255,0.6)';
+                    } else {
+                        // Start selection
+                        selectBtn.textContent = 'Click Body...';
+                        selectBtn.style.background = 'rgba(255, 165, 0, 0.6)'; // Orange to indicate active
+                        
+                        cameraManager.setSelectionMode(true, (pickedBody: any) => {
+                            // Validate constraints
+                            if (typeof obj.setTarget === 'function') {
+                                if (obj.setTarget(pickedBody)) {
+                                    // Success
+                                    this.updateBodyFromObject(obj); // Trigger simulation update if needed (mostly for saving state)
+                                    // Regenerate UI to show new target
+                                    this.generateEditablePropertySection(obj, container);
+                                } else {
+                                    // Validation failed (logged in console)
+                                    // Maybe show alert? For now console warning is enough as per plan
+                                    // We could shake the button or something?
+                                    // Re-enter selection mode? No, let user try again.
+                                }
+                            }
+                            // Reset button style is handled by selection mode exit or regeneration
+                        });
+                    }
+                };
+
+                valueCell.appendChild(selectBtn);
+
+                // Clear Button (only if target exists)
+                if (targetBody) {
+                    const clearBtn = document.createElement('button');
+                    clearBtn.textContent = 'X';
+                    clearBtn.title = 'Clear Target';
+                    clearBtn.style.cssText = `
+                        padding: 1px 4px;
+                        margin: 0;
+                        background: rgba(255,100,100,0.6);
+                        color: white;
+                        border: 1px solid rgba(255,255,255,0.3);
+                        cursor: pointer;
+                        font-size: 10px;
+                    `;
+                    clearBtn.onclick = () => {
+                        if (typeof obj.setTarget === 'function') {
+                            obj.setTarget(null);
+                            this.updateBodyFromObject(obj);
+                            this.generateEditablePropertySection(obj, container);
+                        }
+                    };
+                    valueCell.appendChild(clearBtn);
+                }
+
+                row.appendChild(labelCell);
+                row.appendChild(valueCell);
+                table.appendChild(row);
+                continue;
+            }
 
             // Handle dropdown properties: object with { value, options } structure
             if (value !== null && typeof value === 'object' &&

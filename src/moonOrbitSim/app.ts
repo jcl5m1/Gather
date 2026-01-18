@@ -90,8 +90,29 @@ export class MoonOrbitSimulation {
 
             console.log(`[initializeSimulation] Adding body: ${body.name}`);
             this.simulationController.executeCommand(
-                `ADD_BODY position:${body.position.x},${body.position.y},${body.position.z} velocity:${body.velocity.x},${body.velocity.y},${body.velocity.z} mass:${body.mass} id:${body.name} radius:${body.radius} color:${body.color || 'cccccc'} trajectoryColor:${body.trajectoryColor || 'ffffff'} parentId:${body.parentId || ''} texture:${body.texture || ''}`
+                `ADD_BODY position:${body.position.x},${body.position.y},${body.position.z} velocity:${body.velocity.x},${body.velocity.y},${body.velocity.z} mass:${body.mass} id:${body.name} radius:${body.radius} color:${body.color || 'cccccc'} trajectoryColor:${body.trajectoryColor || 'ffffff'} parentId:${body.parentId || ''} texture:${body.texture || ''} targetId:${body.targetId || ''}`
             );
+        });
+
+        // Resolve targets after all bodies are created
+        console.log('[initializeSimulation] Resolving targets...');
+        const allBodies = this.gameLoop.getOrbitalBodies();
+        allBodies.forEach(body => {
+            if (body.targetId) {
+                // Find target body by ID (name)
+                // Note: body.id should match body.name as per ADD_BODY usage in config loop, 
+                // but config uses 'name' as key reference? 
+                // In config loop above, id:${body.name} is used.
+                // So we search for body with id matching targetId.
+                const target = allBodies.find(b => b.getName() === body.targetId || b.id === body.targetId);
+                
+                if (target) {
+                    body.setTarget(target);
+                    console.log(`[initializeSimulation] Linked ${body.getName()} -> target ${target.getName()}`);
+                } else {
+                    console.warn(`[initializeSimulation] Could not resolve target '${body.targetId}' for body '${body.getName()}'`);
+                }
+            }
         });
 
         // Update all UI sections

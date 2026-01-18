@@ -470,6 +470,9 @@ export class CommandProcessor {
         // Get texture if provided
         const texture = params.texture;
 
+        // Get targetId if provided
+        const targetId = params.targetid || params.targetId || '';
+
         const body = this.gameLoop.addOrbitalBody(
             position,
             velocity,
@@ -483,6 +486,16 @@ export class CommandProcessor {
         );
         // Add to map immediately so it's available when camera switches to it
         this.orbitalBodyIdMap.set(bodyId, body);
+
+        // Set targetId if provided
+        if (targetId) {
+            body.targetId = targetId;
+            // Try to resolve immediately if possible
+            const targetBody = this.orbitalBodyIdMap.get(targetId);
+            if (targetBody) {
+                body.setTarget(targetBody);
+            }
+        }
 
         // Get computed orbit parameters
         const trajectory = body.getTrajectory();

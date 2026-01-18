@@ -18,6 +18,7 @@ export interface OrbitalBodyRender {
     updateRenderingMode(position: THREE.Vector3, camera: THREE.Camera): void;
     getTrailPoints(): THREE.Vector3[];
     updateTrail(points: THREE.Vector3[]): void;
+    updateTargetLine(start: THREE.Vector3, end: THREE.Vector3 | null, camera?: THREE.Camera): void;
     updateRadius(radius: number, color: number): void;
     setVisibility(visible: boolean): void;
     cleanup(): void;
@@ -32,6 +33,8 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
     private maxTrailPoints: number = 100;
     private useDotRendering: boolean = false;
     private radius: number;
+    
+    private targetLine: THREE.Line;
 
     private texture: THREE.Texture | null = null;
 
@@ -78,6 +81,25 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
 
         // Initialize trail (empty until updated)
         this.trailPoints = [];
+
+        // Create target line (dotted)
+        const lineGeometry = new THREE.BufferGeometry();
+        // Initial dummy points
+        lineGeometry.setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,0)]);
+        
+        const lineMaterial = new THREE.LineDashedMaterial({
+            color: 0xffffff,
+            dashSize: 5000, 
+            gapSize: 5000,
+            opacity: 0.5,
+            transparent: true,
+            depthWrite: true,
+            depthTest: true
+        });
+        this.targetLine = new THREE.Line(lineGeometry, lineMaterial);
+        this.targetLine.visible = false;
+        this.targetLine.frustumCulled = false;
+        scene.add(this.targetLine);
     }
 
     /**
@@ -166,6 +188,42 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
     }
 
     /**
+     * Update target line to point to a target position
+     */
+    updateTargetLine(start: THREE.Vector3, end: THREE.Vector3 | null, camera?: THREE.Camera): void {
+        if (!end) {
+            this.targetLine.visible = false;
+            return;
+        }
+
+        const points = [start, end];
+        this.targetLine.geometry.setFromPoints(points);
+        this.targetLine.computeLineDistances();
+
+        // Screen-space constant spacing logic
+        if (camera) {
+            // Calculate distance from camera to the midpoint of the line
+            const midPoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+            const distance = camera.position.distanceTo(midPoint);
+            
+            // Adjust dash/gap size based on distance scaling
+            // Base size: 0.02 * distance (adjust factor as needed)
+            // Previous was 5000 fixed. 
+            // If distance is large (e.g. 100,000 km), we want big dashes.
+            // If distance is small (100 km), small dashes.
+            
+            // Factor tweak: let's try 0.025 * distance for dash (doubled density from 0.05)
+            const scale = distance * 0.025; 
+            
+            const material = this.targetLine.material as THREE.LineDashedMaterial;
+            material.dashSize = scale;
+            material.gapSize = scale * 0.5; // Gap slightly smaller? or same
+        }
+
+        this.targetLine.visible = true;
+    }
+
+    /**
      * Get trail points (return current stored points)
      */
     getTrailPoints(): THREE.Vector3[] {
@@ -208,6 +266,7 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
         // Clean up analytical rendering
         this.scene.remove(this.mesh);
         this.scene.remove(this.dotSprite);
+        this.scene.remove(this.targetLine);
         this.mesh.geometry.dispose();
         if (this.mesh.material instanceof THREE.Material) {
             this.mesh.material.dispose();
@@ -216,6 +275,12 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
             this.dotSprite.material.map.dispose();
         }
         this.dotSprite.material.dispose();
+
+        // Clean up target line
+        this.targetLine.geometry.dispose();
+        if (this.targetLine.material instanceof THREE.Material) {
+            this.targetLine.material.dispose();
+        }
         
         if (this.texture) {
             this.texture.dispose();
@@ -240,6 +305,10 @@ export class OrbitalBody extends Body {
     private _render: OrbitalBodyRender;     // Private - rendering delegate
     private _bezierRender: OrbitalBodyRender | null = null; // Private - bezier rendering delegate
     private _lastUpdateTime: number = 0;    // Store last update time for UI indicators
+    
+    // Target Selection
+    public target: OrbitalBody | null = null;
+    public targetId: string = ''; // Serialized target ID
 
     // Dual-rendering mode: calculate both analytical and bezier positions
     private _dualRenderingEnabled: boolean = false;
@@ -298,11 +367,10 @@ export class OrbitalBody extends Body {
      * This allows each class to know how to serialize/deserialize itself
      */
     static fromConfig(scene: THREE.Scene, bodyConfig: Body): OrbitalBody {
-        // Parse color from hex string
         const colorHex = bodyConfig.color ? parseInt(bodyConfig.color.replace('#', ''), 16) : 0xcccccc;
         const trajectoryColorHex = bodyConfig.trajectoryColor ? parseInt(bodyConfig.trajectoryColor.replace('#', ''), 16) : 0xff6666;
 
-        return new OrbitalBody(
+        const body = new OrbitalBody(
             scene,
             bodyConfig.position.clone(),
             bodyConfig.velocity.clone(),
@@ -314,6 +382,14 @@ export class OrbitalBody extends Body {
             bodyConfig.parentId,
             bodyConfig.texture
         );
+        
+        if (bodyConfig.targetId) {
+            body.targetId = bodyConfig.targetId;
+            // Note: We can't resolve the actual body reference here yet because 
+            // other bodies might not exist. Resolution should happen after all bodies are loaded.
+        }
+        
+        return body;
     }
 
     /**
@@ -329,8 +405,44 @@ export class OrbitalBody extends Body {
             color: this.color,
             trajectoryColor: this.trajectoryColor,
             parentId: this.parentId,
-            id: this.id
+            id: this.id,
+            targetId: this.target ? this.target.getId() : this.targetId
         });
+    }
+
+    /**
+     * Set the target body
+     * Validates that the target is not this body and not the parent
+     */
+    setTarget(target: OrbitalBody | null): boolean {
+        // Clear target
+        if (target === null) {
+            this.target = null;
+            this.targetId = '';
+            return true;
+        }
+
+        // Validate: Cannot target self
+        if (target === this) {
+            console.warn(`[OrbitalBody] ${this.name} cannot target itself.`);
+            return false;
+        }
+
+        // Validate: Cannot target parent (if parentId matches target ID or name)
+        // If we had a direct parent reference we would check that too
+        if (this.parentId && (target.id === this.parentId || target.getName() === this.parentId)) {
+            console.warn(`[OrbitalBody] ${this.name} cannot target its parent ${target.getName()}.`);
+            return false;
+        }
+        
+        // Also check if the target is the central body and this body is orbiting it?
+        // The user said "parent", which usually implies the body it's orbiting. 
+        // In our simple sim, everything orbits central body or is central body.
+        // But let's stick to the explicit 'parentId' check for now.
+
+        this.target = target;
+        this.targetId = target.id;
+        return true;
     }
 
     /**
@@ -342,19 +454,24 @@ export class OrbitalBody extends Body {
         // If dual-rendering is enabled, we only want to show the Bezier (ghost) render
         // and hide the Analytical (primary) render, as per user request to "disable renderings of the analytical version".
 
+        const targetPos = this.target ? this.target.getPosition() : null;
+
         if (this._dualRenderingEnabled) {
             // Hide primary (analytical)
             this._render.setVisibility(false);
+            this._render.updateTargetLine(this.position, null, camera); // Ensure hidden
 
             // Show/Update bezier (ghost)
             if (this._bezierPosition && this._bezierRender) {
                 this._bezierRender.setVisibility(true);
                 this._bezierRender.updateRenderingMode(this._bezierPosition, camera);
+                this._bezierRender.updateTargetLine(this._bezierPosition, targetPos, camera);
             }
         } else {
             // Normal mode: Show primary, dual rendering logic handles visibility of ghost if it existed but here we ensure primary is visible
             this._render.setVisibility(true);
             this._render.updateRenderingMode(this.position, camera);
+            this._render.updateTargetLine(this.position, targetPos, camera);
         }
     }
 
@@ -667,6 +784,8 @@ export class OrbitalBody extends Body {
     getName(): string {
         return this.name;
     }
+
+
 
     /**
      * Get trajectory

@@ -63,6 +63,7 @@ export class Body {
   color?: string;
   trajectoryColor?: string;
   texture?: string;
+  targetId?: string;
   
   [property: string]: any;
 

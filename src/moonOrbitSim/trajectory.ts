@@ -338,7 +338,9 @@ export class TrajectoryRenderer implements TrajectoryRender {
             new THREE.LineBasicMaterial({ // Solid line
                 color: orbitColor, // Use instance-specific color (from OrbitalBody -> config.bodies)
                 opacity: 0.8,
-                transparent: true
+                transparent: true,
+                depthTest: true,
+                depthWrite: true
             })
         );
         scene.add(this.bezierLine);
@@ -348,17 +350,17 @@ export class TrajectoryRenderer implements TrajectoryRender {
         // Periapsis - Greenish
         const periColor = 0x00ff00;
         this.periapsisIcon = this.createSprite(this.createIconTexture(periColor, 'Pe'), 0.5);
-        this.periapsisText = this.createSprite(this.createTextTexture('', periColor), 1.0); // Size 1.0 for text
+        this.periapsisText = this.createSprite(this.createTextTexture([''], periColor), 1.0); // Size 1.0 for text
 
         // Apoapsis - Reddish
         const apoColor = 0xff0000;
         this.apoapsisIcon = this.createSprite(this.createIconTexture(apoColor, 'Ap'), 0.5);
-        this.apoapsisText = this.createSprite(this.createTextTexture('', apoColor), 1.0);
+        this.apoapsisText = this.createSprite(this.createTextTexture([''], apoColor), 1.0);
 
-        scene.add(this.periapsisIcon);
-        scene.add(this.periapsisText);
-        scene.add(this.apoapsisIcon);
-        scene.add(this.apoapsisText);
+        // scene.add(this.periapsisIcon);
+        // scene.add(this.periapsisText);
+        // scene.add(this.apoapsisIcon);
+        // scene.add(this.apoapsisText);
         console.log('[DEBUG] Added markers to scene, scene children:', scene.children.length);
 
         // Initialize LUT markers (Points for screen-space rendering)
@@ -383,10 +385,12 @@ export class TrajectoryRenderer implements TrajectoryRender {
         const material = new THREE.SpriteMaterial({
             map: texture,
             sizeAttenuation: false, // Screen space
-            depthTest: true // Keep depth test so they hide behind planets
+            depthTest: false, // Always on top
+            depthWrite: false // Don't write to depth buffer
         });
         const sprite = new THREE.Sprite(material);
         sprite.scale.set(scale * 0.1, scale * 0.1, 1); // Initial scale, will be adjusted
+        sprite.renderOrder = 999; // Ensure it renders on top of everything
         return sprite;
     }
 
@@ -436,22 +440,31 @@ export class TrajectoryRenderer implements TrajectoryRender {
         } catch (e) { return new THREE.Texture(); }
     }
 
-    private createTextTexture(text: string, color: number): THREE.Texture {
+    private createTextTexture(lines: string[], color: number): THREE.Texture {
         try {
             if (typeof document === 'undefined') return new THREE.Texture();
             const canvas = document.createElement('canvas');
             canvas.width = 256;
-            canvas.height = 64;
+            // Increased height to accommodate 2 lines. 
+            // Previous was 64 for 1 line (~30px font). 
+            // 128 should be enough for 2 lines.
+            canvas.height = 128; 
             const ctx = canvas.getContext('2d');
             if (ctx) {
-                // Reduced font size to 22.5px (25% reduction from 30px)
+                // Reduced font size to 22.5px
                 ctx.font = 'bold 22.5px monospace';
                 ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.shadowColor = 'black';
                 ctx.shadowBlur = 4;
-                ctx.fillText(text, 128, 32);
+
+                const lineHeight = 30; // Spacing between lines
+                const startY = (canvas.height - (lines.length - 1) * lineHeight) / 2;
+
+                lines.forEach((line, index) => {
+                    ctx.fillText(line, 128, startY + index * lineHeight);
+                });
             }
             const texture = new THREE.Texture(canvas);
             texture.needsUpdate = true;
@@ -488,29 +501,26 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.periapsisIcon.visible = visible;
 
         // Offset text slightly above icon
-        // We can't easily know "above" in screen space without projecting. 
-        // For simplicity, we just put it near the icon in 3D space, assuming typical view. 
-        // Or we use the same position and let them overlap/rendering order handle it? 
-        // Better: Offset in Y slightly.
         this.periapsisText.position.copy(periapsisPos);
-        // To offset in screen space, we would need to do it in vertex shader or manipulate matrix.
-        // For now, let's just create the texture such that text is at bottom/top?
-        // Or create a combined texture?
-        // Actually, just placing them at same position is fine if texture has offset.
-        // My createTextTexture centers text.
-        // Let's just create a new texture with the label.
-
+        
         if (visible && periDist) {
             // Use compact formatting (3 significant digits) for Pe label
-            const label = `Pe: ${formatDistanceWithAstronomicalUnits(periDist, true)}`;
-            const newTex = this.createTextTexture(label, 0x00ff00);
+            // Two lines: "Pe" and Distance
+            const distStr = formatDistanceWithAstronomicalUnits(periDist, true);
+            const newTex = this.createTextTexture(['Pe', distStr], 0x00ff00);
+            
             if (this.periapsisText.material.map) this.periapsisText.material.map.dispose();
             this.periapsisText.material.map = newTex;
-            // Offset text sprite slightly in Y to not overlap icon
-            // Reduced offset from -0.125 to -0.0625 (another 50% closer)
-            this.periapsisText.center.set(0.5, -0.0625); // Anchor at top-center
-            // Scale text sprite to maintain aspect ratio (256x64 = 4:1)
-            this.periapsisText.scale.set(periScale * 4, periScale, 1);
+            // Offset text sprite slightly differently for 2 lines
+            // We want the icon to be roughly below the text? Or text next to it?
+            // "Pe and Ap on the first line and the distance on the 2nd line" implies a block.
+            // Let's float it above the icon.
+            this.periapsisText.center.set(0.5, -0.2); // Anchor slightly lower so text floats higher
+            // Scale text sprite to maintain aspect ratio (256x128 = 2:1)
+            // Previous was 4:1 (256x64), scaled 4*periScale x periScale
+            // New is 2:1, so width should be 2*height? 
+            // If height is 2*periScale (doubled height), width is 4*periScale.
+            this.periapsisText.scale.set(periScale * 4, periScale * 2, 1);
         }
         this.periapsisText.visible = visible;
 
@@ -522,12 +532,13 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.apoapsisText.position.copy(apoapsisPos);
         if (visible && showApoapsis && apoDist) {
             // Use compact formatting (3 significant digits) for Ap label
-            const label = `Ap: ${formatDistanceWithAstronomicalUnits(apoDist, true)}`;
-            const newTex = this.createTextTexture(label, 0xff0000);
+             const distStr = formatDistanceWithAstronomicalUnits(apoDist, true);
+            const newTex = this.createTextTexture(['Ap', distStr], 0xff0000);
+            
             if (this.apoapsisText.material.map) this.apoapsisText.material.map.dispose();
             this.apoapsisText.material.map = newTex;
-            this.apoapsisText.scale.set(periScale * 4, periScale, 1);
-            this.apoapsisText.center.set(0.5, -0.0625);
+            this.apoapsisText.scale.set(periScale * 4, periScale * 2, 1);
+            this.apoapsisText.center.set(0.5, -0.2);
         }
         this.apoapsisText.visible = visible && showApoapsis;
     }

@@ -83,7 +83,7 @@ export class CameraManager extends Body {
      * Get all available camera targets as array of bodies from GameLoop
      * Returns array: [null (Free Camera), centralBody, ...orbitalBodies]
      */
-    private getAllBodies(): (OrbitalBody | null)[] {
+    public getAllBodies(): (OrbitalBody | null)[] {
         const bodies: (OrbitalBody | null)[] = [null]; // null = Free Camera
 
         // Get bodies from GameLoop if available
@@ -199,6 +199,7 @@ export class CameraManager extends Body {
 
         this._camera = camera;
         this._renderer = renderer;
+        this._container = renderer.domElement;
         this._centralBody = centralBody;
         this._orbitalBodies = orbitalBodies;
 
@@ -213,8 +214,103 @@ export class CameraManager extends Body {
         };
 
         this.initControls();
-        this.setupKeyboardControls();
+        this.setupKeyboardControls(); // Keyboard controls for movement
+        this.setupMouseInteraction(); // Mouse interaction for selection
     }
+
+    // Raycasting and Selection
+    private _raycaster: THREE.Raycaster = new THREE.Raycaster();
+    
+    private _mouse: THREE.Vector2 = new THREE.Vector2(-Infinity, -Infinity); // Initialize off-screen
+    private _isSelectionMode: boolean = false;
+    private _selectionCallback: ((body: OrbitalBody) => void) | null = null;
+    private _container: HTMLElement;
+
+    /**
+     * Set selection mode to allow picking a body
+     */
+    setSelectionMode(active: boolean, callback?: (body: OrbitalBody) => void): void {
+        this._isSelectionMode = active;
+        if (active && callback) {
+            this._selectionCallback = callback;
+            // Change cursor to crosshair via CSS on renderer domElement
+            this._renderer.domElement.style.cursor = 'crosshair';
+        } else {
+            this._selectionCallback = null;
+            this._renderer.domElement.style.cursor = 'default';
+        }
+    }
+
+    /**
+     * Check if currently in selection mode
+     */
+    isSelectionMode(): boolean {
+        return this._isSelectionMode;
+    }
+
+    private setupMouseInteraction(): void {
+        this._container = this._renderer.domElement;
+
+        // Click handler for selection
+        this._container.addEventListener('click', (event) => {
+            if (!this._isSelectionMode) return;
+            this.updateMouseCoordinates(event);
+            const body = this.raycastBody();
+            if (body && this._selectionCallback) {
+                this._selectionCallback(body);
+                this.setSelectionMode(false); // Exit mode
+            }
+        });
+
+        // Mouse move handler for hover
+        this._container.addEventListener('mousemove', (event) => {
+            this.updateMouseCoordinates(event);
+        });
+    }
+
+    private updateMouseCoordinates(event: MouseEvent): void {
+        const rect = this._container.getBoundingClientRect();
+        this._mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        this._mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    }
+
+    private raycastBody(): OrbitalBody | null {
+        // Raycast
+        this._raycaster.setFromCamera(this._mouse, this._camera);
+
+        // Get meshes of all bodies (central + orbital)
+        const bodies = this.getAllBodies().filter(b => b !== null) as OrbitalBody[];
+        const meshes: THREE.Object3D[] = [];
+        const meshToBodyMap = new Map<number, OrbitalBody>();
+        
+        bodies.forEach(body => {
+            const renderDelegate = (body as any)._render;
+            if (renderDelegate && renderDelegate.mesh) {
+                meshes.push(renderDelegate.mesh);
+                meshToBodyMap.set(renderDelegate.mesh.id, body);
+                if (renderDelegate.dotSprite && renderDelegate.dotSprite.visible) {
+                    meshes.push(renderDelegate.dotSprite);
+                    meshToBodyMap.set(renderDelegate.dotSprite.id, body);
+                }
+            }
+        });
+
+        const intersects = this._raycaster.intersectObjects(meshes, false);
+        if (intersects.length > 0) {
+            return meshToBodyMap.get(intersects[0].object.id) || null;
+        }
+        return null;
+    }
+
+    /**
+     * Get the body currently under the mouse cursor
+     */
+    public getHoveredBody(): OrbitalBody | null {
+        return this.raycastBody();
+    }
+
+    private _isUserInteracting: boolean = false;
+    private _localCameraOffset: THREE.Vector3 | null = null; // Store offset relative to target frame
 
     private initControls(): void {
         this._controls = new OrbitControls(this._camera, this._renderer.domElement);
@@ -222,6 +318,13 @@ export class CameraManager extends Body {
         this._controls.enableDamping = controlsConfig.enableDamping;
         this._controls.dampingFactor = controlsConfig.dampingFactor;
 
+        this._controls.addEventListener('start', () => {
+            this._isUserInteracting = true;
+        });
+
+        this._controls.addEventListener('end', () => {
+            this._isUserInteracting = false;
+        });
     }
 
     private setupKeyboardControls(): void {
@@ -370,6 +473,51 @@ export class CameraManager extends Body {
      * Preserves camera orientation while translating to track the body
      * Maintains constant offset unless mouse is used to rotate
      */
+    /**
+     * Helper to compute the Rotation Matrix (Basis) for the Target Frame
+     * Z-axis: Points from Selected Body to Target Body
+     * Y-axis: Global Up (projected to be perpendicular to Z) OR fallback if Z is parallel to Up
+     * X-axis: Cross product
+     */
+    private getTargetFrameMatrix(selectedBodyPos: THREE.Vector3, targetBodyPos: THREE.Vector3): THREE.Matrix4 {
+        const zAxis = new THREE.Vector3().subVectors(targetBodyPos, selectedBodyPos).normalize();
+        
+        let up = new THREE.Vector3(0, 1, 0);
+        // If zAxis is parallel to up, pick a different up
+        if (Math.abs(zAxis.dot(up)) > 0.99) {
+            up.set(0, 0, 1);
+        }
+
+        const xAxis = new THREE.Vector3().crossVectors(up, zAxis).normalize();
+        const yAxis = new THREE.Vector3().crossVectors(zAxis, xAxis).normalize();
+
+        const matrix = new THREE.Matrix4();
+        matrix.makeBasis(xAxis, yAxis, zAxis);
+        return matrix;
+    }
+
+    /**
+     * Compute and store the Local Camera Offset based on current relative position and Target Frame
+     */
+    private updateLocalCameraOffset(selectedBody: OrbitalBody, targetBody: OrbitalBody): void {
+        const frameMatrix = this.getTargetFrameMatrix(selectedBody.getPosition(), targetBody.getPosition());
+        const inverseFrameMatrix = frameMatrix.clone().invert();
+
+        // Calculate Midpoint
+        const midpoint = new THREE.Vector3().addVectors(selectedBody.getPosition(), targetBody.getPosition()).multiplyScalar(0.5);
+
+        // Get current relative position (World Offset) from Midpoint
+        const currentWorldOffset = this._camera.position.clone().sub(midpoint);
+        
+        // Transform World Offset to Local Offset: Local = InverseFrame * World
+        this._localCameraOffset = currentWorldOffset.applyMatrix4(inverseFrameMatrix);
+    }
+
+    /**
+     * Update camera to follow the current target body
+     * Preserves camera orientation while translating to track the body
+     * Maintains constant offset unless mouse is used to rotate
+     */
     private updateCameraToTarget(): void {
         if (!this._cameraTarget) {
             return;
@@ -378,8 +526,14 @@ export class CameraManager extends Body {
         const targetPosition = this._cameraTarget.getPosition();
         const bodyRadius = this._cameraTarget.getRadius();
 
+        // Calculate Focus Point (Midpoint if target defined, else Body Position)
+        let focusPoint = targetPosition.clone();
+        if (this._cameraTarget.target) {
+            focusPoint.addVectors(targetPosition, this._cameraTarget.target.getPosition()).multiplyScalar(0.5);
+        }
+
         // Initialize previous target position to current position to avoid jump on first frame
-        this._previousTargetPosition.copy(targetPosition);
+        this._previousTargetPosition.copy(focusPoint);
 
         // If this is the first time targeting any body (or offset is zero), set up default position
         // Default distance is 10x the body radius
@@ -393,20 +547,26 @@ export class CameraManager extends Body {
             );
         }
 
-        // Set camera position based on target position + offset (restores stored camera state)
-        this._camera.position.copy(targetPosition).add(this._cameraOffset);
+        // Set camera position based on focus point + offset (restores stored camera state)
+        this._camera.position.copy(focusPoint).add(this._cameraOffset);
 
-        // Update controls target to the body's position (this is the focus point)
-        // This makes OrbitControls orbit around the body
-        this._controls.target.copy(targetPosition);
+        // Update controls target to the focus point
+        // This makes OrbitControls orbit around the midpoint or body
+        this._controls.target.copy(focusPoint);
 
         // Set minimum distance based on config factor * radius
         // Default was 8x radius (4x diameter)
         this._controls.minDistance = bodyRadius * config.scene.camera.minBodyDistanceFactor;
 
-        // Update OrbitControls to sync with the camera position
-        // This ensures OrbitControls' internal state matches our camera position
+        // Force a simplified update to set the internal state without triggering our frame loop logic yet
         this._controls.update();
+
+        // Initialize local camera offset if we have a target
+        if (this._cameraTarget.target) {
+            this.updateLocalCameraOffset(this._cameraTarget, this._cameraTarget.target);
+        } else {
+            this._localCameraOffset = null;
+        }
     }
 
     /**
@@ -420,36 +580,98 @@ export class CameraManager extends Body {
         deltaTime = Math.min(deltaTime, 0.1);
         this._lastUpdateTime = currentTime;
 
+
         if (this._cameraTarget) {
             const targetPosition = this._cameraTarget.getPosition();
 
-            // Calculate the offset that the target has moved
-            const targetDelta = targetPosition.clone().sub(this._previousTargetPosition);
+            // Check if selected body has a target
+            const secondaryTarget = this._cameraTarget.target;
 
-            // Update camera position by the same offset to maintain relative position
-            this._camera.position.add(targetDelta);
+            if (secondaryTarget) {
+                // --- TARGET LOCKING LOGIC ---
+                const midpoint = new THREE.Vector3().addVectors(targetPosition, secondaryTarget.getPosition()).multiplyScalar(0.5);
+
+                if (this._isUserInteracting) {
+                    // Scenario A: User is moving/rotating camera
+                    // 1. Let OrbitControls handle natural movement (we still need to track base movement)
+                    
+                    // Simple tracking: move camera by same amount target midpoint moved
+                    const targetDelta = midpoint.clone().sub(this._previousTargetPosition);
+                    this._camera.position.add(targetDelta);
+                    this._controls.target.copy(midpoint);
+                    
+                    this._controls.update();
+
+                    // 2. Capture new Local Offset for when interaction ends
+                    // This "saves" the new angle relative to the frame
+                    this.updateLocalCameraOffset(this._cameraTarget, secondaryTarget);
+                } else if (this._localCameraOffset) {
+                    // Scenario B: Simulation running, Camera Locked to Frame
+                    
+                    // 1. Update Controls first to handle Zoom (and damping)
+                    this._controls.target.copy(midpoint);
+                    this._controls.update();
+
+                    // 2. Capture the distance (zoom level) resulting from controls update
+                    const currentDist = this._camera.position.distanceTo(midpoint);
+
+                    // 3. Calculate new Frame Matrix
+                    const frameMatrix = this.getTargetFrameMatrix(targetPosition, secondaryTarget.getPosition());
+
+                    // 4. Calculate World Offset from stored Local Offset: World = Frame * Local
+                    const newWorldOffset = this._localCameraOffset.clone().applyMatrix4(frameMatrix);
+
+                    // 5. Apply the current zoom distance to our locked orientation
+                    newWorldOffset.setLength(currentDist);
+
+                    // 6. Update Camera Position relative to Midpoint
+                    this._camera.position.copy(midpoint).add(newWorldOffset);
+                    
+                    // 7. Update stored local offset length to match new zoom
+                    this._localCameraOffset.setLength(currentDist);
+                } else {
+                    // Fallback if local offset wasn't set yet
+                     this.updateLocalCameraOffset(this._cameraTarget, secondaryTarget);
+                }
+                
+                // Store current midpoint for next frame
+                this._previousTargetPosition.copy(midpoint);
+
+            } else {
+                // --- STANDARD LOGIC (No Target) ---
+                this._localCameraOffset = null; // Reset local offset
+
+                // Calculate the offset that the target has moved
+                const targetDelta = targetPosition.clone().sub(this._previousTargetPosition);
+
+                // Update camera position by the same offset to maintain relative position
+                this._camera.position.add(targetDelta);
+
+                // Update the controls target to follow the body
+                this._controls.target.copy(targetPosition);
+
+                // Update OrbitControls (handles scroll wheel zoom and rotation)
+                this._controls.update();
+
+                // Store current target position for next frame
+                this._previousTargetPosition.copy(targetPosition);
+            }
 
             // Sync Body position with camera
             this.position.copy(this._camera.position);
 
-            // Update the controls target to follow the body
-            this._controls.target.copy(targetPosition);
-
-            // Update OrbitControls (handles scroll wheel zoom and rotation)
-            // OrbitControls manages camera.position internally, but we've already adjusted for target movement
-            this._controls.update();
-
-            // After controls.update(), capture the current offset (includes scroll wheel changes)
-            // This captures any zoom/rotation changes from user input
+            // Capture current offset (includes scroll wheel zoom)
+            // Even in Target Locking mode, we want to know the current world offset for serialization
+            // Note: If using Target Locking, this offset is relative to midpoint now, but standard logic uses selection pos.
+            // For now, let's keep it relative to actual selection for consistency in serialization
             this._cameraOffset = this._camera.position.clone().sub(targetPosition);
-            this.position.copy(this._camera.position);
 
             // Update stored camera state for this body using Body serialization
             const currentBodyName = this._cameraTarget.getName();
             this._bodyCameraStates.set(currentBodyName, this.toJSON());
 
-            // Store current target position for next frame
-            this._previousTargetPosition.copy(targetPosition);
+            // _previousTargetPosition is updated in the branches above
+
         } else {
             // Free camera mode - handle keyboard movement and update controls
             this.handleFreeCameraMovement(deltaTime);
@@ -665,7 +887,7 @@ export class CameraManager extends Body {
      * Switch camera to a specific body
      * @param body - The body to switch to
      */
-    private switchToBody(body: OrbitalBody): void {
+    public switchToBody(body: OrbitalBody): void {
         // Store current camera state before switching away
         if (this._cameraTarget) {
             const currentBodyName = this._cameraTarget.getName();
