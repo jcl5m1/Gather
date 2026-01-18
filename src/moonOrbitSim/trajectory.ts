@@ -444,26 +444,23 @@ export class TrajectoryRenderer implements TrajectoryRender {
         try {
             if (typeof document === 'undefined') return new THREE.Texture();
             const canvas = document.createElement('canvas');
-            canvas.width = 256;
-            // Increased height to accommodate 2 lines. 
-            // Previous was 64 for 1 line (~30px font). 
-            // 128 should be enough for 2 lines.
-            canvas.height = 128; 
+            canvas.width = 384; 
+            canvas.height = 192; 
             const ctx = canvas.getContext('2d');
             if (ctx) {
                 // Reduced font size to 22.5px
-                ctx.font = 'bold 22.5px monospace';
+                ctx.font = 'bold 33.75px monospace';
                 ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.shadowColor = 'black';
                 ctx.shadowBlur = 4;
 
-                const lineHeight = 30; // Spacing between lines
+                const lineHeight = 45; // Spacing between lines
                 const startY = (canvas.height - (lines.length - 1) * lineHeight) / 2;
 
                 lines.forEach((line, index) => {
-                    ctx.fillText(line, 128, startY + index * lineHeight);
+                    ctx.fillText(line, 192, startY + index * lineHeight);
                 });
             }
             const texture = new THREE.Texture(canvas);
@@ -520,7 +517,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
             // Previous was 4:1 (256x64), scaled 4*periScale x periScale
             // New is 2:1, so width should be 2*height? 
             // If height is 2*periScale (doubled height), width is 4*periScale.
-            this.periapsisText.scale.set(periScale * 4, periScale * 2, 1);
+            this.periapsisText.scale.set(periScale * 6, periScale * 3, 1);
         }
         this.periapsisText.visible = visible;
 
@@ -537,7 +534,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
             
             if (this.apoapsisText.material.map) this.apoapsisText.material.map.dispose();
             this.apoapsisText.material.map = newTex;
-            this.apoapsisText.scale.set(periScale * 4, periScale * 2, 1);
+            this.apoapsisText.scale.set(periScale * 6, periScale * 3, 1);
             this.apoapsisText.center.set(0.5, -0.2);
         }
         this.apoapsisText.visible = visible && showApoapsis;
@@ -640,8 +637,7 @@ export class Trajectory {
     protected _color: number;                    // Protected - use underscore prefix
     public periapsis: Length = ZERO_LENGTH;
     public apoapsis: Length = ZERO_LENGTH;
-    public altitude: Length = ZERO_LENGTH;
-    public velocity: Velocity = ZERO_VELOCITY;
+    protected _initialVelocityMagnitude: Velocity = ZERO_VELOCITY;
 
     protected _useBezierEstimation: boolean = true;
     protected _timeWarpLUT: TimeWarpLUT | null = null;
@@ -706,9 +702,8 @@ export class Trajectory {
         const r = position.length(); // Length
         const v = velocity.length(); // Velocity
 
-        // Update current altitude and velocity (now with units)
-        this.altitude = r;
-        this.velocity = v;
+        // Update current initial velocity (now with units)
+        this._initialVelocityMagnitude = v;
 
         // Calculate gravitational parameter mu = G * mass (with units)
         // Units: (km³/(kg·s²)) * kg = km³/s²
@@ -1048,16 +1043,14 @@ export class Trajectory {
         this._apoapsisPoint = undefined;
         this.periapsis = ZERO_LENGTH;
         this.apoapsis = ZERO_LENGTH;
-        this.altitude = ZERO_LENGTH;
-        this.velocity = ZERO_VELOCITY;
+        this._initialVelocityMagnitude = ZERO_VELOCITY;
     }
 
     /**
-     * Update current altitude and velocity (called during simulation updates)
+     * Update current state (deprecated/no-op after removing internal altitude/velocity properties)
      */
     updateCurrentState(position: LengthVector3, velocity: VelocityVector3): void {
-        this.altitude = position.length();
-        this.velocity = velocity.length();
+        // No longer store instantaneous altitude/velocity directly on trajectory
     }
 
     /**

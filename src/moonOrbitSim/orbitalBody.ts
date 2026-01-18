@@ -809,13 +809,6 @@ export class OrbitalBody extends Body {
 
         // Note: mesh/sprite position is updated in updateRenderingMode(), called from game loop
 
-        // Update trajectory current state (altitude and velocity)
-        // Note: If using Numerical, we update trajectory state to reflect simulation.
-        // If using Analytical/Bezier, the trajectory state is derived from parameters, but we sync altitude/velocity properties for UI.
-        const positionVec = MeasureVector3.fromVector3<Length>(this.position, kilometers);
-        const velocityVec = MeasureVector3.fromVector3<Velocity>(this.velocity, kilometers.per(seconds));
-        this._trajectory.updateCurrentState(positionVec, velocityVec);
-
         // Update trail using simplified static method
         // Use bezierT if available (closest to visual position on curve)
         // If trajectory not initialized or not using bezier, we might need fallback?
@@ -841,6 +834,11 @@ export class OrbitalBody extends Body {
             // Fallback for when trajectory is not ready? 
             // Just set trail to current position
             this._render.updateTrail([this.position]);
+        }
+        
+        // Update transfer trajectory annotations if active
+        if (this._transferTrajectory) {
+             this._transferTrajectory.update(currentTime);
         }
     }
 

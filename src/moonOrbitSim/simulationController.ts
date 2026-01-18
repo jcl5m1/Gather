@@ -68,7 +68,7 @@ export class SimulationController {
                      
                      const currentTime = this.gameLoop.getCurrentTime();
                      transferTrajectory.setTimes(currentTime, currentTime + result.timeOfFlight);
-                     transferTrajectory.deltaV = result.deltaV1 + result.deltaV2;
+                     transferTrajectory.setDeltaVs(result.deltaV1, result.deltaV2);
                      
                      const posMeasure = MeasureVector3.fromVector3<Length>(result.position, kilometers);
                      const velMeasure = MeasureVector3.fromVector3<Velocity>(result.velocity, kilometers.per(seconds));
