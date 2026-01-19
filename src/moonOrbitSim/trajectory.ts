@@ -1014,8 +1014,16 @@ export class Trajectory {
      * @param currentT Current normalized time (0-1)
      * @param currentPos Current position vector
      */
-    updateOrbitVisualization(currentT: number, currentPos: THREE.Vector3): void {
+    /**
+     * Update the orbit visualization with the current position inserted dynamically
+     * @param currentTime Current simulation time
+     * @param currentPos Current position vector
+     */
+    updateOrbitVisualization(currentTime: number, currentPos: THREE.Vector3): void {
         if (!this._renderer || this._bezierPoints.length === 0) return;
+
+        // Calculate normalized time T from simulation time
+        const currentT = this.getBezierT(currentTime);
 
         // High-density sampling parameters
         // Base density is 128 points. 4x density means step size is (1/128)/4
@@ -1370,11 +1378,16 @@ export class Trajectory {
 
     /**
      * Get static trail points from the pre-computed bezier points
-     * Returns 'count' points preceding 'currentT', handling wrap-around
-     * Returns points in order: [oldest, ..., newest] (closest to currentT)
+     * Returns 'count' points preceding 'currentTime', handling wrap-around
+     * Returns points in order: [oldest, ..., newest] (closest to currentTime)
+     * @param currentTime Current simulation time
+     * @param count Number of points to return
      */
-    getStaticTrailPoints(currentT: number, count: number): THREE.Vector3[] {
+    getStaticTrailPoints(currentTime: number, count: number): THREE.Vector3[] {
         if (this._bezierPoints.length === 0) return [];
+        
+        // Calculate normalized time T from simulation time
+        const currentT = this.getBezierT(currentTime);
 
         // Find the index of the point immediately preceding or equal to currentT
         // _bezierPoints is sorted by t

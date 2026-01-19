@@ -831,16 +831,15 @@ export class OrbitalBody extends Body {
         // But user request implies trajectory-based tail.
 
         if (this._trajectoryInitialized) {
-            // Visualization requires BEZIER T (warped), not linear T
-            const bezierT = this._trajectory.getBezierT(this._lastUpdateTime);
-
+            // Visualization now requires Simulation Time directly, handling T mapping internally
+            
             // 1. Update orbit visualization (line)
-            this._trajectory.updateOrbitVisualization(bezierT, this.position);
+            this._trajectory.updateOrbitVisualization(this._lastUpdateTime, this.position);
 
             // 2. Update Trail (tail)
             if (typeof this._trajectory.getStaticTrailPoints === 'function') {
                 // Get 16 previous points
-                const trailPoints = this._trajectory.getStaticTrailPoints(bezierT, 16);
+                const trailPoints = this._trajectory.getStaticTrailPoints(this._lastUpdateTime, 16);
                 // Append current body position to the end (newest)
                 trailPoints.push(this.position);
                 // Update renderer

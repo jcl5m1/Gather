@@ -7,13 +7,15 @@ import { G, calculateInitialE, getAnalyticalState, calculateOrbitBasis, calculat
 import { gravitationalConstantUnit } from './units';
 
 export interface TransferTrajectoryRender extends TrajectoryRender {
-    updateTransferMarkers(startPos: THREE.Vector3 | null, endPos: THREE.Vector3 | null, visible: boolean): void;
+    updateTransferMarkers(startPos: THREE.Vector3 | null, endPos: THREE.Vector3 | null, visible: boolean, startTextLines?: string[], endTextLines?: string[]): void;
 }
 
 export class TransferTrajectoryRenderer extends TrajectoryRenderer implements TransferTrajectoryRender {
     // Markers
     private departStartLoc: THREE.Sprite;
     private departStopLoc: THREE.Sprite;
+    private departStartText: THREE.Sprite;
+    private departStopText: THREE.Sprite;
     
     constructor(scene: THREE.Scene, orbitColor: number = 0xffff00) {
         super(scene, orbitColor);
@@ -29,28 +31,70 @@ export class TransferTrajectoryRenderer extends TrajectoryRenderer implements Tr
         this.departStopLoc.visible = false;
         
         this.container.add(this.departStartLoc, this.departStopLoc);
+
+        // Text labels for start/end
+        const textColor = 0xffffff;
+        this.departStartText = this.createSprite(this.createTextTexture([''], textColor), 1.0);
+        this.departStopText = this.createSprite(this.createTextTexture([''], textColor), 1.0);
+        
+        this.departStartText.visible = false;
+        this.departStopText.visible = false;
+        
+        this.container.add(this.departStartText, this.departStopText);
     }
 
-    updateTransferMarkers(startPos: THREE.Vector3 | null, endPos: THREE.Vector3 | null, visible: boolean): void {
+    updateTransferMarkers(startPos: THREE.Vector3 | null, endPos: THREE.Vector3 | null, visible: boolean, startTextLines: string[] = [], endTextLines: string[] = []): void {
+        const scale = 0.05; // Base scale for sprites from base class (though we used 0.15 for dots here)
+
         if (visible && startPos) {
             this.departStartLoc.position.copy(startPos);
             this.departStartLoc.visible = true;
+
+            // Update Start Text
+            this.departStartText.position.copy(startPos);
+            if (startTextLines.length > 0) {
+                 const newTex = this.createTextTexture(startTextLines, 0x00ff00); // Greenish title context
+                 if (this.departStartText.material.map) this.departStartText.material.map.dispose();
+                 this.departStartText.material.map = newTex;
+                 this.departStartText.center.set(0.5, -0.6); // Offset above/below
+                 this.departStartText.scale.set(scale * 4.8, scale * 2.4, 1);
+                 this.departStartText.visible = true;
+            } else {
+                this.departStartText.visible = false;
+            }
         } else {
             this.departStartLoc.visible = false;
+            this.departStartText.visible = false;
         }
 
         if (visible && endPos) {
             this.departStopLoc.position.copy(endPos);
             this.departStopLoc.visible = true;
+
+             // Update End Text
+            this.departStopText.position.copy(endPos);
+            if (endTextLines.length > 0) {
+                 const newTex = this.createTextTexture(endTextLines, 0xff0000); // Reddish title context
+                 if (this.departStopText.material.map) this.departStopText.material.map.dispose();
+                 this.departStopText.material.map = newTex;
+                 this.departStopText.center.set(0.5, -0.6);
+                 this.departStopText.scale.set(scale * 4.8, scale * 2.4, 1);
+                 this.departStopText.visible = true;
+            } else {
+                this.departStopText.visible = false;
+            }
         } else {
             this.departStopLoc.visible = false;
+            this.departStopText.visible = false;
         }
     }
 
     override cleanup(): void {
         [
             this.departStartLoc,
-            this.departStopLoc
+            this.departStopLoc,
+            this.departStartText,
+            this.departStopText
         ].forEach(obj => {
             if (obj.parent === this.container) this.container.remove(obj);
             if (obj instanceof THREE.Line || obj instanceof THREE.Sprite) {
@@ -163,10 +207,9 @@ export class TransferTrajectory extends Trajectory {
         // Dynamic Position Insertion
         // We manually trigger updateOrbitVisualization here because TransferTrajectory might not be owned by an OrbitalBody
         // that handles this automatically.
-        // const currentT = this.getBezierT(currentTime);
         // const currentPos = this.getPosition(currentTime);
         // if (currentPos) {
-        //   this.updateOrbitVisualization(currentT, currentPos);
+        //   this.updateOrbitVisualization(currentTime, currentPos);
         // }
         
         // Update the visual clipping based on current state
@@ -204,7 +247,42 @@ export class TransferTrajectory extends Trajectory {
         // Update Start/Stop Markers
         const startPos = this.getPosition(this._transferStartTime);
         const endPos = this.getPosition(this._transferEndTime);
-        (this._renderer as TransferTrajectoryRender).updateTransferMarkers(startPos, endPos, true);
+
+        // Debug Text Calculation
+        const startTextLines: string[] = [];
+        const endTextLines: string[] = [];
+
+        // Time to Start
+        const timeToStart = currentTime - this._transferStartTime;
+        const startPrefix = timeToStart < 0 ? 'T-' : 'T+';
+        const startDuration = Measure.of(Math.abs(timeToStart), seconds);
+        startTextLines.push(`${startPrefix}${formatTime(startDuration, true)}`);
+
+        // Distance at Start (from Start Body)
+        if (this._startTrajectory && startPos) {
+             const startBodyPos = this._startTrajectory.getPosition(this._transferStartTime);
+             if (startBodyPos) {
+                 const dist = startPos.distanceTo(startBodyPos);
+                 startTextLines.push(`Dist: ${formatDistanceWithAstronomicalUnits(Measure.of(dist, kilometers), true)}`);
+             }
+        }
+
+        // Time to End
+        const timeToEnd = currentTime - this._transferEndTime;
+        const endPrefix = timeToEnd < 0 ? 'T-' : 'T+';
+        const endDuration = Measure.of(Math.abs(timeToEnd), seconds);
+        endTextLines.push(`${endPrefix}${formatTime(endDuration, true)}`);
+
+        // Distance at End (from Target Body)
+        if (this._targetTrajectory && endPos) {
+            const targetBodyPos = this._targetTrajectory.getPosition(this._transferEndTime);
+            if (targetBodyPos) {
+                const dist = endPos.distanceTo(targetBodyPos);
+                endTextLines.push(`Dist: ${formatDistanceWithAstronomicalUnits(Measure.of(dist, kilometers), true)}`);
+            }
+        }
+
+        (this._renderer as TransferTrajectoryRender).updateTransferMarkers(startPos, endPos, true, startTextLines, endTextLines);
     }
 
     protected override getDebugLines(currentTime: number): string[] {
