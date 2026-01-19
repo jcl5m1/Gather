@@ -156,13 +156,6 @@ export class BezierCurveRenderer implements BezierCurveRender {
     }
 
     cleanup(): void {
-        console.log('[DEBUG] BezierCurveRenderer.cleanup() called', {
-            controlPointsCount: this.controlPoints.length,
-            controlLinesCount: this.controlLines.length,
-            startPointInScene: this.startPoint.parent === this.scene,
-            endPointInScene: this.endPoint.parent === this.scene
-        });
-
         // Hide objects first
         this.startPoint.visible = false;
         this.endPoint.visible = false;
@@ -171,22 +164,18 @@ export class BezierCurveRenderer implements BezierCurveRender {
 
         // Remove from scene
         if (this.startPoint.parent === this.scene) {
-            console.log('[DEBUG] Removing startPoint from scene');
             this.scene.remove(this.startPoint);
         }
         if (this.endPoint.parent === this.scene) {
-            console.log('[DEBUG] Removing endPoint from scene');
             this.scene.remove(this.endPoint);
         }
         this.controlPoints.forEach((point, index) => {
             if (point.parent === this.scene) {
-                console.log(`[DEBUG] Removing controlPoint ${index} from scene`);
                 this.scene.remove(point);
             }
         });
         this.controlLines.forEach((line, index) => {
             if (line.parent === this.scene) {
-                console.log(`[DEBUG] Removing controlLine ${index} from scene`);
                 this.scene.remove(line);
             }
         });
@@ -212,8 +201,6 @@ export class BezierCurveRenderer implements BezierCurveRender {
                 line.material.dispose();
             }
         });
-
-        console.log('[DEBUG] BezierCurveRenderer.cleanup() completed');
     }
 }
 
@@ -225,6 +212,8 @@ export interface TrajectoryRender {
     // Core Three.js objects for rendering
     orbitLine: THREE.Line;
     bezierLine: THREE.Line;
+    analyticalLine: THREE.Line;
+    trailLine: THREE.Line;
     bezierRenderers: BezierCurveRenderer[];
     periapsisIcon: THREE.Sprite;
     periapsisText: THREE.Sprite;
@@ -238,6 +227,8 @@ export interface TrajectoryRender {
     // Methods for updating the visual representation
     updateOrbitLine(points: THREE.Vector3[]): void;
     updateBezierLine(points: THREE.Vector3[]): void;
+    updateAnalyticalLine(points: THREE.Vector3[]): void;
+    updateTrailLine(points: THREE.Vector3[]): void;
     updateBezierCurves(curves: BezierCurve[]): void;
     updateMarkers(periapsisPos: THREE.Vector3, apoapsisPos: THREE.Vector3, visible: boolean, showApoapsis?: boolean, periDist?: Length, apoDist?: Length): void;
     updateDebugMarker(position: THREE.Vector3 | null, visible: boolean, lines: string[]): void;
@@ -253,6 +244,8 @@ export interface TrajectoryRender {
 export class TrajectoryRenderer implements TrajectoryRender {
     orbitLine: THREE.Line;
     bezierLine: THREE.Line;
+    analyticalLine: THREE.Line;
+    trailLine: THREE.Line;
     bezierRenderers: BezierCurveRenderer[] = [];
     periapsisIcon: THREE.Sprite;
     periapsisText: THREE.Sprite;
@@ -273,11 +266,6 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.container = new THREE.Group();
         scene.add(this.container);
 
-        console.log('[DEBUG] TrajectoryRenderer constructor called', {
-            sceneChildrenBefore: scene.children.length,
-            orbitColor: '0x' + orbitColor.toString(16)
-        });
-
         // Initialize analytical orbit line (HIDDEN by default now, as we only want Bezier)
         const orbitGeometry = new THREE.BufferGeometry();
         this.orbitLine = new THREE.Line(
@@ -291,7 +279,6 @@ export class TrajectoryRenderer implements TrajectoryRender {
         );
         this.orbitLine.visible = false;
         this.container.add(this.orbitLine);
-        console.log('[DEBUG] Added orbitLine to container');
 
         // Initialize bezier approximation line (Solid now, to be the main visual)
         const bezierGeometry = new THREE.BufferGeometry();
@@ -306,10 +293,53 @@ export class TrajectoryRenderer implements TrajectoryRender {
             })
         );
         this.container.add(this.bezierLine);
-        console.log('[DEBUG] Added bezierLine to container');
 
-        this.container.add(this.bezierLine);
-        console.log('[DEBUG] Added bezierLine to container');
+        // Initialize analytical trajectory line (blue, for comparison)
+        const analyticalGeometry = new THREE.BufferGeometry();
+        this.analyticalLine = new THREE.Line(
+            analyticalGeometry,
+            new THREE.LineBasicMaterial({
+                color: 0x00ffff, // Bright cyan for better visibility
+                opacity: 1.0, // Full opacity to ensure visibility
+                transparent: false, // Make it fully opaque
+                depthTest: true,
+                depthWrite: true,
+                linewidth: 2 // Note: linewidth may not work on all platforms, but worth trying
+            })
+        );
+        this.analyticalLine.visible = false; // Hidden by default, shown only for transfers
+        this.analyticalLine.renderOrder = 1; // Render after bezierLine
+        this.container.add(this.analyticalLine);
+
+        // Initialize trail line (fading tail behind the body)
+        const trailGeometry = new THREE.BufferGeometry();
+        // Use shader material for alpha fading
+        const trailMaterial = new THREE.ShaderMaterial({
+            vertexShader: `
+                attribute float alpha;
+                varying float vAlpha;
+                void main() {
+                    vAlpha = alpha;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 color;
+                varying float vAlpha;
+                void main() {
+                    gl_FragColor = vec4(color, vAlpha);
+                }
+            `,
+            uniforms: {
+                color: { value: new THREE.Color(orbitColor) }
+            },
+            transparent: true,
+            depthTest: true,
+            depthWrite: false
+        });
+        this.trailLine = new THREE.Line(trailGeometry, trailMaterial);
+        this.trailLine.visible = true;
+        this.container.add(this.trailLine);
 
         // Initialize markers as Sprites
         // Periapsis - Greenish
@@ -334,8 +364,6 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.debugText.visible = false;
         this.container.add(this.debugIcon);
         this.container.add(this.debugText);
-
-        console.log('[DEBUG] Added markers to container');
 
         // Initialize LUT markers (Points for screen-space rendering)
         const lutGeometry = new THREE.BufferGeometry();
@@ -454,6 +482,26 @@ export class TrajectoryRenderer implements TrajectoryRender {
         // computeLineDistances not needed for solid line
     }
 
+    updateTrailLine(points: THREE.Vector3[]): void {
+        this.trailLine.geometry.setFromPoints(points);
+        
+        // Update alpha attribute for fading effect
+        const alphas = new Float32Array(points.length);
+        const maxIndex = points.length > 1 ? points.length - 1 : 1;
+
+        // Set alphas: 0 at start (tail), 1 at end (head/body)
+        for (let i = 0; i < points.length; i++) {
+            alphas[i] = i / maxIndex; // Linear fade from 0 to 1
+        }
+
+        this.trailLine.geometry.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1));
+    }
+
+    updateAnalyticalLine(points: THREE.Vector3[]): void {
+        this.analyticalLine.geometry.setFromPoints(points);
+        this.analyticalLine.visible = points.length > 0;
+    }
+
     updateBezierCurves(curves: BezierCurve[]): void {
         this.bezierRenderers.forEach(renderer => renderer.cleanup());
         this.bezierRenderers = [];
@@ -544,12 +592,12 @@ export class TrajectoryRenderer implements TrajectoryRender {
 
     setVisibility(show: boolean): void {
         this.container.visible = show;
-        this.orbitLine.visible = false; 
+        this.orbitLine.visible = false;
+        // analyticalLine visibility is controlled separately in updateAnalyticalLine
         this.lutPoints.visible = show && config.visualization.showLUT;
     }
 
     cleanup(): void {
-        console.log('[DEBUG] TrajectoryRenderer.cleanup() called');
 
         this.orbitLine.visible = false;
         this.bezierLine.visible = false;
@@ -566,6 +614,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
         [
             this.orbitLine,
             this.bezierLine,
+            this.analyticalLine,
             this.periapsisIcon,
             this.periapsisText,
             this.apoapsisIcon,
@@ -587,8 +636,6 @@ export class TrajectoryRenderer implements TrajectoryRender {
         if (this.container.parent === this.scene) {
             this.scene.remove(this.container);
         }
-
-        console.log('[DEBUG] TrajectoryRenderer.cleanup() completed');
     }
 }
 
@@ -1095,6 +1142,11 @@ export class Trajectory {
         }
 
         this._renderer.updateBezierLine(renderPoints);
+
+        // Update trail (fading tail behind the body)
+        const trailPoints = this.getStaticTrailPoints(currentTime, 16);
+        trailPoints.push(currentPos); // Append current position at the end
+        this._renderer.updateTrailLine(trailPoints);
     }
 
     /**
@@ -1273,7 +1325,7 @@ export class Trajectory {
         this._interpolationMode = mode;
     }
 
-    private timeWarpFunction(t: number): number {
+    private timeBezierWarpFunction(t: number): number {
         if (this._timeWarpFunction) return this._timeWarpFunction(t);
         if (!this._timeWarpLUT) return t;
         return calculateTimeWarp(t, this._timeWarpLUT, this._interpolationMode);
@@ -1341,7 +1393,7 @@ export class Trajectory {
      */
     getBezierT(time: number): number {
         const linearT = this.getLinearNormalizedTime(time);
-        return this.timeWarpFunction(linearT);
+        return this.timeBezierWarpFunction(linearT);
     }
 
     /**
@@ -1372,8 +1424,8 @@ export class Trajectory {
     /**
      * Get the time warp function
      */
-    public getTimeWarpFunction(): (t: number) => number {
-        return this.timeWarpFunction.bind(this);
+    public getBezierTimeWarpFunction(): (t: number) => number {
+        return this.timeBezierWarpFunction.bind(this);
     }
 
     /**

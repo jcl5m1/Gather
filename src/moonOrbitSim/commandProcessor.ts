@@ -295,8 +295,7 @@ export class CommandProcessor {
                 velocity: body.getVelocity().toArray(),
                 initialPosition: body.getInitialPosition().toArray(),
                 initialVelocity: body.getInitialVelocity().toArray(),
-                mass: body.getMass(),
-                trailPoints: body.getTrailPoints().length
+                mass: body.getMass()
             }
         };
     }

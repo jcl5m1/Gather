@@ -1604,8 +1604,8 @@ export class TransferCalculator {
         const yMinVal = estTOF * 0.5;
         const yMaxVal = estTOF * 1.5;
 
-        const resX = 8;
-        const resY = 8;
+        const resX = 32;
+        const resY = 32;
         const dx = (xMaxVal - xMinVal) / resX;
         const dy = (yMaxVal - yMinVal) / resY;
 

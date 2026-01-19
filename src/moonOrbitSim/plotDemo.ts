@@ -6,7 +6,7 @@ import { PlotWindow } from './plotWindow';
 import './performanceTest'; // Import to register benchmark function
 import { OrbitalBody } from './orbitalBody';
 import { calculateEllipticalVelocity } from './orbitUtils';
-import { seconds, kilometers, formatTime, Measure, getTimeUnit, gravitationalConstantUnit } from './units';
+import { seconds, kilometers, formatTime, formatDistanceWithAstronomicalUnits, Measure, getTimeUnit, gravitationalConstantUnit } from './units';
 import { TransferCalculator } from './orbitUtils';
 import { config, G } from './config';
 import * as THREE from 'three';
@@ -172,7 +172,9 @@ export function createVelocityComparisonPlot(targetBody: OrbitalBody): PlotWindo
 
             // Update Animation Indicator using current tracked body
             if (currentTrackedBody) {
-                const normalizedTime = currentTrackedBody.getCurrentNormalizedTime();
+                const trajectory = currentTrackedBody.getTrajectory();
+                const currentTime = gameLoop.getCurrentTime();
+                const normalizedTime = trajectory ? trajectory.getBezierT(currentTime) : 0;
                 win.setAnimationPosition(normalizedTime);
             }
         });
@@ -332,8 +334,8 @@ export function createTransferDistanceErrorPlot(
         title: title,
         x: 100,
         y: 450,
-        width: 600, // Square display geometry
-        height: 600,
+        width: 300, // Reduced by half from 600
+        height: 300, // Reduced by half from 600
         xLabel: 'Start Delay',
         yLabel: 'Time of Flight',
         xMin: xMinVal,
@@ -346,13 +348,13 @@ export function createTransferDistanceErrorPlot(
     });
 
     if (!existingWin) {
-        win.close(); // Ensure window starts closed/hidden by default
+        win.open(); // Show the heatmap plot window when computing transfers
     } else {
         win.setTitle(title);
         win.clearData();
         win.setXRange(xMinVal, xMaxVal);
         win.setYRange(yMinVal, yMaxVal);
-        // win.open(); // Disabled as per request to not show plot entirely
+        win.open(); // Ensure existing window is visible
     }
 
     // PERFORM GLOBAL OPTIMIZATION (GRID SEARCH + HILL CLIMBING)
@@ -375,13 +377,25 @@ export function createTransferDistanceErrorPlot(
         const totalDV = finalBest.deltaV1 + finalBest.deltaV2;
         const bestTOF = finalBest.timeOfFlight;
         
+        // Calculate distances at start and end times
+        const transferStartTime = startTime + bestDelay;
+        const transferEndTime = transferStartTime + bestTOF;
+        
+        // Distance from selected body at start time
+        const startBodyPos = startBody.getTrajectory().getPosition(transferStartTime);
+        const distanceFromStart = startBodyPos ? finalBest.startPosition.distanceTo(startBodyPos) : 0;
+        
+        // Distance from target body at end time
+        const targetBodyPos = targetBody.getTrajectory().getPosition(transferEndTime);
+        const distanceFromTarget = targetBodyPos ? finalBest.endPosition.distanceTo(targetBodyPos) : 0;
+        
         win.addData({
             x: [bestDelay],
             y: [bestTOF],
             color: '#ff0000',
             pointSize: 6,
             plotType: 'scatter',
-            tooltips: [`OPTIMUM (Optimized)<br>Delay: ${formatTime(Measure.of(bestDelay, seconds), true)}<br>TOF: ${formatTime(Measure.of(bestTOF, seconds), true)}<br>ΔV: ${totalDV.toFixed(4)} km/s`]
+            tooltips: [`OPTIMUM (Optimized)<br>Delay: ${formatTime(Measure.of(bestDelay, seconds), true)}<br>TOF: ${formatTime(Measure.of(bestTOF, seconds), true)}<br>ΔV: ${totalDV.toFixed(4)} km/s<br>Start Time: ${transferStartTime.toFixed(2)} s<br>End Time: ${transferEndTime.toFixed(2)} s<br>Start Dist: ${formatDistanceWithAstronomicalUnits(Measure.of(distanceFromStart, kilometers))}<br>End Dist: ${formatDistanceWithAstronomicalUnits(Measure.of(distanceFromTarget, kilometers))}`]
         });
     }
 

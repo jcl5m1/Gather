@@ -83,3 +83,4 @@ Secondary game module focusing on resource management.
 - always check for build errors after finishing changes.  if there are errors, keep attempting to fix them.
 - **Dev Server**: Auto-reloads on changes.
 - **Testing**: Use text commands and browser console.
+- the browser port is 8000

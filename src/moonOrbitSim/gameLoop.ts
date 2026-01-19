@@ -6,24 +6,6 @@ import { generateStateFromOrbitalElements } from './orbitUtils';
 import { kilometers, kilograms, seconds, Mass, Measure, Length, Velocity } from './units';
 import { MeasureVector3, LengthVector3, VelocityVector3 } from './unitsVector3';
 
-// Shader for fading trail
-const TRAIL_VERTEX_SHADER = `
-attribute float alpha;
-varying float vAlpha;
-void main() {
-    vAlpha = alpha;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}
-`;
-
-const TRAIL_FRAGMENT_SHADER = `
-uniform vec3 color;
-varying float vAlpha;
-void main() {
-    gl_FragColor = vec4(color, vAlpha);
-}
-`;
-
 /**
  * Main game loop class that manages the simulation, rendering, and update cycle
  */
@@ -48,8 +30,8 @@ export class GameLoop {
     private _fpsUpdateTime: number = 0;
 
     // Trail rendering
-    private _trailLines: Map<OrbitalBody, THREE.Line> = new Map();
     private _trajectoriesVisible: boolean = true;
+    private _axesVisible: boolean = false;
 
     // Plot update callbacks
     private _plotUpdateCallbacks: Array<() => void> = [];
@@ -90,13 +72,15 @@ export class GameLoop {
         this._camera.lookAt(this._scene.position);
 
         // Add axes helper
-        // const axesSize = config.scene.axes.size.over(kilometers).value;
-        // const axesHelper = new THREE.AxesHelper(axesSize);
-        // if (axesHelper.material instanceof THREE.Material) {
-        //     axesHelper.material.depthTest = true;
-        //     axesHelper.material.depthWrite = true;
-        // }
-        // this._scene.add(axesHelper);
+        if (this._axesVisible) {
+            const axesSize = config.scene.axes.size.over(kilometers).value;
+            const axesHelper = new THREE.AxesHelper(axesSize);
+            if (axesHelper.material instanceof THREE.Material) {
+                axesHelper.material.depthTest = true;
+                axesHelper.material.depthWrite = true;
+            }
+            this._scene.add(axesHelper);
+        }
 
         // Add dark grey grid on xz plane with 1000km intervals
         const gridConfig = config.scene.grid;
@@ -200,26 +184,6 @@ export class GameLoop {
         const centralMass = Measure.of(this._centralBody.getMass(), kilograms);
         body.getTrajectory().calculateFromState(positionVec, velocityVec, centralMass);
 
-        // Create trail line with ShaderMaterial for fading effect
-        const trailConfig = config.trail;
-        const trailGeometry = new THREE.BufferGeometry();
-
-        // Use custom shader material for fading trail
-        const trailMaterial = new THREE.ShaderMaterial({
-            uniforms: {
-                color: { value: new THREE.Color(hexToNumber(trailConfig.color)) }
-            },
-            vertexShader: TRAIL_VERTEX_SHADER,
-            fragmentShader: TRAIL_FRAGMENT_SHADER,
-            transparent: true,
-            depthWrite: false, // Prevents z-fighting and ensures proper transparency
-            blending: THREE.NormalBlending
-        });
-
-        const trailLine = new THREE.Line(trailGeometry, trailMaterial);
-        this._scene.add(trailLine);
-        this._trailLines.set(body, trailLine);
-
         this._orbitalBodies.push(body);
 
         // Update camera manager with new body list and pass the newly added body
@@ -237,17 +201,6 @@ export class GameLoop {
         if (index > -1) {
             this._orbitalBodies.splice(index, 1);
 
-            // Remove trail line
-            const trailLine = this._trailLines.get(body);
-            if (trailLine) {
-                this._scene.remove(trailLine);
-                trailLine.geometry.dispose();
-                if (trailLine.material instanceof THREE.Material) {
-                    trailLine.material.dispose();
-                }
-                this._trailLines.delete(body);
-            }
-
             body.dispose();
         }
 
@@ -260,12 +213,6 @@ export class GameLoop {
      */
     resetOrbitalBody(body: OrbitalBody, position: THREE.Vector3, velocity: THREE.Vector3, mass: number, radius?: number): void {
         body.reset(position, velocity, mass, this._centralBody.getMass(), radius);
-
-        // Clear trail
-        const trailLine = this._trailLines.get(body);
-        if (trailLine) {
-            trailLine.geometry.setFromPoints([]);
-        }
     }
 
     /**
@@ -289,12 +236,6 @@ export class GameLoop {
         const centralMass = this._centralBody.getMass();
         this._orbitalBodies.forEach(body => {
             body.resetToInitial(centralMass);
-
-            // Clear trail
-            const trailLine = this._trailLines.get(body);
-            if (trailLine) {
-                trailLine.geometry.setFromPoints([]);
-            }
         });
     }
 
@@ -393,9 +334,24 @@ export class GameLoop {
         const centralPosition = this._centralBody.getPosition();
         const centralMass = this._centralBody.getMass();
 
+        // Get selection info for rendering options
+        const selectedBody = this._cameraManager.getTarget();
+        const targetBody = selectedBody ? selectedBody.target : null;
+
         // Update all orbital bodies
         this._orbitalBodies.forEach(body => {
-            body.update(scaledDt, centralPosition, centralMass, G, this.currentTime);
+            // Prepare render options for this body
+            const isSelected = body === selectedBody;
+            const isTarget = body === targetBody;
+            const renderOptions = {
+                isSelected,
+                isTarget,
+                trajectoriesVisible: this._trajectoriesVisible,
+                camera: this._camera
+            };
+
+            // Update with render options
+            body.update(scaledDt, centralPosition, centralMass, G, this.currentTime, renderOptions);
 
             // Transfer completion logic
             const transfer = body.getTransferTrajectory();
@@ -416,25 +372,6 @@ export class GameLoop {
                     body.setTarget(null);
                 }
             }
-
-            // Update trail
-            const trailLine = this._trailLines.get(body);
-            if (trailLine) {
-                const points = body.getTrailPoints();
-                trailLine.geometry.setFromPoints(points);
-
-                // Update alpha attribute for fading effect
-                const alphas = new Float32Array(points.length);
-                const maxIndex = points.length > 1 ? points.length - 1 : 1;
-
-                // Set alphas: 0 at start (tail), 1 at end (head/body)
-                for (let i = 0; i < points.length; i++) {
-                    // Linear fade from 0 to 1
-                    alphas[i] = i / maxIndex;
-                }
-
-                trailLine.geometry.setAttribute('alpha', new THREE.BufferAttribute(alphas, 1));
-            }
         });
     }
 
@@ -453,26 +390,16 @@ export class GameLoop {
         const selectedBody = this._cameraManager.getTarget();
         const targetBody = selectedBody ? selectedBody.target : null;
 
+        // Update rendering mode (mesh vs dot) for all bodies
         this._orbitalBodies.forEach(body => {
             const isSelected = body === selectedBody;
             body.updateRenderingMode(this._camera, isSelected);
-
-            // Only show full trajectory for the currently selected body OR its target
-            const isTarget = body === targetBody;
-            body.getTrajectory().setVisibility((isSelected || isTarget) && this._trajectoriesVisible);
-
-            // Transfer trajectory visibility - only for currently selected body
-            const transfer = body.getTransferTrajectory();
-            if (transfer) {
-                // If the body is selected, show its transfer. Otherwise, hide it.
-                // This will also toggle the visibility of the associated optimization plot.
-                transfer.setVisibility(isSelected);
-            }
         });
 
         // Also update rendering mode for central body
         this._centralBody.updateRenderingMode(this._camera, this._centralBody === selectedBody);
 
+        // Final Three.js render
         this._renderer.render(this._scene, this._camera);
 
         // Call plot update callbacks

@@ -28,13 +28,7 @@ export interface OrbitalBodyRender {
 
   // Methods for updating the visual representation
   updateRenderingMode(position: THREE.Vector3, camera: THREE.Camera): void;
-  getTrailPoints(): THREE.Vector3[];
-  updateTrail(points: THREE.Vector3[]): void;
-  updateTargetLine(
-    start: THREE.Vector3,
-    end: THREE.Vector3 | null,
-    camera?: THREE.Camera,
-  ): void;
+  // updateTargetLine removed - now managed by TransferTrajectory
   updateRadius(radius: number, color: number): void;
   setVisibility(visible: boolean): void;
   cleanup(): void;
@@ -45,12 +39,10 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
   dotSprite: THREE.Sprite;
 
   private scene: THREE.Scene;
-  private trailPoints: THREE.Vector3[] = [];
-  private maxTrailPoints: number = 100;
   private useDotRendering: boolean = false;
   private radius: number;
 
-  private targetLine: THREE.LineSegments;
+  // targetLine removed - now managed by TransferTrajectory
 
   private texture: THREE.Texture | null = null;
 
@@ -101,23 +93,7 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
     this.dotSprite.position.copy(position);
     // Don't add to scene yet - will be added when needed
 
-    // Initialize trail (empty until updated)
-    this.trailPoints = [];
-
-    // Create target line (Herringbone pattern)
-    const lineGeometry = new THREE.BufferGeometry();
-    const lineMaterial = new THREE.LineBasicMaterial({
-      color: 0x808080,
-      opacity: 1.0,
-      transparent: false,
-      depthWrite: true,
-      depthTest: true,
-      linewidth: 5
-    });
-    this.targetLine = new THREE.LineSegments(lineGeometry, lineMaterial);
-    this.targetLine.visible = false;
-    this.targetLine.frustumCulled = false;
-    scene.add(this.targetLine);
+    // Target line (Herringbone pattern) removed - now managed by TransferTrajectory
   }
 
   /**
@@ -201,159 +177,7 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
     }
   }
 
-  /**
-   * Update trail points directly
-   */
-  updateTrail(points: THREE.Vector3[]): void {
-    this.trailPoints = points.map((p) => p.clone());
-  }
 
-  /**
-   * Update target line to point to a target position
-   * Generates a billboarded herringbone/chevron pattern
-   */
-  updateTargetLine(
-    start: THREE.Vector3,
-    end: THREE.Vector3 | null,
-    camera?: THREE.Camera,
-  ): void {
-    if (!end || !camera) {
-      this.targetLine.visible = false;
-      return;
-    }
-
-    // Constants
-    const CHEVRON_PIXEL_SIZE = 10.0; // Size of chevron wings in pixels
-
-    // 1. Transform World Points to Camera Space for Clipping
-    const startView = start.clone().applyMatrix4(camera.matrixWorldInverse);
-    const endView = end.clone().applyMatrix4(camera.matrixWorldInverse);
-
-    // Near plane clip distance
-    const near = (camera as any).near || 0.1;
-    const CLIP_Z = -near;
-
-    if (startView.z > CLIP_Z && endView.z > CLIP_Z) {
-      this.targetLine.visible = false;
-      return;
-    }
-
-    let sClipped = start.clone();
-    let eClipped = end.clone();
-    let wStart = -startView.z;
-    let wEnd = -endView.z;
-
-    const clipLine = (
-      p1: THREE.Vector3,
-      p2: THREE.Vector3,
-      w1: number,
-      w2: number,
-    ) => {
-      if (p1.z > CLIP_Z) {
-        const diff = p2.z - p1.z;
-        const t = diff !== 0 ? (CLIP_Z - p1.z) / diff : 0;
-        const pNew = new THREE.Vector3().lerpVectors(p1, p2, t);
-        return { pos: pNew, w: -pNew.z, t: t };
-      }
-      return { pos: p1, w: w1, t: 0 };
-    };
-
-    let tStart = 0;
-    let tEnd = 1;
-
-    if (startView.z > CLIP_Z) {
-      const res = clipLine(startView, endView, wStart, wEnd);
-      startView.copy(res.pos);
-      wStart = res.w;
-      tStart = res.t;
-    }
-    if (endView.z > CLIP_Z) {
-      const res = clipLine(endView, startView, wEnd, wStart);
-      endView.copy(res.pos);
-      wEnd = res.w;
-      tEnd = 1.0 - res.t;
-    }
-
-    // Reconstruct clipped world points based on interpolation
-    sClipped.lerpVectors(start, end, tStart);
-    eClipped.lerpVectors(start, end, tEnd);
-
-    // 2. Calculate chevron sizing and spacing
-    // Calculate world-space size for chevrons based on the first chevron's position (at the selected body)
-    // This ensures consistent screen-space appearance across all chevrons
-    const height = window.innerHeight;
-    const distToFirstChevron = sClipped.distanceTo(camera.position);
-    const fov = (camera instanceof THREE.PerspectiveCamera) ? camera.fov : 50;
-    const tan = Math.tan((fov * Math.PI / 180) / 2);
-    const worldSizeAtFirstChevron = (CHEVRON_PIXEL_SIZE / height) * 2 * distToFirstChevron * tan;
-    
-    const CHEVRON_WING_LENGTH = worldSizeAtFirstChevron;
-    const CHEVRON_WIDTH_OFFSET = worldSizeAtFirstChevron * 0.6;
-    const CHEVRON_3D_SPACING = worldSizeAtFirstChevron * 3.0; // 3x the wing length for spacing
-
-    // 4. Generate chevrons at equidistant 3D positions
-    const points: THREE.Vector3[] = [];
-    
-    const lineDir = new THREE.Vector3().subVectors(eClipped, sClipped);
-    const totalDistance = lineDir.length();
-    lineDir.normalize();
-    
-    // Calculate how many chevrons fit along the line
-    const numChevrons = Math.floor(totalDistance / CHEVRON_3D_SPACING);
-    
-    // Safety cap to prevent crashes/freezes
-    if (numChevrons > 2000) {
-      this.targetLine.visible = false;
-      return;
-    }
-
-    for (let i = 0; i <= numChevrons; i++) {
-      const distance3D = i * CHEVRON_3D_SPACING;
-      const centerPos = sClipped.clone().add(lineDir.clone().multiplyScalar(distance3D));
-
-      // Billboarding
-      const viewVec = new THREE.Vector3()
-        .subVectors(centerPos, camera.position)
-        .normalize();
-      const right = new THREE.Vector3()
-        .crossVectors(lineDir, viewVec)
-        .normalize();
-      if (right.lengthSq() < 0.001) {
-        right.crossVectors(lineDir, new THREE.Vector3(0, 1, 0)).normalize();
-      }
-
-      const tip = centerPos
-        .clone()
-        .add(lineDir.clone().multiplyScalar(CHEVRON_WING_LENGTH * 0.5));
-      const base = centerPos
-        .clone()
-        .sub(lineDir.clone().multiplyScalar(CHEVRON_WING_LENGTH * 0.5));
-
-      const left = base
-        .clone()
-        .add(right.clone().multiplyScalar(CHEVRON_WIDTH_OFFSET));
-      const rightPos = base
-        .clone()
-        .sub(right.clone().multiplyScalar(CHEVRON_WIDTH_OFFSET));
-
-      points.push(left, tip);
-      points.push(rightPos, tip);
-    }
-
-    this.targetLine.geometry.setFromPoints(points);
-    if (this.targetLine.geometry.attributes.position) {
-      this.targetLine.geometry.attributes.position.needsUpdate = true;
-    }
-    this.targetLine.geometry.computeBoundingSphere();
-    this.targetLine.visible = true;
-  }
-
-  /**
-   * Get trail points (return current stored points)
-   */
-  getTrailPoints(): THREE.Vector3[] {
-    return this.trailPoints;
-  }
 
   /**
    * Update radius and regenerate mesh with new radius and color
@@ -391,7 +215,7 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
     // Clean up analytical rendering
     this.scene.remove(this.mesh);
     this.scene.remove(this.dotSprite);
-    this.scene.remove(this.targetLine);
+    // targetLine cleanup removed - now managed by TransferTrajectory
     this.mesh.geometry.dispose();
     if (this.mesh.material instanceof THREE.Material) {
       this.mesh.material.dispose();
@@ -401,12 +225,9 @@ export class OrbitalBodyRenderer implements OrbitalBodyRender {
     }
     this.dotSprite.material.dispose();
 
-    // Clean up target line
-    this.targetLine.geometry.dispose();
-    if (this.targetLine.material instanceof THREE.Material) {
-      this.targetLine.material.dispose();
-    }
+    // targetLine cleanup removed - now managed by TransferTrajectory
 
+    // Clean up texture if it exists
     if (this.texture) {
       this.texture.dispose();
       this.texture = null;
@@ -436,7 +257,6 @@ export class OrbitalBody extends Body {
   public initialVelocity: THREE.Vector3; // Public for UI inspection
   private _trajectory: Trajectory; // Private - use underscore prefix
   private _render: OrbitalBodyRender; // Private - rendering delegate
-  private _bezierRender: OrbitalBodyRender | null = null; // Private - bezier rendering delegate
   private _lastUpdateTime: number = 0; // Store last update time for UI indicators
 
   // Target Selection
@@ -444,9 +264,6 @@ export class OrbitalBody extends Body {
   public targetId: string = ""; // Serialized target ID
 
   // Dual-rendering mode: calculate both analytical and bezier positions
-  private _dualRenderingEnabled: boolean = false;
-  private _bezierPosition: THREE.Vector3 | null = null;
-  private _bezierVelocity: THREE.Vector3 | null = null;
   private _trajectoryInitialized: boolean = false;
 
   // Transfer Trajectory (Hohmann)
@@ -521,9 +338,6 @@ export class OrbitalBody extends Body {
   dispose(): void {
     this.clearTransfer();
     this._render.cleanup();
-    if (this._bezierRender) {
-      this._bezierRender.cleanup();
-    }
     // Trajectory cleanup?
     // this._trajectory... we might need to expose cleanup there.
   }
@@ -619,20 +433,13 @@ export class OrbitalBody extends Body {
   /**
    * Update rendering mode based on screen size
    * Switches between 3D mesh and 2D dot sprite
-   * In dual-rendering mode, updates both analytical and bezier renderings
    */
   updateRenderingMode(camera: THREE.Camera, isSelected: boolean = false): void {
-    // If dual-rendering is enabled, we only want to show the Bezier (ghost) render
-    // and hide the Analytical (primary) render, as per user request to "disable renderings of the analytical version".
-
     const targetPos =
       this.target && isSelected ? this.target.getPosition() : null;
 
     // Custom start position for target line: use transfer debug position if available
     let lineStartPos = this.position;
-    if (this._dualRenderingEnabled && this._bezierPosition) {
-      lineStartPos = this._bezierPosition;
-    }
 
     if (this._transferTrajectory && isSelected) {
       const debugPos = this._transferTrajectory.getDebugPosition();
@@ -641,23 +448,11 @@ export class OrbitalBody extends Body {
       }
     }
 
-    if (this._dualRenderingEnabled) {
-      // Hide primary (analytical)
-      this._render.setVisibility(false);
-      this._render.updateTargetLine(this.position, null, camera); // Ensure hidden
-
-      // Show/Update bezier (ghost)
-      if (this._bezierPosition && this._bezierRender) {
-        this._bezierRender.setVisibility(true);
-        this._bezierRender.updateRenderingMode(this._bezierPosition, camera);
-        this._bezierRender.updateTargetLine(lineStartPos, targetPos, camera);
-      }
-    } else {
-      // Normal mode: Show primary, dual rendering logic handles visibility of ghost if it existed but here we ensure primary is visible
-      this._render.setVisibility(true);
-      this._render.updateRenderingMode(this.position, camera);
-      this._render.updateTargetLine(lineStartPos, targetPos, camera);
-    }
+    // Update rendering mode (mesh vs sprite)
+    this._render.setVisibility(true);
+    this._render.updateRenderingMode(this.position, camera);
+    // DISABLED: Herringbone now managed by TransferTrajectory
+    // this._render.updateTargetLine(lineStartPos, targetPos, camera);
   }
 
   /**
@@ -730,6 +525,8 @@ export class OrbitalBody extends Body {
    * In dual-rendering mode, calculates both analytical AND bezier positions
    * All units: distance in km, velocity in km/s, mass in kg, time in seconds
    * G must be in km³/(kg·s²) as a Measure
+   * 
+   * Now also handles rendering/visibility control
    */
   update(
     dt: number,
@@ -737,6 +534,7 @@ export class OrbitalBody extends Body {
     centralBodyMass: number,
     G: GenericMeasure<number, any, any>,
     currentTime: number = 0,
+    renderOptions?: { isSelected: boolean, isTarget: boolean, trajectoriesVisible: boolean, camera?: THREE.Camera }
   ): void {
     // Optimize: skip trajectory init if using Numerical (except for visualization?)
     // Visualization requires trajectory. So always init.
@@ -746,109 +544,53 @@ export class OrbitalBody extends Body {
     // Update trajectory debugging annotations
     this._trajectory.update(currentTime);
 
-    // If dual-rendering is enabled, calculate BOTH positions
-    if (this._dualRenderingEnabled) {
-      // Dual Rendering: One is "Primary" (Analytical), other is "Ghost" (Bezier)
-      // But wait, the request was: "The orbital body should just ask the trajectory object for either the analytical position or the bezier position"
+    // Update position and velocity using trajectory or numerical integration
+    if (ORBIT_UPDATE_METHOD === "analytical") {
+      // Use optimized getBezierState to get both position and velocity efficiently
+      const state = this._trajectory.getBezierState(currentTime, {
+        calcVelocity: true,
+      });
 
-      // Primary Position
-      if (ORBIT_UPDATE_METHOD === "analytical") {
-        const pos = this._trajectory.getPosition(currentTime);
-        if (pos) {
-          this.position.copy(pos).add(centralBodyPosition);
-          // Velocity? Trajectory doesn't currently return velocity.
-          // Analytical velocity is needed for numerical fallback or display?
-          // For now, we only update position.
-          // To keep velocity consistent, we might need Trajectory to return state { position, velocity }.
-          // But for now, we leave velocity as is or use finite diff if needed.
+      if (state.position) {
+        this.position.copy(state.position).add(centralBodyPosition);
+        if (state.velocity) {
+          this.velocity.copy(state.velocity);
         }
-      } else {
-        this.updateNumerical(dt, centralBodyPosition, centralBodyMass, G);
       }
-
-      // Secondary (Ghost) Position -> Standard Bezier
-      const ghostPos = this._trajectory.getPosition(currentTime);
-      if (ghostPos) {
-        this._bezierPosition = ghostPos.clone().add(centralBodyPosition);
-      } else {
-        this._bezierPosition = null;
-      }
-
-      // Secondary (Ghost) Velocity
-      this._bezierVelocity = this._trajectory.getBezierVelocity(currentTime);
     } else {
-      // Normal single-position update
-      // Default "Bezier" estimation preferred for speed/smoothness as per request?
-      // Request: "default being the bezier position"
-
-      let pos: THREE.Vector3 | null = null;
-
-      if (ORBIT_UPDATE_METHOD === "analytical") {
-        // The user said: "The orbital body should just ask the trajectory object for either the analytical position or the bezier position, with the default being the bezier position"
-        // So we use 'bezier' by default if possible?
-        // But ORBIT_UPDATE_METHOD implies user choice.
-        // I'll stick to 'bezier' as the implementation for analytical mode because it's the efficient way.
-        // However, 'analytical' implies exact Kepler.
-        // I will assume 'analytical' setting maps to 'bezier' optimized trajectory unless explicitly 'analytical' requested in getPosition call.
-
-        // If default is bezier, I ask for bezier.
-        // Use optimized getBezierState to get both position and velocity efficiently
-        const state = this._trajectory.getBezierState(currentTime, {
-          calcVelocity: true,
-        });
-
-        if (state.position) {
-          this.position.copy(state.position).add(centralBodyPosition);
-          if (state.velocity) {
-            this.velocity.copy(state.velocity);
-          }
-        } else {
-          // Fallback or skip if not ready
-          // const pos = this._trajectory.getPosition(currentTime, 'bezier');
-        }
-      } else {
-        this.updateNumerical(dt, centralBodyPosition, centralBodyMass, G);
-      }
-
-      this._bezierPosition = null;
+      this.updateNumerical(dt, centralBodyPosition, centralBodyMass, G);
     }
 
     // Note: mesh/sprite position is updated in updateRenderingMode(), called from game loop
 
-    // Update trail using simplified static method
-    // Use bezierT if available (closest to visual position on curve)
-    // If trajectory not initialized or not using bezier, we might need fallback?
-    // But user request implies trajectory-based tail.
-
+    // Update orbit visualization if trajectory is initialized
     if (this._trajectoryInitialized) {
-      // Visualization now requires Simulation Time directly, handling T mapping internally
-
-      // 1. Update orbit visualization (line)
+      // Trajectory handles all visualization including orbit line and trail
       this._trajectory.updateOrbitVisualization(
         this._lastUpdateTime,
         this.position,
       );
-
-      // 2. Update Trail (tail)
-      if (typeof this._trajectory.getStaticTrailPoints === "function") {
-        // Get 16 previous points
-        const trailPoints = this._trajectory.getStaticTrailPoints(
-          this._lastUpdateTime,
-          16,
-        );
-        // Append current body position to the end (newest)
-        trailPoints.push(this.position);
-        // Update renderer
-        this._render.updateTrail(trailPoints);
-      }
-    } else {
-      // Fallback for when trajectory is not ready?
-      // Just set trail to current position
-      this._render.updateTrail([this.position]);
     }
 
-    // Update transfer trajectory annotations if active
-    if (this._transferTrajectory) {
+    // Update transfer trajectory with rendering options
+    if (this._transferTrajectory && renderOptions) {
+      const showTransfer = renderOptions.isSelected;
+      
+      // Prepare target position for herringbone line
+      let targetPosition: THREE.Vector3 | undefined;
+      if (this.target) {
+        targetPosition = this.target.getPosition();
+      }
+      
+      // Call transfer trajectory's update method with visibility options
+      this._transferTrajectory.update(currentTime, { 
+        visible: showTransfer,
+        camera: renderOptions.camera,
+        targetPosition: targetPosition,
+        startPosition: this.position
+      });
+    } else if (this._transferTrajectory) {
+      // No render options provided, just update without visibility control
       this._transferTrajectory.update(currentTime);
     }
   }
@@ -880,18 +622,7 @@ export class OrbitalBody extends Body {
         this._render.mesh.material as THREE.MeshPhongMaterial
       ).color.getHex();
       this._render.updateRadius(radius, color);
-
-      // Update bezier renderer if it exists
-      if (this._bezierRender) {
-        const bezierColor = (
-          this._bezierRender.mesh.material as THREE.MeshPhongMaterial
-        ).color.getHex();
-        this._bezierRender.updateRadius(radius, bezierColor);
-      }
     }
-
-    // Clear trail
-    this._render.updateTrail([position]);
 
     // Clear trajectory visualization until initialized
     this._trajectory.clear();
@@ -907,9 +638,6 @@ export class OrbitalBody extends Body {
 
     // Flag trajectory for re-initialization
     this._trajectoryInitialized = false;
-
-    // Clear trail
-    this._render.updateTrail([this.initialPosition]);
 
     // Clear trajectory
     this._trajectory.clear();
@@ -951,63 +679,13 @@ export class OrbitalBody extends Body {
   }
 
   /**
-   * Get bezier position (only available in dual-rendering mode)
-   */
-  getBezierPosition(): THREE.Vector3 | null {
-    return this._bezierPosition ? this._bezierPosition.clone() : null;
-  }
-
-  /**
-   * Get bezier velocity (only available in dual-rendering mode, or acts as fallback)
-   */
-  getBezierVelocity(): THREE.Vector3 | null {
-    return this._bezierVelocity ? this._bezierVelocity.clone() : null;
-  }
-
-  /**
    * Get current velocity
    */
   getVelocity(): THREE.Vector3 {
     return this.velocity.clone();
   }
 
-  /**
-   * Enable or disable dual-rendering mode
-   * When enabled, both analytical and bezier positions are calculated and rendered
-   */
-  setDualRenderingEnabled(enabled: boolean): void {
-    if (enabled && !this._dualRenderingEnabled) {
-      // Enable dual rendering
-      this._dualRenderingEnabled = true;
-      if (!this._bezierRender) {
-        // Use lighter red for bezier trajectory/ghost
-        const bezierColor = 0xff6666;
-        this._bezierRender = new OrbitalBodyRenderer(
-          this._scene,
-          this.initialPosition,
-          this.radius,
-          bezierColor,
-        );
-      }
-      this._bezierRender.setVisibility(true);
-      console.log(`[OrbitalBody] Dual rendering enabled for ${this.name}`);
-    } else if (!enabled && this._dualRenderingEnabled) {
-      // Disable dual rendering
-      this._dualRenderingEnabled = false;
-      if (this._bezierRender) {
-        this._bezierRender.setVisibility(false);
-      }
-      this._bezierPosition = null;
-      console.log(`[OrbitalBody] Dual rendering disabled for ${this.name}`);
-    }
-  }
 
-  /**
-   * Check if dual-rendering is enabled
-   */
-  isDualRenderingEnabled(): boolean {
-    return this._dualRenderingEnabled;
-  }
 
   /**
    * Get initial position
@@ -1077,9 +755,6 @@ export class OrbitalBody extends Body {
 
     // Delegate marker creation to the trajectory
     this._transferTrajectory.createMarkers(startPos, endPos, this.radius * 0.5);
-
-    // Ensure visibility
-    this._transferTrajectory.setVisibility(true);
   }
 
   /**
@@ -1089,7 +764,6 @@ export class OrbitalBody extends Body {
     if (this._transferTrajectory) {
       // Use cleanup method on trajectory
       this._transferTrajectory.cleanup();
-      this._transferTrajectory.setVisibility(false);
       this._transferTrajectory = null; // Release reference
     }
   }
@@ -1108,104 +782,4 @@ export class OrbitalBody extends Body {
     // Or we should assume sharing implies we don't recalculate logic internally?
   }
 
-  /**
-   * Get trail points from the renderer
-   */
-  getTrailPoints(): THREE.Vector3[] {
-    if (!this._render) return [];
-    return this._render.getTrailPoints();
-  }
-
-  /**
-   * Get the time warp function from the trajectory
-   */
-  getTimeWarpFunction(): ((t: number) => number) | null {
-    // Return a dummy identity function if trajectory not ready
-    if (!this._trajectory) return (t: number) => t;
-
-    // We need to check if the method exists on the trajectory instance
-    if (typeof this._trajectory.getTimeWarpFunction === "function") {
-      return this._trajectory.getTimeWarpFunction();
-    }
-    return (t: number) => t;
-  }
-
-  /**
-   * Get LUT sample positions from trajectory
-   */
-  getLUTSamplePositions(): number[] {
-    if (
-      !this._trajectory ||
-      typeof this._trajectory.getLUTSamplePositions !== "function"
-    )
-      return [];
-    return this._trajectory.getLUTSamplePositions();
-  }
-
-  /**
-   * Get full LUT data from trajectory
-   */
-  getLUTData(): any {
-    if (!this._trajectory || typeof this._trajectory.getLUTData !== "function")
-      return null;
-    return this._trajectory.getLUTData();
-  }
-
-  /**
-   * Compute analytical position from normalized time
-   */
-  computeAnalyticalPositionFromNormalizedTime(
-    normalizedTime: number,
-  ): THREE.Vector3 | null {
-    if (
-      !this._trajectory ||
-      typeof this._trajectory.computeAnalyticalPositionFromNormalizedTime !==
-        "function"
-    )
-      return null;
-    return this._trajectory.computeAnalyticalPositionFromNormalizedTime(
-      normalizedTime,
-    );
-  }
-
-  /**
-   * Compute bezier position from normalized time
-   */
-  computeWarpedBezierPosition(normalizedTime: number): THREE.Vector3 | null {
-    if (!this._trajectory) return null;
-
-    const warpFunc = this.getTimeWarpFunction();
-    if (!warpFunc) return null;
-
-    const warpedTime = warpFunc(normalizedTime);
-
-    if (typeof this._trajectory.getPointFromCurves === "function") {
-      return this._trajectory.getPointFromCurves(warpedTime);
-    }
-    return null;
-  }
-
-  /**
-   * Get current normalized time (0-1) along the orbit
-   */
-  getCurrentNormalizedTime(): number {
-    // We need the period and start time
-    const trajectory = this.getTrajectory();
-    if (!trajectory) return 0;
-
-    // Use the trajectory's robust calculation which handles M0 and Epoch
-    // Returns 0-1 Linear Time relative to Apoapsis
-    if (typeof trajectory.getLinearNormalizedTime === "function") {
-      return trajectory.getLinearNormalizedTime(this._lastUpdateTime);
-    }
-
-    // Fallback (should not be reached if trajectory is updated)
-    const params = trajectory.getParameters();
-    const period = (params.period as any).over(seconds).value;
-    if (period === 0) return 0;
-
-    const startTime = (trajectory as any)._startTime || 0;
-    const dt = this._lastUpdateTime - startTime;
-    return (dt % period) / period;
-  }
 }

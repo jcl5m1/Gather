@@ -159,6 +159,9 @@ export class UIManager {
                                 
                                 transferTrajectory.calculateFromState(posMeasure, velMeasure, centralMassMeasure, startTimeMeasure);
                                  
+                                 // Store exact Lambert positions for accurate distance calculations
+                                 transferTrajectory.setExactPositions(result.startPosition, result.endPosition);
+                                 
                                  // Set it on the body
                                  focusedBody.setTransferTrajectory(transferTrajectory, result.startPosition, result.endPosition);
                                  
@@ -178,6 +181,9 @@ export class UIManager {
                                          const velMeasure = MeasureVector3.fromVector3<Velocity>(refinedResult.velocity, kilometers.per(seconds));
                                          const startTimeMeasure = Measure.of(currentTime + refinedResult.startDelay, seconds);
                                          transferTrajectory.calculateFromState(posMeasure, velMeasure, centralMassMeasure, startTimeMeasure);
+                                         
+                                         // Update exact Lambert positions for refined result
+                                         transferTrajectory.setExactPositions(refinedResult.startPosition, refinedResult.endPosition);
                                      }
 
                                      plot.setAnimationPosition(refinedResult ? refinedResult.startDelay : result.startDelay);
