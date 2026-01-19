@@ -88,7 +88,7 @@ export class BezierCurve {
     }
 }
 
-export interface TimeWarpLUT {
+export interface BezierTimeWarpLUT {
     M: number[];
     bezierT: number[];
     // Control points for each interval: P1 and P2 (scalar values for T)
@@ -891,7 +891,7 @@ export function getAnalyticalStateFromState(
  */
 export function calculateTimeWarp(
     t: number,
-    lut: TimeWarpLUT,
+    lut: BezierTimeWarpLUT,
     interpolationMode: 'linear' | 'cubic' = 'cubic'
 ): number {
     t = Math.max(0, Math.min(1, t));
@@ -943,7 +943,7 @@ export function calculateTimeWarp(
  */
 export function calculateTimeWarpDerivative(
     t: number,
-    lut: TimeWarpLUT,
+    lut: BezierTimeWarpLUT,
     interpolationMode: 'linear' | 'cubic' = 'cubic'
 ): number {
     t = Math.max(0, Math.min(1, t));
@@ -996,7 +996,7 @@ export function getBezierState(
     startTime: number,
     period: number,
     basis: OrbitBasis,
-    lut: TimeWarpLUT,
+    lut: BezierTimeWarpLUT,
     bezierCurves: BezierCurve[],
     options: { calcVelocity: boolean, interpolationMode?: 'linear' | 'cubic' } = { calcVelocity: true, interpolationMode: 'cubic' }
 ): { position: THREE.Vector3 | null, velocity: THREE.Vector3 | null } {
@@ -1137,7 +1137,7 @@ export function buildTimeWarpLUT(
     eccentricity: number,
     bezierCurves: BezierCurve[],
     basis: OrbitBasis
-): TimeWarpLUT {
+): BezierTimeWarpLUT {
     const GValue = (G as any).over(gravitationalConstantUnit).value;
     const mu = GValue * centralBodyMass;
     const e = eccentricity;

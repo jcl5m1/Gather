@@ -77,9 +77,20 @@ export function runPerformanceBenchmark(args: number | BenchmarkOptions = 100000
 
     // 1. Analytical Method
     if (!skipAnalytical) {
+        // Import getAnalyticalState at the top if not already imported
+        const { getAnalyticalState } = require('./orbitUtils');
+        const params = trajectory.getParameters();
+        const a = (params._a as any).over(require('./units').kilometers).value;
+        const e = params.e;
+        const isHyperbolic = trajectory.type === 'hyperbolic';
+        const startTime = (trajectory as any)._startTime || 0;
+        const initialPos = (trajectory as any)._initialPosition;
+        const initialVel = (trajectory as any)._initialVelocity;
+        const mass = (trajectory as any)._centralBodyMass;
+        
         const startAnalytical = performance.now();
         for (const t of testTimes) {
-            trajectory.getPosition(t);
+            getAnalyticalState(t, a, e, period, startTime, initialPos, initialVel, mass, isHyperbolic);
         }
         const endAnalytical = performance.now();
         timeAnalytical = endAnalytical - startAnalytical;
@@ -90,7 +101,7 @@ export function runPerformanceBenchmark(args: number | BenchmarkOptions = 100000
         trajectory.setInterpolationMode('linear');
         const startLinear = performance.now();
         for (const t of testTimes) {
-            trajectory.getPosition(t);
+            trajectory.getBezierPosition(t);
         }
         const endLinear = performance.now();
         timeLinear = endLinear - startLinear;
@@ -101,7 +112,7 @@ export function runPerformanceBenchmark(args: number | BenchmarkOptions = 100000
         trajectory.setInterpolationMode('cubic');
         const startCubic = performance.now();
         for (const t of testTimes) {
-            trajectory.getPosition(t);
+            trajectory.getBezierState(t, { calcVelocity: true });
         }
         const endCubic = performance.now();
         timeCubic = endCubic - startCubic;

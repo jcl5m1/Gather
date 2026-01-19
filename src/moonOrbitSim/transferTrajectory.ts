@@ -349,7 +349,7 @@ export class TransferTrajectory extends Trajectory {
         }
 
         // Add exact start/end positions
-        const startPos = this.getPosition(this._transferStartTime);
+        const startPos = this.getBezierPosition(this._transferStartTime);
         if (startPos) {
             segmentedPoints.unshift({
                 position: startPos, 
@@ -358,7 +358,7 @@ export class TransferTrajectory extends Trajectory {
             });
         }
 
-        const endPos = this.getPosition(this._transferEndTime);
+        const endPos = this.getBezierPosition(this._transferEndTime);
         if (endPos) {
             segmentedPoints.push({
                 position: endPos,
@@ -453,8 +453,8 @@ export class TransferTrajectory extends Trajectory {
      * Render start/end markers with T+/T- labels
      */
     private renderStartEndMarkers(currentTime: number): void {
-        const startPos = this.getPosition(this._transferStartTime);
-        const endPos = this.getPosition(this._transferEndTime);
+        const startPos = this.getBezierPosition(this._transferStartTime);
+        const endPos = this.getBezierPosition(this._transferEndTime);
 
         const startTextLines: string[] = [];
         const endTextLines: string[] = [];
@@ -468,7 +468,7 @@ export class TransferTrajectory extends Trajectory {
 
         // Distance at Start
         if (this._startTrajectory) {
-            const startBodyPos = this._startTrajectory.getPosition(this._transferStartTime);
+            const startBodyPos = this._startTrajectory.getBezierPosition(this._transferStartTime);
             if (startBodyPos) {
                 const exactPos = this._exactStartPosition || startPos;
                 if (exactPos) {
@@ -492,7 +492,7 @@ export class TransferTrajectory extends Trajectory {
 
         // Distance at End
         if (this._targetTrajectory) {
-            const targetBodyPos = this._targetTrajectory.getPosition(this._transferEndTime);
+            const targetBodyPos = this._targetTrajectory.getBezierPosition(this._transferEndTime);
             if (targetBodyPos) {
                 const exactPos = this._exactEndPosition || endPos;
                 if (exactPos) {
@@ -669,8 +669,8 @@ export class TransferTrajectory extends Trajectory {
         lines.push(`Total ΔV: ${formatVelocity(this.totalDeltaV, true)}`);
 
         if (this._targetTrajectory) {
-            const myPos = this.getPosition(currentTime);
-            const targetPos = this._targetTrajectory.getPosition(currentTime);
+            const myPos = this.getBezierPosition(currentTime);
+            const targetPos = this._targetTrajectory.getBezierPosition(currentTime);
 
             if (myPos && targetPos) {
                 const distKm = myPos.distanceTo(targetPos);

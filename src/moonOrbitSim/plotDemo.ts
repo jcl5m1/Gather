@@ -313,8 +313,8 @@ export function createTransferDistanceErrorPlot(
     if (!t1 || !t2) return existingWin ? { win: existingWin, result: bestResult } : null;
 
     // Estimate reference Hohmann TOF to define initial search range
-    const p1 = t1.getPosition(startTime);
-    const p2 = t2.getPosition(startTime);
+    const p1 = t1.getBezierPosition(startTime);
+    const p2 = t2.getBezierPosition(startTime);
     if (!p1 || !p2) return existingWin ? { win: existingWin, result: bestResult } : null;
 
     const r1 = p1.length();
@@ -382,11 +382,11 @@ export function createTransferDistanceErrorPlot(
         const transferEndTime = transferStartTime + bestTOF;
         
         // Distance from selected body at start time
-        const startBodyPos = startBody.getTrajectory().getPosition(transferStartTime);
+        const startBodyPos = startBody.getTrajectory().getBezierPosition(transferStartTime);
         const distanceFromStart = startBodyPos ? finalBest.startPosition.distanceTo(startBodyPos) : 0;
         
         // Distance from target body at end time
-        const targetBodyPos = targetBody.getTrajectory().getPosition(transferEndTime);
+        const targetBodyPos = targetBody.getTrajectory().getBezierPosition(transferEndTime);
         const distanceFromTarget = targetBodyPos ? finalBest.endPosition.distanceTo(targetBodyPos) : 0;
         
         win.addData({

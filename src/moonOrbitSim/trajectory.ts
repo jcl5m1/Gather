@@ -14,7 +14,7 @@ import {
     calculateHyperbolicVelocity,
     BezierCurve,
     BezierCurvePoints,
-    TimeWarpLUT,
+    BezierTimeWarpLUT,
     calculateTimeWarp,
     calculateTimeWarpDerivative,
     getBezierState as getBezierStateCentral,
@@ -24,7 +24,7 @@ import {
 } from './orbitUtils';
 
 // Re-export common types for backward compatibility and to fix build errors
-export { BezierCurve, BezierCurvePoints, TimeWarpLUT };
+export { BezierCurve, BezierCurvePoints, BezierTimeWarpLUT as TimeWarpLUT };
 import { config, hexToNumber } from './config';
 import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, kilograms, ZERO_LENGTH, ZERO_TIME, ZERO_VELOCITY, INFINITE_LENGTH, INFINITE_TIME, cubicKilometersPerSecondSquared, squareKilometersPerSecondSquared, kilometersPerSecond, secondsSquared, gravitationalConstantUnit, formatDistanceWithAstronomicalUnits, formatTime } from './units';
 import { MeasureVector3, LengthVector3, VelocityVector3, ZERO_LENGTH_VECTOR3 } from './unitsVector3';
@@ -679,7 +679,7 @@ export class Trajectory {
     protected _initialVelocityMagnitude: Velocity = ZERO_VELOCITY;
 
     protected _useBezierEstimation: boolean = true;
-    protected _timeWarpLUT: TimeWarpLUT | null = null;
+    protected _timeWarpLUT: BezierTimeWarpLUT | null = null;
     protected _cachedOrbitBasis: OrbitBasis | null = null;
     protected _startTime: number = 0;
     protected _initialPosition: THREE.Vector3 = new THREE.Vector3();
@@ -755,7 +755,7 @@ export class Trajectory {
         
         // Render debug marker ONLY if enabled and within active window
         if (this._debugMarkerEnabled && isInWindow) {
-            const pos = this.getPosition(currentTime);
+            const pos = this.getBezierPosition(currentTime);
             
             if (pos && this._renderer) {
                 this._lastDebugPosition = pos.clone();
@@ -1089,14 +1089,14 @@ export class Trajectory {
             let tBefore = currentT - i * highDefStep;
             // Wrap t to 0-1 for sorting
             if (tBefore < 0) tBefore += 1.0;
-            const posBefore = this.getPointFromCurves(tBefore);
+            const posBefore = this.getBezierPointFromCurves(tBefore);
             if (posBefore) dynamicPoints.push({ position: posBefore, t: tBefore });
 
             // After
             let tAfter = currentT + i * highDefStep;
             // Wrap t to 0-1
             if (tAfter >= 1.0) tAfter -= 1.0;
-            const posAfter = this.getPointFromCurves(tAfter);
+            const posAfter = this.getBezierPointFromCurves(tAfter);
             if (posAfter) dynamicPoints.push({ position: posAfter, t: tAfter });
         }
 
@@ -1292,7 +1292,7 @@ export class Trajectory {
         this._renderer.updateLUTMarkers(samplePositions);
     }
 
-    public getPointFromCurves(t: number): THREE.Vector3 | null {
+    public getBezierPointFromCurves(t: number): THREE.Vector3 | null {
         const numCurves = this._bezierCurves.length;
         if (numCurves === 0) return null;
         const totalProgress = t * numCurves;
@@ -1339,10 +1339,7 @@ export class Trajectory {
         return calculateTimeWarpDerivative(t, this._timeWarpLUT, this._interpolationMode);
     }
 
-    public getBezierVelocity(time: number): THREE.Vector3 | null {
-        const res = this.getBezierState(time, { calcVelocity: true });
-        return res.velocity;
-    }
+
 
     /**
      * Get both position and optional velocity in a single efficient call
@@ -1365,10 +1362,10 @@ export class Trajectory {
     }
 
     /**
-     * Get position at a specific time
+     * Get position at a specific time using Bezier approximation
      * @param time Time in seconds
      */
-    getPosition(time: number): THREE.Vector3 | null {
+    getBezierPosition(time: number): THREE.Vector3 | null {
         if (this.type === 'parabolic') return null;
 
         const res = this.getBezierState(time, { calcVelocity: false });
@@ -1376,10 +1373,11 @@ export class Trajectory {
     }
 
     /**
-     * Get velocity at a specific time
+     * Get velocity at a specific time using Bezier approximation
      * @param time Time in seconds
+     * Note: This is a wrapper around getBezierVelocity for consistency
      */
-    getVelocity(time: number): THREE.Vector3 | null {
+    getBezierVelocity(time: number): THREE.Vector3 | null {
         if (this.type === 'parabolic') return null;
 
         const res = this.getBezierState(time, { calcVelocity: true });
@@ -1511,7 +1509,7 @@ export class Trajectory {
      * Get full LUT data
      * Returns full range 0->1 by mirroring
      */
-    public getLUTData(): TimeWarpLUT | null {
+    public getLUTData(): BezierTimeWarpLUT | null {
         if (!this._timeWarpLUT) return null;
 
         const lutM = this._timeWarpLUT.M;
