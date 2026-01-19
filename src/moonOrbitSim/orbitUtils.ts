@@ -270,6 +270,18 @@ export function calculateHyperbolicPosition(
         .addScaledVector(perpDir, y);
 }
 
+/**
+ * Solve Kepler's Equation for Eccentric Anomaly: M = E - e*sin(E)
+ * Iteratively solves for E given M and e.
+ */
+export function solveEccentricAnomaly(M: number, e: number): number {
+    let E = M; // Initial guess
+    for (let i = 0; i < 10; i++) {
+        E = M + e * Math.sin(E);
+    }
+    return E;
+}
+
 export function calculateEllipticalPosition(
     time: number,
     a: number,
@@ -291,14 +303,13 @@ export function calculateEllipticalPosition(
     const M = M0 + 2 * Math.PI * ((time - startTime) / period);
 
     // Solve Kepler's equation iteratively (M = E - e*sin(E))
-    let E = M; // Initial guess
-    for (let i = 0; i < 10; i++) {
-        E = M + e * Math.sin(E);
-    }
+    const E = solveEccentricAnomaly(M, e);
 
     // Calculate position in orbital plane coordinates
     const x = a * (Math.cos(E) - e);
     const y = a * Math.sqrt(1 - e * e) * Math.sin(E);
+
+
 
     // Calculate orbit orientation vectors
     const h = new THREE.Vector3().crossVectors(initialPos, initialVel);

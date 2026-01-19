@@ -35,7 +35,7 @@ export class TransferTrajectory extends Trajectory {
         super(scene, color);
         // Debug markers enabled by default for transfers, but standard Trajectory logic handles visibility
         this._debugMarkerEnabled = true; 
-        this._isClosedLoop = false;
+
     }
 
     protected override createRenderer(): TrajectoryRender {
@@ -139,6 +139,11 @@ export class TransferTrajectory extends Trajectory {
                  }
              }
         }
+
+        // Update Start/Stop Markers
+        const startPos = this.getPosition(this._transferStartTime);
+        const endPos = this.getPosition(this._transferEndTime);
+        (this._renderer as TransferTrajectoryRender).updateTransferMarkers(startPos, endPos, true);
     }
 
     protected override getDebugLines(currentTime: number): string[] {
@@ -265,90 +270,67 @@ export class TransferTrajectory extends Trajectory {
         // 1. Calculate Standard Orbit
         super.calculateFromState(position, velocity, centralBodyMass, startTime);
         
-        // 2. Ensure Bezier estimation is enabled
+        // 2. Ensure Bezier estimation is enabled and closed loop is disabled
         this.useBezierEstimation = true;
+        this._isClosedLoop = false; // Disable closed loop to prevent tails
 
-        // 3. Trim Points to Transfer Window
-        // Use high-precision checking against start/end times
-        if (this._bezierPoints.length > 0) {
-            const startT = this.getBezierT(this._startTime);
-            const endT = this.getBezierT(this._endTime!);
-            
-            // Handle wrap-around case depending on orbit direction and window
-            // Since this is a transfer, it should be a contiguous segment.
-            // However, getBezierT wraps to [0,1].
-            
-            // Simple approach: Filter points whose time falls within [startTime, endTime]
-            // We can reconstruct time from T, or just use getPosition(t_sec) for each point to check?
-            // Expensive.
-            // Better: We know the points are sorted by T.
-            
-            // Let's rely on the fact that for a transfer, we likely want the segment that corresponds to the duration
-            // But super.calculateFromState gives 0..1 (full orbit).
-            
-            // Filter logic:
-            let newPoints: { position: THREE.Vector3, t: number }[] = [];
-            
-            // Case 1: startT <= endT (Normal segment)
-            if (startT <= endT) {
-                 newPoints = this._bezierPoints.filter(p => p.t >= startT && p.t <= endT);
-                 
-                 // Add exact start/end
-                 const pStart = this.getPosition(this._startTime);
-                 const pEnd = this.getPosition(this._endTime!);
-                 
-                 if (pStart) newPoints.push({ position: pStart, t: startT });
-                 if (pEnd) newPoints.push({ position: pEnd, t: endT });
-                 
-                 // Sort strictly by T for normal segment
-                 newPoints.sort((a, b) => a.t - b.t);
-            } 
-            // Case 2: startT > endT (Wraps around apoapsis/0.0)
-            else {
-                 // We need two segments: [startT, 1.0] AND [0.0, endT]
-                 // And we want to render them in that order: start->1->0->end
-                 
-                 const latePoints = this._bezierPoints.filter(p => p.t >= startT);
-                 const earlyPoints = this._bezierPoints.filter(p => p.t <= endT);
-                 
-                 // Sort internal segments
-                 latePoints.sort((a, b) => a.t - b.t);
-                 earlyPoints.sort((a, b) => a.t - b.t);
-                 
-                 // Add exact points to respective segments
-                 const pStart = this.getPosition(this._startTime);
-                 const pEnd = this.getPosition(this._endTime!);
+        // 3. Segment the line: only keep points between start and stop times
+        if (this._transferStartTime && this._transferEndTime) {
+            // Get normalized T values (0..1) for start/end based on orbital period
+            const startNormalizedTime = this.getBezierT(this._transferStartTime);
+            const endNormalizedTime = this.getBezierT(this._transferEndTime);
 
-                 if (pStart) latePoints.unshift({ position: pStart, t: startT }); // Add to start of late sequence (or end, but it's start of Transfer)
-                 // Actually pStart has t=startT. latePoints are t >= startT. So pStart is the first point.
-                 // Ensure we don't duplicate if filter caught it? Filter is inclusive.
-                 // Let's rely on sort + unique filter later? Or just insert and sort.
-                 
-                 // Push to arrays then sort again to be safe
-                 if (pStart) latePoints.push({ position: pStart, t: startT });
-                 if (pEnd) earlyPoints.push({ position: pEnd, t: endT });
-                 
-                 latePoints.sort((a, b) => a.t - b.t);
-                 earlyPoints.sort((a, b) => a.t - b.t);
+            // Add exact start/end points to ensure the line goes exactly to the markers
+            // We use the exact `getBezierT` logic as applied above
+            [this._transferStartTime, this._transferEndTime].forEach(simulationTime => {
+                const normalizedTime = this.getBezierT(simulationTime);
+                const state = this.getBezierState(simulationTime);
+                
+                // Add if not already present (approx check) and position is valid
+                if (state.position && !this._bezierPoints.some(p => Math.abs(p.t - normalizedTime) < 0.000001)) {
+                    this._bezierPoints.push({ position: state.position, t: normalizedTime });
+                }
+            });
 
-                 // Concatenate: Late (Start->1) then Early (0->End)
-                 newPoints = [...latePoints, ...earlyPoints];
+            // Filter and Sort based on segment logic
+            let segmentedPoints: { position: THREE.Vector3, t: number }[] = [];
+
+            // Add clean start/end points to ensure coverage
+            // Note: We use the already populated _bezierPoints which now includes the exact start/end
+            
+            if (startNormalizedTime <= endNormalizedTime) {
+                // Standard case: segment within [0, 1] range
+                segmentedPoints = this._bezierPoints
+                    .filter(p => p.t >= startNormalizedTime && p.t <= endNormalizedTime)
+                    .sort((a, b) => a.t - b.t);
+            } else {
+                // Wrap-around case (e.g. crossing 1.0/0.0)
+                const segmentA = this._bezierPoints
+                    .filter(p => p.t >= startNormalizedTime)
+                    .sort((a, b) => a.t - b.t);
+                
+                const segmentB = this._bezierPoints
+                    .filter(p => p.t <= endNormalizedTime)
+                    .sort((a, b) => a.t - b.t);
+                
+                // Construct ordered array: [startNormalizedTime ... 1.0] -> [0.0 ... endNormalizedTime]
+                segmentedPoints = [...segmentA, ...segmentB];
             }
-            
-            // Deduplicate points (simple distance check or T check)
-            // T check might be tricky with wrap around if we just concat.
-            // But we know late points are t>0.5 and early are t<0.5 typically.
-            // Just return the newPoints array, do NOT sort it globally by T.
-            
-            this._bezierPoints = newPoints;
 
-            // Also update analytical points for consistency (approximation)
-            // Just clear them or filter? Super uses them for "orbitLine" which we hide.
-            // Let's just keep them as is or clear them to save memory.
-            this._analyticalPoints = []; 
-            
-            // Update renderer
-            this._renderer.updateBezierLine(this._bezierPoints.map(p => p.position));
+            // Explicitly verify we have points, if not add start/end simply?
+            if (segmentedPoints.length < 2) {
+                 // Fallback if filtering failed (e.g. very short segment)
+                 // We rely on the exact points we added earlier
+                 segmentedPoints = this._bezierPoints.filter(p => 
+                     Math.abs(p.t - startNormalizedTime) < 1e-6 || Math.abs(p.t - endNormalizedTime) < 1e-6
+                 ).sort((a, b) => a.t - b.t);
+            }
+
+            // Replace internal points with segmented version to clean up rendering
+            this._bezierPoints = segmentedPoints;
+
+            // Update renderer with ONLY the segmented points
+            this._renderer.updateBezierLine(segmentedPoints.map(p => p.position));
         }
     }
 }

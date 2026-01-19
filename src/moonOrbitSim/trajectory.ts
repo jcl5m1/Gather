@@ -593,6 +593,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
 }
 
 export interface TransferTrajectoryRender extends TrajectoryRender {
+    updateTransferMarkers(startPos: THREE.Vector3 | null, endPos: THREE.Vector3 | null, visible: boolean): void;
 }
 
 export class TransferTrajectoryRenderer extends TrajectoryRenderer implements TransferTrajectoryRender {
@@ -605,7 +606,8 @@ export class TransferTrajectoryRenderer extends TrajectoryRenderer implements Tr
 
         // Simplified start/end markers
         const dotTexture = this.createDotTexture(orbitColor);
-        const scale = 0.1;
+        // createSprite multiplies scale by 0.1. Passing 0.15 results in 0.015, which is visible (similar to OrbitalBody 0.01)
+        const scale = 0.15; 
         this.departStartLoc = this.createSprite(dotTexture, scale);
         this.departStopLoc = this.createSprite(dotTexture, scale);
         
@@ -613,6 +615,22 @@ export class TransferTrajectoryRenderer extends TrajectoryRenderer implements Tr
         this.departStopLoc.visible = false;
         
         this.container.add(this.departStartLoc, this.departStopLoc);
+    }
+
+    updateTransferMarkers(startPos: THREE.Vector3 | null, endPos: THREE.Vector3 | null, visible: boolean): void {
+        if (visible && startPos) {
+            this.departStartLoc.position.copy(startPos);
+            this.departStartLoc.visible = true;
+        } else {
+            this.departStartLoc.visible = false;
+        }
+
+        if (visible && endPos) {
+            this.departStopLoc.position.copy(endPos);
+            this.departStopLoc.visible = true;
+        } else {
+            this.departStopLoc.visible = false;
+        }
     }
 
     override cleanup(): void {
