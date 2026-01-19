@@ -54,6 +54,7 @@ export class UIWindow {
     private preMaximizeState: { x: number; y: number; width: number; height: number } | null = null;
     private preDockState: { x: number; y: number; width: number; height: number } | null = null;
     private dockIndicator: HTMLDivElement | null = null;
+    private _isOpen: boolean = true;
 
     constructor(config: UIWindowConfig) {
         // Set defaults
@@ -726,6 +727,7 @@ export class UIWindow {
     }
 
     public close(): void {
+        this._isOpen = false;
         this.hide();
     }
 
@@ -733,8 +735,17 @@ export class UIWindow {
         this.container.style.display = 'flex';
     }
 
+    public open(): void {
+        this._isOpen = true;
+        this.show();
+    }
+
     public hide(): void {
         this.container.style.display = 'none';
+    }
+
+    public isOpen(): boolean {
+        return this._isOpen;
     }
 
     public bringToFront(): void {

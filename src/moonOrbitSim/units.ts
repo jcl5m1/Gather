@@ -245,6 +245,26 @@ export function formatTime(time: Time, compact: boolean = false): string {
     return `${secondsValue.toExponential(compact ? 2 : 3)} s`;
 }
 
+/**
+ * Returns the best time unit and its conversion factor for a given time.
+ * Used for adaptive axis scaling in plots.
+ */
+export function getTimeUnit(time: Time): { label: string, factor: number } {
+    const totalSeconds = time.over(seconds).value;
+    const absSeconds = Math.abs(totalSeconds);
+
+    if (absSeconds >= 0.5 * 24 * 3600) {
+        return { label: 'd', factor: 24 * 3600 };
+    }
+    if (absSeconds >= 0.5 * 3600) {
+        return { label: 'h', factor: 3600 };
+    }
+    if (absSeconds >= 0.5 * 60) {
+        return { label: 'min', factor: 60 };
+    }
+    return { label: 's', factor: 1 };
+}
+
 // Convenience constants for initializing measures
 export const ZERO_LENGTH = Measure.of(0, kilometers);
 export const ZERO_TIME = Measure.of(0, seconds);

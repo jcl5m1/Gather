@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { G, generateEllipsePoints, generateBezierOrbitPoints, generateHyperbolicPoints, generateHyperbolicBezierPoints, calculateOrbitBasis, OrbitBasis, calculateEllipticalPositionFromBasis, calculateEllipticalPosition } from './orbitUtils';
+import { G, generateEllipsePoints, generateBezierOrbitPoints, generateHyperbolicPoints, generateHyperbolicBezierPoints, calculateOrbitBasis, OrbitBasis, calculateEllipticalPositionFromBasis, calculateEllipticalPosition, calculateEllipticalVelocity, calculateHyperbolicPosition, calculateHyperbolicVelocity } from './orbitUtils';
 import { config, hexToNumber } from './config';
 import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, kilograms, ZERO_LENGTH, ZERO_TIME, ZERO_VELOCITY, INFINITE_LENGTH, INFINITE_TIME, cubicKilometersPerSecondSquared, squareKilometersPerSecondSquared, kilometersPerSecond, secondsSquared, gravitationalConstantUnit, formatDistanceWithAstronomicalUnits, formatTime } from './units';
 import { MeasureVector3, LengthVector3, VelocityVector3, ZERO_LENGTH_VECTOR3 } from './unitsVector3';
@@ -290,7 +290,7 @@ export interface TrajectoryRender {
     updateBezierLine(points: THREE.Vector3[]): void;
     updateBezierCurves(curves: BezierCurve[]): void;
     updateMarkers(periapsisPos: THREE.Vector3, apoapsisPos: THREE.Vector3, visible: boolean, showApoapsis?: boolean, periDist?: Length, apoDist?: Length): void;
-    updateDebugMarker(position: THREE.Vector3 | null, visible: boolean, timeOffset?: number): void;
+    updateDebugMarker(position: THREE.Vector3 | null, visible: boolean, lines: string[]): void;
     updateLUTMarkers(points: THREE.Vector3[]): void;
     setMarkersVisible(visible: boolean): void;
     setVisibility(show: boolean): void;
@@ -307,6 +307,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
     apoapsisText: THREE.Sprite;
     debugIcon: THREE.Sprite;
     debugText: THREE.Sprite;
+    container: THREE.Group; // Unified container for visibility
     lutPoints: THREE.Points;
 
     private scene: THREE.Scene;
@@ -315,6 +316,9 @@ export class TrajectoryRenderer implements TrajectoryRender {
     constructor(scene: THREE.Scene, orbitColor: number = 0x00ff00) {
         this.scene = scene;
         this.color = orbitColor;
+
+        this.container = new THREE.Group();
+        scene.add(this.container);
 
         console.log('[DEBUG] TrajectoryRenderer constructor called', {
             sceneChildrenBefore: scene.children.length,
@@ -333,8 +337,8 @@ export class TrajectoryRenderer implements TrajectoryRender {
             })
         );
         this.orbitLine.visible = false;
-        scene.add(this.orbitLine);
-        console.log('[DEBUG] Added orbitLine to scene, scene children:', scene.children.length);
+        this.container.add(this.orbitLine);
+        console.log('[DEBUG] Added orbitLine to container');
 
         // Initialize bezier approximation line (Solid now, to be the main visual)
         const bezierGeometry = new THREE.BufferGeometry();
@@ -348,8 +352,8 @@ export class TrajectoryRenderer implements TrajectoryRender {
                 depthWrite: true
             })
         );
-        scene.add(this.bezierLine);
-        console.log('[DEBUG] Added bezierLine to scene, scene children:', scene.children.length);
+        this.container.add(this.bezierLine);
+        console.log('[DEBUG] Added bezierLine to container');
 
         // Initialize markers as Sprites
         // Periapsis - Greenish
@@ -370,12 +374,13 @@ export class TrajectoryRenderer implements TrajectoryRender {
         const debugColor = 0xffffff;
         this.debugIcon = this.createSprite(this.createIconTexture(debugColor, ''), 0.3);
         this.debugText = this.createSprite(this.createTextTexture([''], debugColor), 1.0);
+        this.debugText = this.createSprite(this.createTextTexture([''], debugColor), 1.0);
         this.debugIcon.visible = false;
         this.debugText.visible = false;
-        scene.add(this.debugIcon);
-        scene.add(this.debugText);
+        this.container.add(this.debugIcon);
+        this.container.add(this.debugText);
 
-        console.log('[DEBUG] Added markers to scene, scene children:', scene.children.length);
+        console.log('[DEBUG] Added markers to container');
 
         // Initialize LUT markers (Points for screen-space rendering)
         const lutGeometry = new THREE.BufferGeometry();
@@ -392,7 +397,11 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.lutPoints = new THREE.Points(lutGeometry, lutMaterial);
         this.lutPoints.visible = false; // Hidden by default
         this.lutPoints.frustumCulled = false; // Always render if visible
-        scene.add(this.lutPoints);
+        this.container.add(this.lutPoints);
+    }
+
+    public getContainer(): THREE.Group {
+        return this.container;
     }
 
     private createSprite(texture: THREE.Texture, scale: number): THREE.Sprite {
@@ -498,7 +507,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.bezierRenderers.forEach(renderer => renderer.cleanup());
         this.bezierRenderers = [];
         curves.forEach(curve => {
-            const renderer = new BezierCurveRenderer(this.scene, curve, this.color);
+            const renderer = new BezierCurveRenderer(this.container as any, curve, this.color);
             this.bezierRenderers.push(renderer);
         });
     }
@@ -554,7 +563,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.apoapsisText.visible = visible && showApoapsis;
     }
 
-    updateDebugMarker(position: THREE.Vector3 | null, visible: boolean, timeOffset: number = 0): void {
+    updateDebugMarker(position: THREE.Vector3 | null, visible: boolean, lines: string[] = []): void {
         if (!position || !visible) {
             this.debugIcon.visible = false;
             this.debugText.visible = false;
@@ -569,12 +578,12 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.debugText.position.copy(position);
         this.debugText.visible = true;
 
-        const timeStr = `T+ ${formatTime(Measure.of(Math.abs(timeOffset), seconds), true)}`;
-        const newTex = this.createTextTexture([timeStr], 0xffffff);
+        const newTex = this.createTextTexture(lines, 0xffffff);
         
         if (this.debugText.material.map) this.debugText.material.map.dispose();
         this.debugText.material.map = newTex;
-        this.debugText.center.set(0.5, -0.5);
+        // Reduce vertical offset: -0.2 instead of -0.5
+        this.debugText.center.set(0.5, -0.2); 
         this.debugText.scale.set(scale * 4.8, scale * 2.4, 1);
     }
 
@@ -591,13 +600,11 @@ export class TrajectoryRenderer implements TrajectoryRender {
     }
 
     setVisibility(show: boolean): void {
+        this.container.visible = show;
+        
+        // Secondary visibility logic within the container if needed
         this.orbitLine.visible = false; // Always hidden
-        this.bezierLine.visible = show;
-        this.bezierRenderers.forEach(renderer => renderer.setVisibility(show, false));
-        this.apoapsisText.visible = show;
-        this.debugIcon.visible = false; // Debug is managed by update()
-        this.debugText.visible = false;
-        this.lutPoints.visible = show && config.visualization.showLUT; // Use config flag
+        this.lutPoints.visible = show && config.visualization.showLUT;
     }
 
     cleanup(): void {
@@ -626,7 +633,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
             this.debugText,
             this.lutPoints
         ].forEach(obj => {
-            if (obj.parent === this.scene) this.scene.remove(obj);
+            if (obj.parent === this.container) this.container.remove(obj);
             if (obj instanceof THREE.Mesh || obj instanceof THREE.Line || obj instanceof THREE.Points || obj instanceof THREE.Sprite) {
                 if (obj.geometry) obj.geometry.dispose();
                 if (obj.material instanceof THREE.Material) {
@@ -635,6 +642,10 @@ export class TrajectoryRenderer implements TrajectoryRender {
                 }
             }
         });
+
+        if (this.container.parent === this.scene) {
+            this.scene.remove(this.container);
+        }
 
         console.log('[DEBUG] TrajectoryRenderer.cleanup() completed');
     }
@@ -688,6 +699,8 @@ export class Trajectory {
     protected _initialVelocity: THREE.Vector3 = new THREE.Vector3();
     protected _centralBodyMass: number = 0;
     protected _endTime: number | null = null;
+    protected _debugMarkerEnabled: boolean = false; // Disabled by default
+    protected _lastDebugPosition: THREE.Vector3 | null = null;
     private _timeWarpFunction: ((t: number) => number) | null = null;
     private _markersVisible: boolean = true;
 
@@ -726,19 +739,47 @@ export class Trajectory {
     }
 
     /**
+     * Enable or disable the debug marker (white dot and time label)
+     */
+    setDebugMarkerEnabled(enabled: boolean): void {
+        this._debugMarkerEnabled = enabled;
+        if (!enabled && this._renderer) {
+            this._renderer.updateDebugMarker(null, false, []);
+        }
+    }
+
+    /**
      * Update trajectory state and debugging annotations
      */
     update(currentTime: number): void {
-        const isActive = currentTime >= this._startTime && (this._endTime === null || currentTime <= this._endTime);
+        // Tighten isActive logic: must be strictly within the time window if _endTime is provided
+        const isFuture = currentTime < this._startTime;
+        const isPast = this._endTime !== null && currentTime > this._endTime;
+        const isInWindow = !isFuture && !isPast;
         
-        if (isActive) {
+        // Render debug marker ONLY if enabled and within active window
+        if (this._debugMarkerEnabled && isInWindow) {
             const pos = this.getPosition(currentTime, 'bezier');
+            
             if (pos && this._renderer) {
-                this._renderer.updateDebugMarker(pos, true, currentTime - this._startTime);
+                this._lastDebugPosition = pos.clone();
+                const lines = this.getDebugLines(currentTime);
+                this._renderer.updateDebugMarker(pos, true, lines);
             }
         } else if (this._renderer) {
-            this._renderer.updateDebugMarker(null, false, 0);
+            this._lastDebugPosition = null;
+            // Ensure hidden if not enabled or out of window
+            this._renderer.updateDebugMarker(null, false, []);
         }
+    }
+
+    /**
+     * Get lines for the debug annotation sprite
+     */
+    protected getDebugLines(currentTime: number): string[] {
+        const timeOffset = currentTime - this._startTime;
+        const prefix = timeOffset < 0 ? 'T-' : 'T+';
+        return [`${prefix} ${formatTime(Measure.of(Math.abs(timeOffset), seconds), true)}`];
     }
 
     /**
@@ -1172,6 +1213,13 @@ export class Trajectory {
      */
     setVisibility(visible: boolean): void {
         this._renderer.setVisibility(visible);
+    }
+
+    /**
+     * Get the current debug position (white dot) if visible
+     */
+    getDebugPosition(): THREE.Vector3 | null {
+        return this._lastDebugPosition ? this._lastDebugPosition.clone() : null;
     }
 
     /**
@@ -1714,6 +1762,17 @@ export class Trajectory {
 
         // Default to analytical if Bezier not ready or not requested
         if (method === 'analytical' || !this._useBezierEstimation || !this._timeWarpLUT) {
+            if (this.type === 'hyperbolic') {
+                return calculateHyperbolicPosition(
+                    time,
+                    this.parameters._a.over(kilometers).value,
+                    this.parameters.e,
+                    this._startTime,
+                    this._initialPosition,
+                    this._initialVelocity,
+                    this._centralBodyMass
+                );
+            }
             return calculateEllipticalPosition(
                 time,
                 this.parameters._a.over(kilometers).value,
@@ -1748,6 +1807,43 @@ export class Trajectory {
 
         const warpedTime = this.timeWarpFunction(M_wrapped_apo);
         return this.computeBezierPositionFromTime(warpedTime);
+    }
+
+    /**
+     * Get velocity at a specific time
+     * @param time Time in seconds
+     * @param method method to use ('analytical' or 'bezier')
+     */
+    getVelocity(time: number, method: 'analytical' | 'bezier' = 'bezier'): THREE.Vector3 | null {
+        if (this.type === 'parabolic') return null;
+
+        if (method === 'analytical' || !this._useBezierEstimation || !this._timeWarpLUT) {
+            if (this.type === 'hyperbolic') {
+                return calculateHyperbolicVelocity(
+                    time,
+                    this.parameters._a.over(kilometers).value,
+                    this.parameters.e,
+                    this._startTime,
+                    this._initialPosition,
+                    this._initialVelocity,
+                    this._centralBodyMass
+                );
+            }
+            return calculateEllipticalVelocity(
+                time,
+                this.parameters._a.over(kilometers).value,
+                this.parameters.e,
+                this.parameters.period.over(seconds).value,
+                this._startTime,
+                this._initialPosition,
+                this._initialVelocity,
+                this._centralBodyMass
+            );
+        }
+
+        // Bezier Estimation
+        const res = this.getBezierState(time, { calcVelocity: true });
+        return res.velocity;
     }
 
 

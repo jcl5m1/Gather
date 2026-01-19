@@ -56,11 +56,18 @@ export class SimulationController {
              // 4. Compute Transfer
              try {
                  const centralBody = this.gameLoop.getCentralBody();
+                 const currentTime = this.gameLoop.getCurrentTime();
+
+                 // Force-update trajectories to current physical state before calculation
+                 // This ensures the prediction in TransferCalculator is grounded in reality
+                 rocket.updateTrajectoryFromCurrentState(currentTime, centralBody.getMass());
+                 moon.updateTrajectoryFromCurrentState(currentTime, centralBody.getMass());
+
                  const result = TransferCalculator.calculateOptimalHohmannTransfer(
                      rocket,
                      moon,
                      centralBody.getMass(),
-                     this.gameLoop.getCurrentTime()
+                     currentTime
                  );
                  
                  if (result) {

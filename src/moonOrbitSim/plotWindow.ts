@@ -4,6 +4,7 @@
  */
 
 import { UIWindow, UIWindowConfig } from './uiWindow';
+import { Measure, seconds, getTimeUnit } from './units';
 
 export interface PlotData {
     x: number[];
@@ -13,6 +14,15 @@ export interface PlotData {
     plotType?: 'line' | 'scatter';
     pointSize?: number;
     tooltips?: string[];  // Custom tooltip for each point
+}
+
+export interface HeatmapData {
+    x: number[];    // Cell grid X coordinates
+    y: number[];    // Cell grid Y coordinates
+    z: number[][];  // 2D data values [y][x]
+    zMin: number;
+    zMax: number;
+    tooltips?: string[][]; // Tooltip for each cell
 }
 
 export interface PlotConfig extends UIWindowConfig {
@@ -27,6 +37,8 @@ export interface PlotConfig extends UIWindowConfig {
     yLabel?: string;
     yLogScale?: boolean;
     xTickPositions?: number[];
+    xAxisUnitType?: 'time' | 'none';
+    yAxisUnitType?: 'time' | 'none';
 }
 
 export class PlotWindow extends UIWindow {
@@ -45,10 +57,14 @@ export class PlotWindow extends UIWindow {
         yLabel: string;
         yLogScale: boolean;
         xTickPositions: number[] | null;
+        xAxisUnitType: 'time' | 'none';
+        yAxisUnitType: 'time' | 'none';
     };
+    private heatmapDataItems: HeatmapData[] = [];
     private tooltip: HTMLDivElement;
     private padding = { top: 40, right: 40, bottom: 50, left: 60 };
     private hoveredPoint: { x: number; y: number; dataIndex: number } | null = null;
+    private heatmapCanvas: HTMLCanvasElement | null = null;
 
     // Zoom and pan state
     private zoomLevel: number = 1.0;
@@ -70,6 +86,10 @@ export class PlotWindow extends UIWindow {
 
     // Animation state indicator
     private currentAnimationPosition: number | null = null;
+    private currentAnimationYPosition: number | null = null;
+    
+    // Simulation timeline indicator
+    private currentTimelinePosition: number | null = null;
 
     constructor(config: PlotConfig) {
         super(config);
@@ -87,6 +107,8 @@ export class PlotWindow extends UIWindow {
             yLabel: config.yLabel ?? 'Y',
             yLogScale: config.yLogScale ?? false,
             xTickPositions: config.xTickPositions ?? null,
+            xAxisUnitType: config.xAxisUnitType ?? 'none',
+            yAxisUnitType: config.yAxisUnitType ?? 'none',
         };
 
         // Store original bounds for reset
@@ -272,7 +294,10 @@ export class PlotWindow extends UIWindow {
     }
 
     private zoomOut(centerX?: number, centerY?: number): void {
-        this.zoomLevel /= 1.025;  // Reduced from 1.2 to 1.05
+        this.zoomLevel /= 1.025;
+        if (this.zoomLevel < 1.0) {
+            this.zoomLevel = 1.0;
+        }
         this.applyZoom(centerX, centerY);
     }
 
@@ -315,6 +340,8 @@ export class PlotWindow extends UIWindow {
         this.plotConfig.yMin = centerY - yRange * yFraction;
         this.plotConfig.yMax = centerY + yRange * (1 - yFraction);
 
+        this.constrainBounds();
+
         // Update pan offset for reset functionality
         const originalCenterX = (this.originalXMin + this.originalXMax) / 2;
         const originalCenterY = (this.originalYMin + this.originalYMax) / 2;
@@ -344,6 +371,8 @@ export class PlotWindow extends UIWindow {
         this.plotConfig.yMin += dataDeltaY;
         this.plotConfig.yMax += dataDeltaY;
 
+        this.constrainBounds();
+
         // Update pan offset for zoom reference
         this.panOffsetX += dataDeltaX;
         this.panOffsetY += dataDeltaY;
@@ -351,6 +380,41 @@ export class PlotWindow extends UIWindow {
         this.render();
     }
 
+
+    private constrainBounds(): void {
+        const xRange = this.plotConfig.xMax - this.plotConfig.xMin;
+        const yRange = this.plotConfig.yMax - this.plotConfig.yMin;
+
+        const originalXRange = this.originalXMax - this.originalXMin;
+        const originalYRange = this.originalYMax - this.originalYMin;
+
+        // Ensure current range is not larger than original
+        if (xRange > originalXRange) {
+            this.plotConfig.xMin = this.originalXMin;
+            this.plotConfig.xMax = this.originalXMax;
+        } else {
+            if (this.plotConfig.xMin < this.originalXMin) {
+                this.plotConfig.xMin = this.originalXMin;
+                this.plotConfig.xMax = this.originalXMin + xRange;
+            } else if (this.plotConfig.xMax > this.originalXMax) {
+                this.plotConfig.xMax = this.originalXMax;
+                this.plotConfig.xMin = this.originalXMax - xRange;
+            }
+        }
+
+        if (yRange > originalYRange) {
+            this.plotConfig.yMin = this.originalYMin;
+            this.plotConfig.yMax = this.originalYMax;
+        } else {
+            if (this.plotConfig.yMin < this.originalYMin) {
+                this.plotConfig.yMin = this.originalYMin;
+                this.plotConfig.yMax = this.originalYMin + yRange;
+            } else if (this.plotConfig.yMax > this.originalYMax) {
+                this.plotConfig.yMax = this.originalYMax;
+                this.plotConfig.yMin = this.originalYMax - yRange;
+            }
+        }
+    }
 
     private setupResizeObserver(): void {
         const resizeObserver = new ResizeObserver(() => {
@@ -398,87 +462,94 @@ export class PlotWindow extends UIWindow {
 
         // Convert mouse position to data coordinates
         const dataX = this.screenToDataX(mouseX);
+        const dataY = this.screenToDataY(mouseY);
 
-        // Find closest point on any curve
-        // Prioritize scatter plots over line plots when points are close together
+        // Prioritize scatter points (like Optimized Solution) over heatmap
         let closestX: number | null = null;
         let closestY: number | null = null;
         let closestDataIndex: number | null = null;
         let closestPointIndex: number | null = null;
         let closestDistance: number = Infinity;
-        let closestIsScatter: boolean = false;
 
         this.plotData.forEach((data, dataIndex) => {
             const isScatter = data.plotType === 'scatter';
+            if (!isScatter) return;
 
             for (let i = 0; i < data.x.length; i++) {
                 const x = data.x[i];
                 const y = data.y[i];
-
                 const screenX = this.dataToScreenX(x);
                 const screenY = this.dataToScreenY(y);
+                const distance = Math.sqrt(Math.pow(screenX - mouseX, 2) + Math.pow(screenY - mouseY, 2));
 
-                const distance = Math.sqrt(
-                    Math.pow(screenX - mouseX, 2) + Math.pow(screenY - mouseY, 2)
-                );
-
-                // Update closest if:
-                // 1. This is closer than current closest, OR
-                // 2. This is a scatter point and current is not (and distance is reasonable)
-                const shouldUpdate = distance < 10 && (
-                    distance < closestDistance ||
-                    (isScatter && !closestIsScatter && distance < 15)
-                );
-
-                if (shouldUpdate) {
+                if (distance < 15 && distance < closestDistance) {
                     closestX = x;
                     closestY = y;
                     closestDataIndex = dataIndex;
                     closestPointIndex = i;
                     closestDistance = distance;
-                    closestIsScatter = isScatter;
                 }
             }
         });
 
         if (closestX !== null && closestY !== null && closestDataIndex !== null && closestPointIndex !== null) {
-            const x: number = closestX;
-            const y: number = closestY;
-            const dataIndex: number = closestDataIndex;
-            const pointIndex: number = closestPointIndex;
-
-            this.hoveredPoint = {
-                x: x,
-                y: y,
-                dataIndex: dataIndex
-            };
-
-            // Show tooltip
-            const data = this.plotData[dataIndex];
-            let tooltipHTML = '';
-
-            // Check if custom tooltip is provided
-            if (data.tooltips && data.tooltips.length > pointIndex) {
-                tooltipHTML = data.tooltips[pointIndex];
-            } else {
-                tooltipHTML = `
-                    <div>x: ${x.toFixed(4)}</div>
-                    <div>y: ${y.toFixed(4)}</div>
-                `;
-            }
-
-            this.tooltip.innerHTML = tooltipHTML;
+            const xVal = closestX as number;
+            const yVal = closestY as number;
+            this.hoveredPoint = { x: xVal, y: yVal, dataIndex: closestDataIndex };
+            const data = this.plotData[closestDataIndex];
+            this.tooltip.innerHTML = (data.tooltips && data.tooltips[closestPointIndex]) || `x: ${xVal.toFixed(2)}, y: ${yVal.toFixed(2)}`;
             this.tooltip.style.left = `${e.clientX + 15}px`;
             this.tooltip.style.top = `${e.clientY + 15}px`;
             this.tooltip.style.display = 'block';
-
             this.render();
-        } else {
-            this.hoveredPoint = null;
-            this.tooltip.style.display = 'none';
-            this.render();
+            return;
         }
+
+        // Check Heatmaps if no points nearby
+        for (let h = this.heatmapDataItems.length - 1; h >= 0; h--) {
+            const heatmap = this.heatmapDataItems[h];
+            const { x, y, z, tooltips } = heatmap;
+            // Find cell index
+            let bestI = -1;
+            let bestJ = -1;
+            let minDistX = Infinity;
+            let minDistY = Infinity;
+
+            for (let i = 0; i < x.length; i++) {
+                const dist = Math.abs(x[i] - dataX);
+                if (dist < minDistX) {
+                    minDistX = dist;
+                    bestI = i;
+                }
+            }
+            for (let j = 0; j < y.length; j++) {
+                const dist = Math.abs(y[j] - dataY);
+                if (dist < minDistY) {
+                    minDistY = dist;
+                    bestJ = j;
+                }
+            }
+
+            // Check if within heatmap bounds
+            const dx = (x[1] - x[0]) || 1;
+            const dy = (y[1] - y[0]) || 1;
+
+            if (bestI !== -1 && bestJ !== -1 && minDistX < dx * 0.5 && minDistY < dy * 0.5) {
+                this.hoveredPoint = null;
+                const tooltipText = (tooltips && tooltips[bestJ][bestI]) || `z: ${z[bestJ][bestI].toFixed(4)}`;
+                this.tooltip.innerHTML = tooltipText;
+                this.tooltip.style.left = `${e.clientX + 15}px`;
+                this.tooltip.style.top = `${e.clientY + 15}px`;
+                this.tooltip.style.display = 'block';
+                return;
+            }
+        }
+
+        this.hoveredPoint = null;
+        this.tooltip.style.display = 'none';
+        this.render();
     }
+
 
     private dataToScreenX(x: number): number {
         const rect = this.canvas.getBoundingClientRect();
@@ -525,11 +596,17 @@ export class PlotWindow extends UIWindow {
     }
 
     private render(): void {
+        if (!this.isOpen()) return;
         const rect = this.canvas.getBoundingClientRect();
 
         // Clear canvas
         this.ctx.fillStyle = this.plotConfig.backgroundColor;
         this.ctx.fillRect(0, 0, rect.width, rect.height);
+
+        // Draw Heatmaps FIRST (Background layer)
+        this.heatmapDataItems.forEach(heatmap => {
+            this.drawHeatmap(heatmap);
+        });
 
         // Draw grid
         this.drawGrid(rect.width, rect.height);
@@ -547,7 +624,15 @@ export class PlotWindow extends UIWindow {
             this.drawAnimationIndicator(this.currentAnimationPosition, rect.width, rect.height);
         }
 
-        // Draw hovered point
+        if (this.currentAnimationYPosition !== null) {
+            this.drawAnimationYIndicator(this.currentAnimationYPosition, rect.width, rect.height);
+        }
+
+        // Draw simulation timeline indicator
+        if (this.currentTimelinePosition !== null) {
+            this.drawTimelineIndicator(this.currentTimelinePosition, rect.width, rect.height);
+        }
+
         if (this.hoveredPoint) {
             this.drawHoverPoint(this.hoveredPoint);
         }
@@ -620,10 +705,21 @@ export class PlotWindow extends UIWindow {
         const plotWidth = width - this.padding.left - this.padding.right;
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'top';
+
+        let xUnitFactor = 1;
+        let xUnitLabel = '';
+        if (this.plotConfig.xAxisUnitType === 'time') {
+            const midX = (this.plotConfig.xMin + this.plotConfig.xMax) / 2;
+            const unit = getTimeUnit(Measure.of(midX, seconds));
+            xUnitFactor = unit.factor;
+            xUnitLabel = ` (${unit.label})`;
+        }
+
         for (let i = 0; i <= xDivisions; i++) {
             const x = this.padding.left + (i / xDivisions) * plotWidth;
             const dataX = this.plotConfig.xMin + (i / xDivisions) * (this.plotConfig.xMax - this.plotConfig.xMin);
-            this.ctx.fillText(dataX.toFixed(2), x, height - this.padding.bottom + 5);
+            const displayX = dataX / xUnitFactor;
+            this.ctx.fillText(displayX.toFixed(2), x, height - this.padding.bottom + 5);
         }
 
         // Y-axis labels
@@ -631,28 +727,36 @@ export class PlotWindow extends UIWindow {
         const plotHeight = height - this.padding.top - this.padding.bottom;
         this.ctx.textAlign = 'right';
         this.ctx.textBaseline = 'middle';
+
+        let yUnitFactor = 1;
+        let yUnitLabel = '';
+        if (this.plotConfig.yAxisUnitType === 'time') {
+            const midY = (this.plotConfig.yMin + this.plotConfig.yMax) / 2;
+            const unit = getTimeUnit(Measure.of(midY, seconds));
+            yUnitFactor = unit.factor;
+            yUnitLabel = ` (${unit.label})`;
+        }
+
         for (let i = 0; i <= yDivisions; i++) {
             const y = height - this.padding.bottom - (i / yDivisions) * plotHeight;
             let dataY: number;
             let labelText: string;
 
             if (this.plotConfig.yLogScale) {
-                // For log scale, compute the actual value at this screen position
                 const logMin = Math.log10(Math.max(this.plotConfig.yMin, 1e-10));
                 const logMax = Math.log10(Math.max(this.plotConfig.yMax, 1e-10));
                 const logY = logMin + (i / yDivisions) * (logMax - logMin);
                 dataY = Math.pow(10, logY);
 
-                // Use exponential notation for very small or large numbers
                 if (dataY < 0.01 || dataY > 1000) {
                     labelText = dataY.toExponential(1);
                 } else {
                     labelText = dataY.toFixed(2);
                 }
             } else {
-                // Linear scale
                 dataY = this.plotConfig.yMin + (i / yDivisions) * (this.plotConfig.yMax - this.plotConfig.yMin);
-                labelText = dataY.toFixed(2);
+                const displayY = dataY / yUnitFactor;
+                labelText = displayY.toFixed(2);
             }
 
             this.ctx.fillText(labelText, this.padding.left - 10, y);
@@ -662,14 +766,18 @@ export class PlotWindow extends UIWindow {
         this.ctx.font = 'bold 14px Arial';
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'top';
-        this.ctx.fillText(this.plotConfig.xLabel, width / 2, height - 20);
+        const displayXLabel = this.plotConfig.xAxisUnitType === 'time' ? 
+            this.plotConfig.xLabel + xUnitLabel : this.plotConfig.xLabel;
+        this.ctx.fillText(displayXLabel, width / 2, height - 20);
 
         this.ctx.save();
         this.ctx.translate(15, height / 2);
         this.ctx.rotate(-Math.PI / 2);
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'top';
-        this.ctx.fillText(this.plotConfig.yLabel, 0, 0);
+        const displayYLabel = this.plotConfig.yAxisUnitType === 'time' ?
+            this.plotConfig.yLabel + yUnitLabel : this.plotConfig.yLabel;
+        this.ctx.fillText(displayYLabel, 0, 0);
         this.ctx.restore();
     }
 
@@ -760,7 +868,125 @@ export class PlotWindow extends UIWindow {
 
     public clearData(): void {
         this.plotData = [];
+        this.heatmapDataItems = [];
         this.render();
+    }
+
+    public setHeatmap(data: HeatmapData): void {
+        this.heatmapDataItems = [data];
+        this.render();
+    }
+
+    private createHeatmapCache(heatmap: HeatmapData): void {
+        const { x, y, z, zMin, zMax } = heatmap;
+        const numX = x.length;
+        const numY = y.length;
+
+        if (!this.heatmapCanvas) {
+            this.heatmapCanvas = document.createElement('canvas');
+        }
+        
+        this.heatmapCanvas.width = numX;
+        this.heatmapCanvas.height = numY;
+        const hCtx = this.heatmapCanvas.getContext('2d');
+        if (!hCtx) return;
+
+        hCtx.clearRect(0, 0, numX, numY);
+        const imageData = hCtx.createImageData(numX, numY);
+        const data = imageData.data;
+
+        for (let j = 0; j < numY; j++) {
+            for (let i = 0; i < numX; i++) {
+                const val = z[j][i];
+                const normalized = zMax === zMin ? 0 : (val - zMin) / (zMax - zMin);
+                
+                // Simplified HSLA -> RGBA for fast pixel manipulation
+                // Using hue-only scale like the previous implementation
+                const hue = (1 - normalized) * 240; // 240 (blue) to 0 (red)
+                const rgb = this.hslToRgb(hue / 360, 0.7, 0.5);
+                
+                // ImageData is [y][x] with row-major order
+                const idx = (j * numX + i) * 4;
+                data[idx] = rgb[0];
+                data[idx + 1] = rgb[1];
+                data[idx + 2] = rgb[2];
+                data[idx + 3] = 153; // 0.6 alpha * 255
+            }
+        }
+        hCtx.putImageData(imageData, 0, 0);
+    }
+
+    private hslToRgb(h: number, s: number, l: number): [number, number, number] {
+        let r, g, b;
+        if (s === 0) {
+            r = g = b = l;
+        } else {
+            const hue2rgb = (p: number, q: number, t: number) => {
+                if (t < 0) t += 1;
+                if (t > 1) t -= 1;
+                if (t < 1 / 6) return p + (q - p) * 6 * t;
+                if (t < 1 / 2) return q;
+                if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+                return p;
+            };
+            const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+            const p = 2 * l - q;
+            r = hue2rgb(p, q, h + 1 / 3);
+            g = hue2rgb(p, q, h);
+            b = hue2rgb(p, q, h - 1 / 3);
+        }
+        return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+    }
+
+    public addHeatmap(data: HeatmapData): void {
+        this.heatmapDataItems.push(data);
+        // We only cache the primary heatmap for simplicity in this optimization
+        this.render();
+    }
+
+    private drawHeatmap(heatmap: HeatmapData): void {
+        const { x, y, z, zMin, zMax } = heatmap;
+        const numX = x.length;
+        const numY = y.length;
+
+        const dx = (x[1] - x[0]) || 1;
+        const dy = (y[1] - y[0]) || 1;
+
+        for (let j = 0; j < numY; j++) {
+            for (let i = 0; i < numX; i++) {
+                const val = z[j][i];
+                if (val === -3) continue; // Skip invalid points
+
+                const normalized = zMax === zMin ? 0 : (val - zMin) / (zMax - zMin);
+                const hue = (1 - normalized) * 240;
+                const rgb = this.hslToRgb(hue / 360, 0.7, 0.5);
+                
+                this.ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.6)`;
+                
+                // Calculate cell bounds in data space
+                const x0 = x[i] - dx / 2;
+                const x1 = x[i] + dx / 2;
+                const y0 = y[j] - dy / 2;
+                const y1 = y[j] + dy / 2;
+
+                // Screen coordinates
+                const sX0 = this.dataToScreenX(x0);
+                const sX1 = this.dataToScreenX(x1);
+                const sY0 = this.dataToScreenY(y0);
+                const sY1 = this.dataToScreenY(y1);
+
+                const rectX = Math.min(sX0, sX1);
+                const rectY = Math.min(sY0, sY1);
+                const rectW = Math.abs(sX1 - sX0);
+                const rectH = Math.abs(sY1 - sY0);
+
+                this.ctx.fillRect(rectX, rectY, rectW, rectH);
+            }
+        }
+    }
+
+    private drawHoveredHeatmapCell(): void {
+        // Handled by handleMouseMove updating tooltip
     }
 
     public setXRange(min: number, max: number): void {
@@ -788,6 +1014,16 @@ export class PlotWindow extends UIWindow {
 
     public setAnimationPosition(position: number | null): void {
         this.currentAnimationPosition = position;
+        this.render();
+    }
+
+    public setAnimationYPosition(position: number | null): void {
+        this.currentAnimationYPosition = position;
+        this.render();
+    }
+
+    public setTimelinePosition(position: number | null): void {
+        this.currentTimelinePosition = position;
         this.render();
     }
 
@@ -820,10 +1056,67 @@ export class PlotWindow extends UIWindow {
         this.ctx.fill();
     }
 
+    private drawAnimationYIndicator(position: number, width: number, height: number): void {
+        // Draw a horizontal line at the current animation Y position
+        const y = this.dataToScreenY(position);
+
+        // Check if the position is within the visible range
+        if (y < this.padding.top || y > height - this.padding.bottom) {
+            return;
+        }
+
+        const xLeft = this.padding.left;
+        const xRight = width - this.padding.right;
+
+        this.ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';  // Orange/yellow color
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([]);
+
+        this.ctx.beginPath();
+        this.ctx.moveTo(xLeft, y);
+        this.ctx.lineTo(xRight, y);
+        this.ctx.stroke();
+
+        // Draw a small circle at the left
+        this.ctx.fillStyle = 'rgba(255, 200, 0, 0.9)';
+        this.ctx.beginPath();
+        this.ctx.arc(xLeft + 10, y, 4, 0, Math.PI * 2);
+        this.ctx.fill();
+    }
+
+    private drawTimelineIndicator(position: number, width: number, height: number): void {
+        // Draw a vertical line at the current simulation time position
+        const x = this.dataToScreenX(position);
+
+        // Check if the position is within the visible range
+        if (x < this.padding.left || x > width - this.padding.right) {
+            return;
+        }
+
+        const yTop = this.padding.top;
+        const yBottom = height - this.padding.bottom;
+
+        this.ctx.strokeStyle = 'rgba(0, 255, 255, 0.6)';  // Cyan color for timeline
+        this.ctx.lineWidth = 1;
+        this.ctx.setLineDash([5, 5]); // Dashed line for timeline
+
+        this.ctx.beginPath();
+        this.ctx.moveTo(x, yTop);
+        this.ctx.lineTo(x, yBottom);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+    }
+
     public override close(): void {
         // Clean up tooltip
         if (this.tooltip.parentNode) {
             this.tooltip.parentNode.removeChild(this.tooltip);
+        }
+        // Dispose of heatmap cache
+        if (this.heatmapCanvas) {
+            this.heatmapCanvas.width = 0;
+            this.heatmapCanvas.height = 0;
+            this.heatmapCanvas = null;
         }
         super.close();
     }

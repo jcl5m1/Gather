@@ -657,11 +657,24 @@ export class OrbitalBody extends Body {
      * Switches between 3D mesh and 2D dot sprite
      * In dual-rendering mode, updates both analytical and bezier renderings
      */
-    updateRenderingMode(camera: THREE.Camera): void {
+    updateRenderingMode(camera: THREE.Camera, isSelected: boolean = false): void {
         // If dual-rendering is enabled, we only want to show the Bezier (ghost) render
         // and hide the Analytical (primary) render, as per user request to "disable renderings of the analytical version".
 
-        const targetPos = this.target ? this.target.getPosition() : null;
+        const targetPos = (this.target && isSelected) ? this.target.getPosition() : null;
+
+        // Custom start position for target line: use transfer debug position if available
+        let lineStartPos = this.position;
+        if (this._dualRenderingEnabled && this._bezierPosition) {
+            lineStartPos = this._bezierPosition;
+        }
+
+        if (this._transferTrajectory && isSelected) {
+            const debugPos = this._transferTrajectory.getDebugPosition();
+            if (debugPos) {
+                lineStartPos = debugPos;
+            }
+        }
 
         if (this._dualRenderingEnabled) {
             // Hide primary (analytical)
@@ -672,13 +685,13 @@ export class OrbitalBody extends Body {
             if (this._bezierPosition && this._bezierRender) {
                 this._bezierRender.setVisibility(true);
                 this._bezierRender.updateRenderingMode(this._bezierPosition, camera);
-                this._bezierRender.updateTargetLine(this._bezierPosition, targetPos, camera);
+                this._bezierRender.updateTargetLine(lineStartPos, targetPos, camera);
             }
         } else {
             // Normal mode: Show primary, dual rendering logic handles visibility of ghost if it existed but here we ensure primary is visible
             this._render.setVisibility(true);
             this._render.updateRenderingMode(this.position, camera);
-            this._render.updateTargetLine(this.position, targetPos, camera);
+            this._render.updateTargetLine(lineStartPos, targetPos, camera);
         }
     }
 
@@ -898,6 +911,20 @@ export class OrbitalBody extends Body {
     }
 
     /**
+     * Force-update the trajectory parameters and visualization based on the CURRENT physical state.
+     * Useful for aligning visualizations before computing transfers.
+     */
+    updateTrajectoryFromCurrentState(currentTime: number, centralBodyMass: number): void {
+        const positionVec = MeasureVector3.fromVector3<Length>(this.position, kilometers);
+        const velocityVec = MeasureVector3.fromVector3<Velocity>(this.velocity, kilometers.per(seconds));
+        const centralMass = Measure.of(centralBodyMass, kilograms);
+        const startTime = Measure.of(currentTime, seconds);
+        
+        this._trajectory.calculateFromState(positionVec, velocityVec, centralMass, startTime);
+        this._trajectoryInitialized = true;
+    }
+
+    /**
      * Get current position (analytical/numerical position)
      */
     getPosition(): THREE.Vector3 {
@@ -1016,6 +1043,11 @@ export class OrbitalBody extends Body {
         this.clearTransfer();
         
         this._transferTrajectory = trajectory;
+        
+        // Set target trajectory for distance tracking in debug labels
+        if (this.target) {
+            this._transferTrajectory.setTargetTrajectory(this.target.getTrajectory());
+        }
         
         // Delegate marker creation to the trajectory
         this._transferTrajectory.createMarkers(startPos, endPos, this.radius * 0.5);

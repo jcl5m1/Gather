@@ -503,11 +503,11 @@ export class CameraManager extends Body {
         const frameMatrix = this.getTargetFrameMatrix(selectedBody.getPosition(), targetBody.getPosition());
         const inverseFrameMatrix = frameMatrix.clone().invert();
 
-        // Calculate Midpoint
-        const midpoint = new THREE.Vector3().addVectors(selectedBody.getPosition(), targetBody.getPosition()).multiplyScalar(0.5);
+        // Use Selected Body position as anchor
+        const anchor = selectedBody.getPosition();
 
-        // Get current relative position (World Offset) from Midpoint
-        const currentWorldOffset = this._camera.position.clone().sub(midpoint);
+        // Get current relative position (World Offset) from anchor
+        const currentWorldOffset = this._camera.position.clone().sub(anchor);
         
         // Transform World Offset to Local Offset: Local = InverseFrame * World
         this._localCameraOffset = currentWorldOffset.applyMatrix4(inverseFrameMatrix);
@@ -526,11 +526,8 @@ export class CameraManager extends Body {
         const targetPosition = this._cameraTarget.getPosition();
         const bodyRadius = this._cameraTarget.getRadius();
 
-        // Calculate Focus Point (Midpoint if target defined, else Body Position)
+        // Focus point is always the body position, even if it has a target
         let focusPoint = targetPosition.clone();
-        if (this._cameraTarget.target) {
-            focusPoint.addVectors(targetPosition, this._cameraTarget.target.getPosition()).multiplyScalar(0.5);
-        }
 
         // Initialize previous target position to current position to avoid jump on first frame
         this._previousTargetPosition.copy(focusPoint);
@@ -551,7 +548,7 @@ export class CameraManager extends Body {
         this._camera.position.copy(focusPoint).add(this._cameraOffset);
 
         // Update controls target to the focus point
-        // This makes OrbitControls orbit around the midpoint or body
+        // This makes OrbitControls orbit around the selected body
         this._controls.target.copy(focusPoint);
 
         // Set minimum distance based on config factor * radius
@@ -561,12 +558,8 @@ export class CameraManager extends Body {
         // Force a simplified update to set the internal state without triggering our frame loop logic yet
         this._controls.update();
 
-        // Initialize local camera offset if we have a target
-        if (this._cameraTarget.target) {
-            this.updateLocalCameraOffset(this._cameraTarget, this._cameraTarget.target);
-        } else {
-            this._localCameraOffset = null;
-        }
+        // Target locking logic removed - camera always maintains regular orientation
+        this._localCameraOffset = null;
     }
 
     /**
@@ -582,96 +575,47 @@ export class CameraManager extends Body {
 
 
         if (this._cameraTarget) {
-            const targetPosition = this._cameraTarget.getPosition();
+            let targetPosition = this._cameraTarget.getPosition();
 
-            // Check if selected body has a target
-            const secondaryTarget = this._cameraTarget.target;
-
-            if (secondaryTarget) {
-                // --- TARGET LOCKING LOGIC ---
-                const midpoint = new THREE.Vector3().addVectors(targetPosition, secondaryTarget.getPosition()).multiplyScalar(0.5);
-
-                if (this._isUserInteracting) {
-                    // Scenario A: User is moving/rotating camera
-                    // 1. Let OrbitControls handle natural movement (we still need to track base movement)
-                    
-                    // Simple tracking: move camera by same amount target midpoint moved
-                    const targetDelta = midpoint.clone().sub(this._previousTargetPosition);
-                    this._camera.position.add(targetDelta);
-                    this._controls.target.copy(midpoint);
-                    
-                    this._controls.update();
-
-                    // 2. Capture new Local Offset for when interaction ends
-                    // This "saves" the new angle relative to the frame
-                    this.updateLocalCameraOffset(this._cameraTarget, secondaryTarget);
-                } else if (this._localCameraOffset) {
-                    // Scenario B: Simulation running, Camera Locked to Frame
-                    
-                    // 1. Update Controls first to handle Zoom (and damping)
-                    this._controls.target.copy(midpoint);
-                    this._controls.update();
-
-                    // 2. Capture the distance (zoom level) resulting from controls update
-                    const currentDist = this._camera.position.distanceTo(midpoint);
-
-                    // 3. Calculate new Frame Matrix
-                    const frameMatrix = this.getTargetFrameMatrix(targetPosition, secondaryTarget.getPosition());
-
-                    // 4. Calculate World Offset from stored Local Offset: World = Frame * Local
-                    const newWorldOffset = this._localCameraOffset.clone().applyMatrix4(frameMatrix);
-
-                    // 5. Apply the current zoom distance to our locked orientation
-                    newWorldOffset.setLength(currentDist);
-
-                    // 6. Update Camera Position relative to Midpoint
-                    this._camera.position.copy(midpoint).add(newWorldOffset);
-                    
-                    // 7. Update stored local offset length to match new zoom
-                    this._localCameraOffset.setLength(currentDist);
-                } else {
-                    // Fallback if local offset wasn't set yet
-                     this.updateLocalCameraOffset(this._cameraTarget, secondaryTarget);
+            // Refinement: If the body has an active transfer with a debug position, focus on that instead
+            const transfer = this._cameraTarget.getTransferTrajectory();
+            if (transfer) {
+                const debugPos = transfer.getDebugPosition();
+                if (debugPos) {
+                    targetPosition = debugPos;
                 }
-                
-                // Store current midpoint for next frame
-                this._previousTargetPosition.copy(midpoint);
-
-            } else {
-                // --- STANDARD LOGIC (No Target) ---
-                this._localCameraOffset = null; // Reset local offset
-
-                // Calculate the offset that the target has moved
-                const targetDelta = targetPosition.clone().sub(this._previousTargetPosition);
-
-                // Update camera position by the same offset to maintain relative position
-                this._camera.position.add(targetDelta);
-
-                // Update the controls target to follow the body
-                this._controls.target.copy(targetPosition);
-
-                // Update OrbitControls (handles scroll wheel zoom and rotation)
-                this._controls.update();
-
-                // Store current target position for next frame
-                this._previousTargetPosition.copy(targetPosition);
             }
+
+            // Always ensure controls are enabled
+            this._controls.enableRotate = true;
+            this._controls.enableZoom = true;
+
+            this._localCameraOffset = null; // Target Lock is retired
+
+            // Calculate the offset that the target has moved
+            const targetDelta = targetPosition.clone().sub(this._previousTargetPosition);
+
+            // Update camera position by the same offset to maintain relative position
+            this._camera.position.add(targetDelta);
+
+            // Update the controls target to follow the body
+            this._controls.target.copy(targetPosition);
+
+            // Update OrbitControls (handles scroll wheel zoom and rotation)
+            this._controls.update();
+
+            // Store current target position for next frame
+            this._previousTargetPosition.copy(targetPosition);
 
             // Sync Body position with camera
             this.position.copy(this._camera.position);
 
             // Capture current offset (includes scroll wheel zoom)
-            // Even in Target Locking mode, we want to know the current world offset for serialization
-            // Note: If using Target Locking, this offset is relative to midpoint now, but standard logic uses selection pos.
-            // For now, let's keep it relative to actual selection for consistency in serialization
             this._cameraOffset = this._camera.position.clone().sub(targetPosition);
 
             // Update stored camera state for this body using Body serialization
             const currentBodyName = this._cameraTarget.getName();
             this._bodyCameraStates.set(currentBodyName, this.toJSON());
-
-            // _previousTargetPosition is updated in the branches above
-
         } else {
             // Free camera mode - handle keyboard movement and update controls
             this.handleFreeCameraMovement(deltaTime);
@@ -886,8 +830,9 @@ export class CameraManager extends Body {
     /**
      * Switch camera to a specific body
      * @param body - The body to switch to
+     * @param preserveView - If true, maintain current camera position and zoom level relative to focus
      */
-    public switchToBody(body: OrbitalBody): void {
+    public switchToBody(body: OrbitalBody, preserveView: boolean = false): void {
         // Store current camera state before switching away
         if (this._cameraTarget) {
             const currentBodyName = this._cameraTarget.getName();
@@ -898,8 +843,8 @@ export class CameraManager extends Body {
             this._keysPressed.clear();
         }
 
-        // Store current offset before switching
-        const oldTargetPosition = this._cameraTarget ? this._cameraTarget.getPosition() : this._controls.target;
+        // Store current offset before switching (relative to current controls target)
+        const oldTargetPosition = this._controls.target.clone();
         const currentCameraOffset = this._camera.position.clone().sub(oldTargetPosition);
 
         // Update camera target
@@ -907,7 +852,7 @@ export class CameraManager extends Body {
             this._cameraTarget = this._centralBody;
             this._cameraTargetIndex = -2;
             const storedState = this._bodyCameraStates.get(this._centralBody.getName());
-            if (storedState && storedState.position) {
+            if (!preserveView && storedState && storedState.position) {
                 // Restore from serialized Body state
                 this.position.copy(new THREE.Vector3(storedState.position.x, storedState.position.y, storedState.position.z));
                 this._cameraOffset = this.position.clone().sub(this._centralBody.getPosition());
@@ -921,7 +866,7 @@ export class CameraManager extends Body {
                 this._cameraTarget = body;
                 this._cameraTargetIndex = orbitalIndex;
                 const storedState = this._bodyCameraStates.get(body.getName());
-                if (storedState && storedState.position) {
+                if (!preserveView && storedState && storedState.position) {
                     // Restore from serialized Body state
                     this.position.copy(new THREE.Vector3(storedState.position.x, storedState.position.y, storedState.position.z));
                     this._cameraOffset = this.position.clone().sub(body.getPosition());

@@ -6,8 +6,9 @@ import { PlotWindow } from './plotWindow';
 import './performanceTest'; // Import to register benchmark function
 import { OrbitalBody } from './orbitalBody';
 import { calculateEllipticalVelocity } from './orbitUtils';
-import { seconds, kilometers } from './units';
-import { config } from './config';
+import { seconds, kilometers, formatTime, Measure, getTimeUnit, gravitationalConstantUnit } from './units';
+import { TransferCalculator } from './transferCalculator';
+import { config, G } from './config';
 import * as THREE from 'three';
 
 // Global state for plot window tracking
@@ -152,6 +153,8 @@ export function createVelocityComparisonPlot(targetBody: OrbitalBody): PlotWindo
         // Register update callback for animation indicator
         const gameLoop = controller.getGameLoop();
         gameLoop.registerPlotUpdateCallback(() => {
+            if (!win.isOpen()) return;
+            
             // Check for Focus Change First
             const cameraManager = gameLoop.getCameraManager();
             if (cameraManager) {
@@ -266,7 +269,135 @@ export function createSinePlotDemo(): PlotWindow | null {
     return createOrbitErrorPlot();
 }
 
+/**
+ * Creates a plot of transfer distance error for different start delays.
+ * 256 samples across 4 selected body orbital periods.
+ * Y-axis is log10(distance error + 1km).
+ */
+export function insertTransferErrorPlotResult(win: PlotWindow, result: any) {
+    // Helper to extract result from plot if needed, but we'll return it directly
+}
+
+export interface PlotWithResult {
+    win: PlotWindow;
+    result: any; // TransferResult
+}
+
+export function createTransferDistanceErrorPlot(
+    startBody: OrbitalBody,
+    targetBody: OrbitalBody,
+    centralBodyMass: number,
+    startTime: number,
+    bestResult: any | null = null,
+    existingWin: PlotWindow | null = null
+): PlotWithResult | null {
+    if (!config.visualization.enablePlots) return null;
+
+    const trajectory = startBody.getTrajectory();
+    const params = trajectory.getParameters();
+    
+    let periodValue = 3600 * 24; // Default to 1 day
+    if (params && params.period) {
+        periodValue = (params.period as any).over(seconds).value;
+        if (!isFinite(periodValue) || periodValue <= 0) {
+            periodValue = 3600 * 24;
+        }
+    }
+    const period = periodValue;
+
+    const title = `Transfer Window: ${startBody.getName()} -> ${targetBody.getName()}`;
+    const t1 = startBody.getTrajectory();
+    const t2 = targetBody.getTrajectory();
+    if (!t1 || !t2) return existingWin ? { win: existingWin, result: bestResult } : null;
+
+    // Estimate reference Hohmann TOF to define initial search range
+    const p1 = t1.getPosition(startTime);
+    const p2 = t2.getPosition(startTime);
+    if (!p1 || !p2) return existingWin ? { win: existingWin, result: bestResult } : null;
+
+    const r1 = p1.length();
+    const r2 = p2.length();
+    const a_trans_est = (r1 + r2) / 2;
+    const GValue = (G as any).over(gravitationalConstantUnit).value;
+    const mu = GValue * centralBodyMass;
+    const hohmannTOF = Math.PI * Math.sqrt(Math.pow(a_trans_est, 3) / mu);
+    
+    // User requested: X = 1 period, Y = Hohmann TOF +/- 50%
+    const xMinVal = 0;
+    const xMaxVal = period;
+    const yMinVal = hohmannTOF * 0.5;
+    const yMaxVal = hohmannTOF * 1.5;
+
+    const win = existingWin || new PlotWindow({
+        title: title,
+        x: 100,
+        y: 450,
+        width: 600, // Square display geometry
+        height: 600,
+        xLabel: 'Start Delay',
+        yLabel: 'Time of Flight',
+        xMin: xMinVal,
+        xMax: xMaxVal,
+        yMin: yMinVal, 
+        yMax: yMaxVal,
+        xAxisUnitType: 'time',
+        yAxisUnitType: 'time',
+        backgroundColor: 'rgba(5, 10, 20, 0.95)'
+    });
+
+    if (!existingWin) {
+        win.close(); // Ensure window starts closed/hidden by default
+    } else {
+        win.setTitle(title);
+        win.clearData();
+        win.setXRange(xMinVal, xMaxVal);
+        win.setYRange(yMinVal, yMaxVal);
+        // win.open(); // Disabled as per request to not show plot entirely
+    }
+
+    // PERFORM GLOBAL OPTIMIZATION (GRID SEARCH + HILL CLIMBING)
+    // This is isolated from the rendering code as requested.
+    const globalResult = TransferCalculator.calculateGlobalOptimizedTransfer(
+        startBody,
+        targetBody,
+        centralBodyMass,
+        startTime
+    );
+
+    // Re-enable heatmap data flow but keep the window hidden (no win.open())
+    win.setHeatmap(globalResult.heatmap);
+
+    const finalBest = globalResult.result || bestResult;
+
+    // Mark the optimized solution
+    if (finalBest) {
+        const bestDelay = finalBest.startDelay;
+        const totalDV = finalBest.deltaV1 + finalBest.deltaV2;
+        const bestTOF = finalBest.timeOfFlight;
+        
+        win.addData({
+            x: [bestDelay],
+            y: [bestTOF],
+            color: '#ff0000',
+            pointSize: 6,
+            plotType: 'scatter',
+            tooltips: [`OPTIMUM (Optimized)<br>Delay: ${formatTime(Measure.of(bestDelay, seconds), true)}<br>TOF: ${formatTime(Measure.of(bestTOF, seconds), true)}<br>ΔV: ${totalDV.toFixed(4)} km/s`]
+        });
+    }
+
+    // Set initial timeline position (0 delay)
+    const controller = (window as any).simulationController;
+    if (controller) {
+        const gameLoop = controller.getGameLoop();
+        const currentTime = gameLoop.getCurrentTime();
+        win.setTimelinePosition(currentTime - startTime);
+    }
+
+    return { win, result: finalBest };
+}
+
 // Global exposure
 (window as any).createSinePlotDemo = createSinePlotDemo;
 (window as any).createOrbitErrorPlot = createOrbitErrorPlot;
 (window as any).createVelocityComparisonPlot = createVelocityComparisonPlot;
+(window as any).createTransferDistanceErrorPlot = createTransferDistanceErrorPlot;

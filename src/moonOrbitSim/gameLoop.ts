@@ -397,6 +397,26 @@ export class GameLoop {
         this._orbitalBodies.forEach(body => {
             body.update(scaledDt, centralPosition, centralMass, G, this.currentTime);
 
+            // Transfer completion logic
+            const transfer = body.getTransferTrajectory();
+            if (transfer && body.target) {
+                const endTime = transfer.getEndTime();
+                // If transfer was active last frame but now it's finished
+                // We check if it finished just now (within scaledDt of currentTime)
+                if (this.currentTime >= endTime && (this.currentTime - scaledDt) < endTime) {
+                    // Transfer completed!
+                    const targetBody = body.target;
+                    console.log(`[GameLoop] Transfer for ${body.getName()} completed. Switching focus to ${targetBody.getName()}.`);
+                    
+                    // Switch focus to the arrival body, preserving the current view (no jerking)
+                    this._cameraManager.switchToBody(targetBody, true);
+                    
+                    // Cleanup: Delete transfer trajectory and clear target for the original body
+                    body.clearTransfer();
+                    body.setTarget(null);
+                }
+            }
+
             // Update trail
             const trailLine = this._trailLines.get(body);
             if (trailLine) {
@@ -434,16 +454,24 @@ export class GameLoop {
         const targetBody = selectedBody ? selectedBody.target : null;
 
         this._orbitalBodies.forEach(body => {
-            body.updateRenderingMode(this._camera);
+            const isSelected = body === selectedBody;
+            body.updateRenderingMode(this._camera, isSelected);
 
             // Only show full trajectory for the currently selected body OR its target
-            const isSelected = body === selectedBody;
             const isTarget = body === targetBody;
             body.getTrajectory().setVisibility((isSelected || isTarget) && this._trajectoriesVisible);
+
+            // Transfer trajectory visibility - only for currently selected body
+            const transfer = body.getTransferTrajectory();
+            if (transfer) {
+                // If the body is selected, show its transfer. Otherwise, hide it.
+                // This will also toggle the visibility of the associated optimization plot.
+                transfer.setVisibility(isSelected);
+            }
         });
 
         // Also update rendering mode for central body
-        this._centralBody.updateRenderingMode(this._camera);
+        this._centralBody.updateRenderingMode(this._camera, this._centralBody === selectedBody);
 
         this._renderer.render(this._scene, this._camera);
 

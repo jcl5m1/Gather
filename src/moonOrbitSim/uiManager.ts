@@ -11,6 +11,7 @@ import { TransferCalculator } from './transferCalculator';
 import { Trajectory } from './trajectory';
 import { TransferTrajectory } from './transferTrajectory';
 import { MeasureVector3 } from './unitsVector3';
+import { createTransferDistanceErrorPlot } from './plotDemo';
 
 // Use require for marked to avoid TypeScript module resolution issues
 const markedModule = require('marked');
@@ -120,19 +121,30 @@ export class UIManager {
                          if (focusedBody && focusedBody.target === body) {
                             // Calculate Transfer
                             const centralBody = this.simulationController.getGameLoop().getCentralBody();
+                             const currentTime = this.simulationController.getGameLoop().getCurrentTime();
+
+                             // Force-update trajectories to current physical state before calculation
+                             // This ensures the prediction in TransferCalculator is grounded in reality
+                             // and that the visual orbit lines correctly align with the bodies and the transfer.
+                             focusedBody.updateTrajectoryFromCurrentState(currentTime, centralBody.getMass());
+                             body.updateTrajectoryFromCurrentState(currentTime, centralBody.getMass());
+
                              const result = TransferCalculator.calculateOptimalHohmannTransfer(
                                 focusedBody,
                                 body,
                                 centralBody.getMass(),
-                                this.simulationController.getGameLoop().getCurrentTime()
+                                currentTime
                             );
                             
                             if (result) {
                                 const scene = this.simulationController.getGameLoop().getScene();
+
+                                // Check if we can reuse the plot if bodies are same
+                                const oldTransferTrajectory = (focusedBody as any).getTransferTrajectory();
+
                                 const transferTrajectory = new TransferTrajectory(scene, 0xffff00); // Yellow for transfer
                                 
                                 // Set start/end times
-                                const currentTime = this.simulationController.getGameLoop().getCurrentTime();
                                 transferTrajectory.setTimes(currentTime, currentTime + result.timeOfFlight, result.startDelay);
                                 transferTrajectory.setDeltaVs(result.deltaV1, result.deltaV2);
 
@@ -146,10 +158,32 @@ export class UIManager {
                                  // Set it on the body
                                  focusedBody.setTransferTrajectory(transferTrajectory, result.startPosition, result.endPosition);
                                  
+                                 // Create the debug plot and mark the solution
+                                 const existingPlot = oldTransferTrajectory ? oldTransferTrajectory.getOptimizationPlot() : null;
+                                 const plotWithRes = createTransferDistanceErrorPlot(focusedBody, body, centralBody.getMass(), currentTime, result, existingPlot);
+                                 
+                                 if (plotWithRes) {
+                                     const { win: plot, result: refinedResult } = plotWithRes;
+                                     
+                                     // If we found a better refined result during plotting, update the trajectory
+                                     if (refinedResult && refinedResult !== result) {
+                                         transferTrajectory.setTimes(currentTime, currentTime + refinedResult.timeOfFlight, refinedResult.startDelay);
+                                         transferTrajectory.setDeltaVs(refinedResult.deltaV1, refinedResult.deltaV2);
+                                         
+                                         const posMeasure = MeasureVector3.fromVector3<Length>(refinedResult.position, kilometers);
+                                         const velMeasure = MeasureVector3.fromVector3<Velocity>(refinedResult.velocity, kilometers.per(seconds));
+                                         const startTimeMeasure = Measure.of(currentTime + refinedResult.startDelay, seconds);
+                                         transferTrajectory.calculateFromState(posMeasure, velMeasure, centralMassMeasure, startTimeMeasure);
+                                     }
+
+                                     plot.setAnimationPosition(refinedResult ? refinedResult.startDelay : result.startDelay);
+                                     transferTrajectory.setOptimizationPlot(plot, currentTime);
+                                 }
+
                                  // Force UI update to show the new section
                                  this.updateAllSections();
                              }
-                         }
+                        }
                     }
                     this.tooltipManager?.hide();
                 };
@@ -2152,6 +2186,8 @@ export class UIManager {
             if (gameLoopSection && gameLoopSection.getObject && gameLoopSection.contentContainer) {
                 const obj = gameLoopSection.getObject();
                 this.updateSectionForUISection(gameLoopSection, obj);
+                
+                // Transfer plot animation/timeline is now handled internally by TransferTrajectory.update()
             }
             this.gameLoopUpdateFrameId = requestAnimationFrame(updateGameLoopSection);
         };
