@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { PropertyInspector } from './propertyInspector';
 import { TooltipManager } from './tooltipManager';
 import { OrbitalBody } from './orbitalBody';
-import { TransferCalculator } from './transferCalculator';
+import { TransferCalculator } from './orbitUtils';
 import { Trajectory } from './trajectory';
 import { TransferTrajectory } from './transferTrajectory';
 import { MeasureVector3 } from './unitsVector3';
@@ -147,6 +147,10 @@ export class UIManager {
                                 // Set start/end times
                                 transferTrajectory.setTimes(currentTime, currentTime + result.timeOfFlight, result.startDelay);
                                 transferTrajectory.setDeltaVs(result.deltaV1, result.deltaV2);
+                                
+                                // Provide references for burn blending
+                                transferTrajectory.setStartTrajectory(focusedBody.getTrajectory());
+                                transferTrajectory.setTargetTrajectory(body.getTrajectory());
 
                                 const posMeasure = MeasureVector3.fromVector3<Length>(result.position, kilometers);
                                 const velMeasure = MeasureVector3.fromVector3<Velocity>(result.velocity, kilometers.per(seconds));

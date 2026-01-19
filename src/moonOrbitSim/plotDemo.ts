@@ -7,7 +7,7 @@ import './performanceTest'; // Import to register benchmark function
 import { OrbitalBody } from './orbitalBody';
 import { calculateEllipticalVelocity } from './orbitUtils';
 import { seconds, kilometers, formatTime, Measure, getTimeUnit, gravitationalConstantUnit } from './units';
-import { TransferCalculator } from './transferCalculator';
+import { TransferCalculator } from './orbitUtils';
 import { config, G } from './config';
 import * as THREE from 'three';
 

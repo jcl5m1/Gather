@@ -1,22 +1,108 @@
 import * as THREE from 'three';
-import { BezierCurvePoints, BezierCurve } from './trajectory';
 import { G } from './config';
-import { gravitationalConstantUnit } from './units';
+import { gravitationalConstantUnit, seconds, formatTime, Measure, Length } from './units';
+import type { OrbitalBody } from './orbitalBody';
 
 // Re-export G for backward compatibility
 export { G };
 
+// ============================================================================
+// Shared Interfaces and Classes
+// ============================================================================
+
+export interface BezierCurvePoints {
+    p0: THREE.Vector3;
+    p1: THREE.Vector3;
+    p2: THREE.Vector3;
+    p3: THREE.Vector3;
+}
+
+export class BezierCurve {
+    private points: BezierCurvePoints;
+
+    constructor(p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, p3: THREE.Vector3) {
+        this.points = { p0, p1, p2, p3 };
+    }
+
+    getPoint(t: number): THREE.Vector3 {
+        const point = new THREE.Vector3();
+        const mt = 1 - t;
+        const mt2 = mt * mt;
+        const mt3 = mt2 * mt;
+        const t2 = t * t;
+        const t3 = t2 * t;
+
+        point.x = mt3 * this.points.p0.x + 3 * mt2 * t * this.points.p1.x + 3 * mt * t2 * this.points.p2.x + t3 * this.points.p3.x;
+        point.y = mt3 * this.points.p0.y + 3 * mt2 * t * this.points.p1.y + 3 * mt * t2 * this.points.p2.y + t3 * this.points.p3.y;
+        point.z = mt3 * this.points.p0.z + 3 * mt2 * t * this.points.p1.z + 3 * mt * t2 * this.points.p2.z + t3 * this.points.p3.z;
+
+        return point;
+    }
+
+    getControlPoints(): BezierCurvePoints {
+        return this.points;
+    }
+
+    getDerivative(t: number): THREE.Vector3 {
+        // Derivative of cubic Bezier curve:
+        // B'(t) = 3(1-t)^2(P1-P0) + 6(1-t)t(P2-P1) + 3t^2(P3-P2)
+        const derivative = new THREE.Vector3();
+        const mt = 1 - t;
+        const mt2 = mt * mt;
+        const t2 = t * t;
+
+        const p0 = this.points.p0;
+        const p1 = this.points.p1;
+        const p2 = this.points.p2;
+        const p3 = this.points.p3;
+
+        // Terms
+        // 3(1-t)^2 * (P1 - P0)
+        const term1 = new THREE.Vector3().subVectors(p1, p0).multiplyScalar(3 * mt2);
+        // 6(1-t)t * (P2 - P1)
+        const term2 = new THREE.Vector3().subVectors(p2, p1).multiplyScalar(6 * mt * t);
+        // 3t^2 * (P3 - P2)
+        const term3 = new THREE.Vector3().subVectors(p3, p2).multiplyScalar(3 * t2);
+
+        derivative.add(term1).add(term2).add(term3);
+        return derivative;
+    }
+
+    // Generate points along the curve for visualization
+    getPoints(numPoints: number = 25): THREE.Vector3[] {
+        const points: THREE.Vector3[] = [];
+        for (let i = 0; i <= numPoints; i++) {
+            const t = i / numPoints;
+            points.push(this.getPoint(t));
+        }
+        return points;
+    }
+
+    // Static helper to generate points from multiple curves
+    static getPointsFromCurves(curves: BezierCurve[], numPointsPerCurve: number = 25): THREE.Vector3[] {
+        const points: THREE.Vector3[] = [];
+        curves.forEach(curve => {
+            points.push(...curve.getPoints(numPointsPerCurve));
+        });
+        return points;
+    }
+}
+
+export interface TimeWarpLUT {
+    M: number[];
+    bezierT: number[];
+    // Control points for each interval: P1 and P2 (scalar values for T)
+    bezierPoints: { p1: number, p2: number }[];
+    errors: number[];
+}
+
+export interface OrbitalState {
+    position: THREE.Vector3;
+    velocity: THREE.Vector3;
+}
+
 /**
  * Generate position and velocity vectors from orbital parameters
- * @param rp Periapsis distance in km
- * @param ra Apapsis distance in km
- * @param e Eccentricity (0-1 for elliptical)
- * @param centralBodyMass Mass of central body in kg
- * @param trueAnomaly True anomaly at initial position (0 = periapsis, π = apapsis) in radians
- * @param inclination Orbital inclination in radians (default: 0 = equatorial)
- * @param longitudeOfAscendingNode Longitude of ascending node in radians (default: 0)
- * @param argumentOfPeriapsis Argument of periapsis in radians (default: 0)
- * @returns Object with position and velocity vectors
  */
 export function generateStateFromOrbitalElements(
     rp: number,
@@ -27,7 +113,7 @@ export function generateStateFromOrbitalElements(
     inclination: number = 0,
     longitudeOfAscendingNode: number = 0,
     argumentOfPeriapsis: number = 0
-): { position: THREE.Vector3; velocity: THREE.Vector3 } {
+): OrbitalState {
     const GValue = (G as any).over(gravitationalConstantUnit).value;
     const mu = GValue * centralBodyMass;
 
@@ -736,4 +822,842 @@ export function calculateEllipticalPositionFromBasis(
     return new THREE.Vector3()
         .addScaledVector(periapsisDir, x)
         .addScaledVector(perpDir, y);
+}
+
+/**
+ * Calculate analytical orbital state for a given time
+ */
+export function getAnalyticalState(
+    time: number,
+    a: number,
+    e: number,
+    period: number,
+    startTime: number,
+    initialPos: THREE.Vector3,
+    initialVel: THREE.Vector3,
+    planetMass: number,
+    isHyperbolic: boolean = false
+): OrbitalState {
+    if (isHyperbolic) {
+        return {
+            position: calculateHyperbolicPosition(time, a, e, startTime, initialPos, initialVel, planetMass),
+            velocity: calculateHyperbolicVelocity(time, a, e, startTime, initialPos, initialVel, planetMass)
+        };
+    } else {
+        return {
+            position: calculateEllipticalPosition(time, a, e, period, startTime, initialPos, initialVel, planetMass),
+            velocity: calculateEllipticalVelocity(time, a, e, period, startTime, initialPos, initialVel, planetMass)
+        };
+    }
+}
+
+/**
+ * Calculate analytical orbital state from state vectors
+ */
+export function getAnalyticalStateFromState(
+    time: number,
+    initialPos: THREE.Vector3,
+    initialVel: THREE.Vector3,
+    centralBodyMass: number,
+    startTime: number = 0
+): OrbitalState {
+    const elements = calculateOrbitalElementsFromState(initialPos, initialVel, centralBodyMass);
+    return getAnalyticalState(
+        time,
+        elements.semiMajorAxis,
+        elements.eccentricity,
+        elements.period,
+        startTime,
+        initialPos,
+        initialVel,
+        centralBodyMass,
+        !elements.isElliptical
+    );
+}
+
+/**
+ * Calculate time warp function value
+ */
+export function calculateTimeWarp(
+    t: number,
+    lut: TimeWarpLUT,
+    interpolationMode: 'linear' | 'cubic' = 'cubic'
+): number {
+    t = Math.max(0, Math.min(1, t));
+    const { M, bezierT, bezierPoints } = lut;
+
+    let normalizedT = t;
+    let isMirrored = false;
+    if (t > 0.5) {
+        normalizedT = 1.0 - t;
+        isMirrored = true;
+    }
+
+    if (normalizedT <= M[0]) {
+        const val = bezierT[0];
+        return isMirrored ? 1.0 - val : val;
+    }
+    if (normalizedT >= M[M.length - 1]) {
+        const val = bezierT[bezierT.length - 1];
+        return isMirrored ? 1.0 - val : val;
+    }
+
+    let left = 0, right = M.length - 1;
+    while (right - left > 1) {
+        const mid = Math.floor((left + right) / 2);
+        if (M[mid] <= normalizedT) left = mid;
+        else right = mid;
+    }
+
+    const M0 = M[left], M1 = M[right];
+    const T0 = bezierT[left], T1 = bezierT[right];
+    const pts = bezierPoints[left];
+
+    let result = T0 + (T1 - T0) * ((normalizedT - M0) / (M1 - M0));
+
+    if (pts && interpolationMode === 'cubic') {
+        const u = (normalizedT - M0) / (M1 - M0);
+        const oneMinusU = 1 - u;
+        result = (oneMinusU ** 3) * T0 +
+            3 * (oneMinusU ** 2) * u * pts.p1 +
+            3 * oneMinusU * (u ** 2) * pts.p2 +
+            (u ** 3) * T1;
+    }
+
+    return isMirrored ? 1.0 - result : result;
+}
+
+/**
+ * Calculate derivative of the time warp function dt/dM
+ */
+export function calculateTimeWarpDerivative(
+    t: number,
+    lut: TimeWarpLUT,
+    interpolationMode: 'linear' | 'cubic' = 'cubic'
+): number {
+    t = Math.max(0, Math.min(1, t));
+    const { M, bezierT, bezierPoints } = lut;
+
+    let normalizedT = t;
+    if (t > 0.5) {
+        normalizedT = 1.0 - t;
+    }
+
+    if (normalizedT <= M[0] || normalizedT >= M[M.length - 1]) return 1.0;
+
+    let left = 0, right = M.length - 1;
+    while (right - left > 1) {
+        const mid = Math.floor((left + right) / 2);
+        if (M[mid] <= normalizedT) left = mid;
+        else right = mid;
+    }
+
+    const M0 = M[left], M1 = M[right];
+    const T0 = bezierT[left], T1 = bezierT[right];
+    const pts = bezierPoints[left];
+
+    const dM = M1 - M0;
+    if (dM < 1e-9) return 1.0;
+
+    const u = (normalizedT - M0) / dM;
+    const du_dM = 1.0 / dM;
+
+    let dT_du = 0;
+
+    if (pts && interpolationMode === 'cubic') {
+        const oneMinusU = 1 - u;
+        const term1 = 3 * oneMinusU * oneMinusU * (pts.p1 - T0);
+        const term2 = 6 * oneMinusU * u * (pts.p2 - pts.p1);
+        const term3 = 3 * u * u * (T1 - pts.p2);
+        dT_du = term1 + term2 + term3;
+    } else {
+        dT_du = T1 - T0;
+    }
+
+    return dT_du * du_dM;
+}
+
+/**
+ * Get Bezier orbital state
+ */
+export function getBezierState(
+    time: number,
+    startTime: number,
+    period: number,
+    basis: OrbitBasis,
+    lut: TimeWarpLUT,
+    bezierCurves: BezierCurve[],
+    options: { calcVelocity: boolean, interpolationMode?: 'linear' | 'cubic' } = { calcVelocity: true, interpolationMode: 'cubic' }
+): { position: THREE.Vector3 | null, velocity: THREE.Vector3 | null } {
+    if (period === 0) return { position: null, velocity: null };
+
+    const n = 2 * Math.PI / period;
+    const dt = time - startTime;
+    const M_current_peri = basis.M0 + n * dt;
+    const M_norm_peri = M_current_peri / (2 * Math.PI);
+    const M_wrapped_peri = ((M_norm_peri % 1) + 1) % 1;
+    const M_wrapped_apo = (M_wrapped_peri + 0.5) % 1.0;
+
+    const interpMode = options.interpolationMode || 'cubic';
+    const warpedTime = calculateTimeWarp(M_wrapped_apo, lut, interpMode);
+
+    if (isNaN(warpedTime)) return { position: null, velocity: null };
+
+    const numCurves = bezierCurves.length;
+    const totalProgress = warpedTime * numCurves;
+    const normalizedTotal = totalProgress - Math.floor(totalProgress);
+    let curveIndex = Math.floor(totalProgress) % numCurves;
+    if (curveIndex < 0) curveIndex += numCurves;
+
+    if (curveIndex >= numCurves || !bezierCurves[curveIndex]) return { position: null, velocity: null };
+    
+    const position = bezierCurves[curveIndex].getPoint(normalizedTotal);
+
+    let velocity: THREE.Vector3 | null = null;
+    if (options.calcVelocity && position) {
+        const dT_dM = calculateTimeWarpDerivative(M_wrapped_apo, lut, interpMode);
+        const dP_dT_local = bezierCurves[curveIndex].getDerivative(normalizedTotal);
+        const dP_dT = dP_dT_local.multiplyScalar(numCurves);
+        const dM_dt = 1.0 / (period); // dM/dt in 1/s (M is in radians here, so we need n = 2pi/P? No, if period is in seconds, n = 2pi/P)
+        // Actually dT_dM is dimensionless (dt_bezier / dM_wrapped).
+        // dM_wrapped = M_std / 2pi.
+        // So dT/dt = (dT/dM_wrapped) * (dM_wrapped/dt) = dT_dM * (n / 2pi) = dT_dM * (1/P).
+        velocity = dP_dT.multiplyScalar(dT_dM / period);
+    }
+
+    return { position, velocity };
+}
+
+/**
+ * Fit a cubic 1D Bezier curve to samples
+ */
+export function fitCubicBezier1D(y0: number, y3: number, samples: { u: number, y: number }[]): { p1: number, p2: number } {
+    if (samples.length === 0) return { p1: y0 + (y3 - y0) / 3, p2: y0 + 2 * (y3 - y0) / 3 };
+
+    let c11 = 0, c12 = 0, c22 = 0, r1 = 0, r2 = 0;
+    for (const sample of samples) {
+        const u = sample.u;
+        const y = sample.y;
+        const oneMinusU = 1 - u;
+        const b1 = 3 * oneMinusU * oneMinusU * u;
+        const b2 = 3 * (1 - u) * u * u;
+        const b0 = (1 - u) ** 3;
+        const b3 = u ** 3;
+        const residual = y - (b0 * y0 + b3 * y3);
+        c11 += b1 * b1; c12 += b1 * b2; c22 += b2 * b2;
+        r1 += b1 * residual; r2 += b2 * residual;
+    }
+
+    const det = c11 * c22 - c12 * c12;
+    if (Math.abs(det) < 1e-12) return { p1: y0 + (y3 - y0) / 3, p2: y0 + 2 * (y3 - y0) / 3 };
+
+    const invDet = 1.0 / det;
+    return { p1: (c22 * r1 - c12 * r2) * invDet, p2: (c11 * r2 - c12 * r1) * invDet };
+}
+
+/**
+ * Optimize bezierT to minimize position error from analytical position
+ */
+export function optimizeBezierT(
+    analyticalPos: THREE.Vector3, 
+    initialGuess: number, 
+    bezierCurves: BezierCurve[]
+): number {
+    if (!bezierCurves || bezierCurves.length === 0) return initialGuess;
+
+    const numCurves = bezierCurves.length;
+    const computePos = (t: number) => {
+        const totalProgress = t * numCurves;
+        const normalizedTotal = totalProgress - Math.floor(totalProgress);
+        let curveIndex = Math.floor(totalProgress) % numCurves;
+        if (curveIndex < 0) curveIndex += numCurves;
+        return bezierCurves[curveIndex].getPoint(normalizedTotal);
+    };
+
+    const objectiveFunction = (bezierT: number): number => {
+        const bezierPos = computePos(bezierT);
+        return analyticalPos.distanceTo(bezierPos);
+    };
+
+    // Grid search
+    const gridSize = 50;
+    let bestT = initialGuess;
+    let bestError = objectiveFunction(initialGuess);
+
+    // Search around guess
+    for (let i = -5; i <= 5; i++) {
+        let t = initialGuess + (i / gridSize) * 0.1;
+        t = ((t % 1) + 1) % 1;
+        const error = objectiveFunction(t);
+        if (error < bestError) {
+            bestError = error;
+            bestT = t;
+        }
+    }
+
+    // Golden section search
+    const phi = (1 + Math.sqrt(5)) / 2;
+    const tolerance = 1e-8;
+    let a_range = Math.max(0, bestT - 0.02);
+    let b_range = Math.min(1, bestT + 0.02);
+    let c = b_range - (b_range - a_range) / phi;
+    let d_val = a_range + (b_range - a_range) / phi;
+
+    for (let iter = 0; iter < 40; iter++) {
+        if (objectiveFunction(c) < objectiveFunction(d_val)) {
+            b_range = d_val; d_val = c; c = b_range - (b_range - a_range) / phi;
+        } else {
+            a_range = c; c = d_val; d_val = a_range + (b_range - a_range) / phi;
+        }
+        if (Math.abs(b_range - a_range) < tolerance) break;
+    }
+
+    return (a_range + b_range) / 2;
+}
+
+/**
+ * Build Time Warp LUT
+ */
+export function buildTimeWarpLUT(
+    centralBodyMass: number,
+    initialPosition: THREE.Vector3,
+    initialVelocity: THREE.Vector3,
+    semiMajorAxis: number,
+    eccentricity: number,
+    bezierCurves: BezierCurve[],
+    basis: OrbitBasis
+): TimeWarpLUT {
+    const GValue = (G as any).over(gravitationalConstantUnit).value;
+    const mu = GValue * centralBodyMass;
+    const e = eccentricity;
+    const { periapsisDir, perpDir } = basis;
+
+    // Generate knots and intermediate samples
+    const numIntervals = 4;
+    const subSamplesPerInterval = 16;
+    const totalFitSamples = numIntervals * subSamplesPerInterval;
+
+    const lutM: number[] = [];
+    const lutBezierT: number[] = [];
+    const bezierPoints: { p1: number, p2: number }[] = [];
+    const lutErrors: number[] = [];
+
+    const fitData: { u: number, M: number, bezierT: number, error: number }[] = [];
+
+    for (let i = 0; i <= totalFitSamples; i++) {
+        // Sample in Eccentric Anomaly from Pi to 2Pi (Apo to Peri)
+        const E = Math.PI + (i / totalFitSamples) * Math.PI;
+        const M_standard = E - e * Math.sin(E);
+        const M_relative_apo = (M_standard - Math.PI) / (2 * Math.PI);
+        const M_wrapped = M_relative_apo;
+
+        // Analytical position relative to Periapsis
+        const M_target = (M_standard / (2 * Math.PI)) * 2 * Math.PI;
+        const analyticalPos = calculateEllipticalPositionFromBasis(M_target, semiMajorAxis, e, periapsisDir, perpDir);
+
+        const initialGuessT = (E - Math.PI) / (2 * Math.PI);
+        const T = optimizeBezierT(analyticalPos, initialGuessT, bezierCurves);
+
+        // Error
+        const numCurves = bezierCurves.length;
+        const totalProgress = T * numCurves;
+        const normalizedTotal = totalProgress - Math.floor(totalProgress);
+        let curveIndex = Math.floor(totalProgress) % numCurves;
+        if (curveIndex < 0) curveIndex += numCurves;
+        const bezierPos = bezierCurves[curveIndex].getPoint(normalizedTotal);
+        const error = analyticalPos.distanceTo(bezierPos);
+
+        fitData.push({ u: i / totalFitSamples, M: M_wrapped, bezierT: T, error });
+    }
+
+    fitData.sort((a, b) => a.M - b.M);
+
+    for (let i = 0; i < fitData.length - 1; i += subSamplesPerInterval) {
+        let p3Index = i + subSamplesPerInterval;
+        if (p3Index >= fitData.length) p3Index = fitData.length - 1;
+        if (p3Index <= i) break;
+
+        const segmentSamples = fitData.slice(i, p3Index + 1);
+        const startNode = segmentSamples[0];
+        const endNode = segmentSamples[segmentSamples.length - 1];
+
+        if (lutM.length === 0) {
+            lutM.push(startNode.M);
+            lutBezierT.push(startNode.bezierT);
+            lutErrors.push(startNode.error);
+        }
+        lutM.push(endNode.M);
+        lutBezierT.push(endNode.bezierT);
+        lutErrors.push(endNode.error);
+
+        const mStart = startNode.M;
+        const mEnd = endNode.M;
+        const tStart = startNode.bezierT;
+        const tEnd = endNode.bezierT;
+
+        const samplesForFit = segmentSamples.map(s => {
+            let u_local = (s.M - mStart) / (mEnd - mStart);
+            if (isNaN(u_local)) u_local = 0;
+            return { u: u_local, y: s.bezierT };
+        });
+
+        const control = fitCubicBezier1D(tStart, tEnd, samplesForFit);
+        bezierPoints.push(control);
+
+        if (p3Index === fitData.length - 1) break;
+    }
+
+    return {
+        M: lutM,
+        bezierT: lutBezierT,
+        bezierPoints: bezierPoints,
+        errors: lutErrors
+    };
+}
+
+// ============================================================================
+// Transfer Calculator Logic
+// ============================================================================
+
+/**
+ * Result of a transfer calculation
+ */
+export interface TransferResult {
+    position: THREE.Vector3;
+    velocity: THREE.Vector3;
+    deltaV1: number; // Delta-V required at start (km/s)
+    deltaV2: number; // Delta-V required at end (km/s)
+    timeOfFlight: number; // Seconds
+    startPosition: THREE.Vector3;
+    endPosition: THREE.Vector3;
+    startVelocity: THREE.Vector3;
+    endVelocity: THREE.Vector3;
+    startDelay: number; // Seconds to wait before starting transfer
+}
+
+/**
+ * Result of a global optimization search including heatmap data for visualization
+ */
+export interface GlobalOptimizationResult {
+    result: TransferResult | null;
+    heatmap: {
+        x: number[];
+        y: number[];
+        z: number[][];
+        zMin: number;
+        zMax: number;
+        tooltips: string[][];
+    };
+}
+
+/**
+ * Calculator for orbital transfers
+ */
+export class TransferCalculator {
+
+    /**
+     * Calculate a simplified transfer between two bodies
+     * Now uses Lambert solver for generalized non-coplanar transfers.
+     * Uses current physical state for propagation to ensure accuracy.
+     */
+    static calculateHohmannTransfer(
+        startBody: OrbitalBody, 
+        endBody: OrbitalBody, 
+        centralBodyMass: number,
+        startTime: number = 0,
+        startDelay: number = 0,
+        timeOfFlight?: number // Optional TOF override
+    ): TransferResult | null {
+        
+        const evalTime = startTime + startDelay;
+
+        // Setup physics constants
+        const GValue = (G as any).over(gravitationalConstantUnit).value;
+        const mu = GValue * centralBodyMass;
+
+        // 1. Get positions at evaluation time based on CURRENT state prediction
+        // This ensures we account for numerical drift or manual state changes
+        const rocketState = this.predictState(startBody, centralBodyMass, mu, startTime, evalTime);
+        const r1Vec = rocketState.pos;
+        const v1Vec = rocketState.vel;
+        
+        // 2. Determine target position at arrival
+        const targetStateNow = this.predictState(endBody, centralBodyMass, mu, startTime, evalTime);
+        const r2Vec_now = targetStateNow.pos;
+        
+        if (!r1Vec || !r2Vec_now) return null;
+
+        if (!timeOfFlight) {
+            const r1 = r1Vec.length();
+            const r2 = r2Vec_now.length();
+            const a_trans_est = (r1 + r2) / 2;
+            timeOfFlight = Math.PI * Math.sqrt(Math.pow(a_trans_est, 3) / mu);
+        }
+
+        const arrivalTime = evalTime + timeOfFlight;
+        const targetStateArrival = this.predictState(endBody, centralBodyMass, mu, startTime, arrivalTime);
+        const r2Vec_arrival = targetStateArrival.pos;
+        const v2ArrivalVec = targetStateArrival.vel;
+        
+        if (!r2Vec_arrival || !v2ArrivalVec) return null;
+
+        // 3. Solve Lambert's Problem to find required velocities
+        const lambert = this.solveLambert(r1Vec, r2Vec_arrival, timeOfFlight, mu);
+        if (!lambert) return null;
+
+        // 4. Calculate Delta-V
+        // Current velocity of start body at evalTime was predicted above
+        const deltaV1 = lambert.v1.distanceTo(v1Vec);
+        const deltaV2 = lambert.v2.distanceTo(v2ArrivalVec);
+
+        return {
+            position: r1Vec.clone(),
+            velocity: lambert.v1,
+            deltaV1,
+            deltaV2,
+            timeOfFlight,
+            startPosition: r1Vec.clone(),
+            endPosition: r2Vec_arrival.clone(),
+            startVelocity: lambert.v1.clone(),
+            endVelocity: lambert.v2.clone(),
+            startDelay: startDelay
+        };
+    }
+
+    /**
+     * Predict future state of a body using analytical propagation from its CURRENT state
+     */
+    private static predictState(
+        body: OrbitalBody, 
+        centralBodyMass: number, 
+        mu: number,
+        currentTime: number, 
+        futureTime: number
+    ): { pos: THREE.Vector3, vel: THREE.Vector3 } {
+        const trajectory = body.getTrajectory();
+        
+        // STRICT BEZIER ONLY POLICY
+        // We assume all trajectories are initialized with Bezier curves and TimeWarpLUTs
+        // including Hyperbolic and Elliptical.
+        
+        const state = trajectory.getBezierState(futureTime, { calcVelocity: true });
+        
+        if (state.position && state.velocity) {
+            return { pos: state.position, vel: state.velocity };
+        }
+
+        // If Bezier fails (should not happen if initialized correctly), 
+        // we return current state or zeroes to avoid crashes, 
+        // but we DO NOT fall back to analytical calculation.
+        console.warn(`[TransferCalculator] Bezier prediction failed for ${body.name} at t=${futureTime}`);
+        
+        return { 
+            pos: state.position || body.position.clone(), 
+            vel: state.velocity || body.velocity.clone() 
+        };
+    }
+
+    /**
+     * Search for the optimal transfer (varying both start delay and time of flight)
+     */
+    static calculateOptimalHohmannTransfer(
+        startBody: OrbitalBody,
+        endBody: OrbitalBody,
+        centralBodyMass: number,
+        startTime: number
+    ): TransferResult | null {
+        // Search range for delay: 4 orbits of start body to find better alignments
+        const startParams = startBody.getTrajectory().parameters;
+        const startPeriod = (startParams.period as any).over(seconds).value || 3600 * 24;
+        
+        // Ensure bodies are different
+        if (startBody === endBody) return null;
+
+        // Search range for TOF: 0.5x to 1.5x of estimated Hohmann TOF
+        const startPos = startBody.getPosition();
+        const targetPos = endBody.getPosition();
+        const r1 = startPos.length();
+        const r2 = targetPos.length();
+        
+        const GValue = (G as any).over(gravitationalConstantUnit).value;
+        const mu = GValue * centralBodyMass;
+        const estTOF = Math.PI * Math.sqrt(Math.pow((r1 + r2) / 2, 3) / mu);
+
+        let bestResult: TransferResult | null = null;
+        let minTotalDV = Infinity;
+
+        const delaySteps = 64; 
+        const tofSteps = 64;
+
+        // Search range for delay: exactly 1 period of start body
+        const searchRange = startPeriod; 
+        const yMinVal = estTOF * 0.5;
+        const yMaxVal = estTOF * 1.5;
+
+        const dx = searchRange / delaySteps;
+        const dy = (yMaxVal - yMinVal) / tofSteps;
+
+        for (let i = 0; i < delaySteps; i++) {
+            const delay = (i + 0.5) * dx;
+            
+            for (let j = 0; j < tofSteps; j++) {
+                const tof = yMinVal + (j + 0.5) * dy;
+                const result = this.calculateHohmannTransfer(startBody, endBody, centralBodyMass, startTime, delay, tof);
+                
+                if (result) {
+                    const totalDV = result.deltaV1 + result.deltaV2;
+                    if (totalDV < minTotalDV) {
+                        minTotalDV = totalDV;
+                        bestResult = result;
+                    }
+                }
+            }
+        }
+
+        // Refine if we found a broad result
+        if (bestResult) {
+            // Initial refinement range: half of grid spacing
+            return this.calculateOptimizedTransferFromSeed(
+                startBody, endBody, centralBodyMass, startTime,
+                bestResult.startDelay, bestResult.timeOfFlight,
+                searchRange / delaySteps, estTOF / tofSteps
+            );
+        }
+
+        return bestResult;
+    }
+
+    /**
+     * Refines a transfer calculation starting from a seed (delay, TOF).
+     * Uses a multi-pass hill-climbing approach to optimize both simultaneously.
+     */
+    static calculateOptimizedTransferFromSeed(
+        startBody: OrbitalBody,
+        endBody: OrbitalBody,
+        centralBodyMass: number,
+        startTime: number,
+        seedDelay: number,
+        seedTOF: number,
+        initialDelayRange: number,
+        initialTOFRange: number
+    ): TransferResult | null {
+        let currentDelay = seedDelay;
+        let currentTOF = seedTOF;
+        let bestResult = this.calculateHohmannTransfer(startBody, endBody, centralBodyMass, startTime, currentDelay, currentTOF);
+        if (!bestResult) return null;
+
+        let bestDV = bestResult.deltaV1 + bestResult.deltaV2;
+        
+        let dRange = initialDelayRange;
+        let tRange = initialTOFRange;
+
+        const passes = 4;
+        const stepsPerPass = 10;
+
+        for (let pass = 0; pass < passes; pass++) {
+            let passFoundBetter = false;
+
+            for (let i = 0; i < stepsPerPass; i++) {
+                // Simultaneous search in 2D space around current best
+                // Sample a small grid around current point
+                const gridRes = 5;
+                for (let dj = -(gridRes-1)/2; dj <= (gridRes-1)/2; dj++) {
+                    for (let tk = -(gridRes-1)/2; tk <= (gridRes-1)/2; tk++) {
+                        if (dj === 0 && tk === 0) continue;
+
+                        const testDelay = Math.max(0, currentDelay + (dj / (gridRes/2)) * dRange);
+                        const testTOF = Math.max(0.1, currentTOF + (tk / (gridRes/2)) * tRange);
+
+                        const result = this.calculateHohmannTransfer(startBody, endBody, centralBodyMass, startTime, testDelay, testTOF);
+                        if (result) {
+                            const dv = result.deltaV1 + result.deltaV2;
+                            if (dv < bestDV) {
+                                bestDV = dv;
+                                currentDelay = testDelay;
+                                currentTOF = testTOF;
+                                bestResult = result;
+                                passFoundBetter = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Shrink search radius for next pass
+            dRange *= 0.4;
+            tRange *= 0.4;
+            
+            if (!passFoundBetter && pass > 0) break; // Convergence check
+        }
+
+        return bestResult;
+    }
+
+    /**
+     * Simple Lambert Solver using universal variables.
+     */
+    public static solveLambert(r1Vec: THREE.Vector3, r2Vec: THREE.Vector3, dt: number, mu: number, prograde: boolean = true): { v1: THREE.Vector3, v2: THREE.Vector3 } | null {
+        const r1 = r1Vec.length();
+        const r2 = r2Vec.length();
+        const cosDeltaTheta = r1Vec.dot(r2Vec) / (r1 * r2);
+        
+        const normal = new THREE.Vector3().crossVectors(r1Vec, r2Vec);
+        let deltaTheta = Math.acos(THREE.MathUtils.clamp(cosDeltaTheta, -1, 1));
+        
+        if (!prograde) {
+            deltaTheta = 2 * Math.PI - deltaTheta;
+        }
+
+        const c = Math.sqrt(r1*r1 + r2*r2 - 2*r1*r2*cosDeltaTheta);
+        const s = (r1 + r2 + c) / 2;
+        
+        let low_a = s / 2;
+        let high_a = 1e12; 
+        let a = s / 2;
+        
+        const dt_min = Math.sqrt(Math.pow(s / 2, 3) / mu) * (Math.PI - (2 * Math.asin(Math.sqrt((s - c) / s)) - Math.sin(2 * Math.asin(Math.sqrt((s - c) / s)))));
+        const isLongWay = dt > dt_min;
+
+        const maxIter = 100;
+        for (let i = 0; i < maxIter; i++) {
+            const mid_a = (low_a + high_a) / 2;
+            let alpha_0 = 2 * Math.asin(Math.sqrt(s / (2 * mid_a)));
+            let beta = 2 * Math.asin(Math.sqrt((s - c) / (2 * mid_a)));
+            
+            let alpha = isLongWay ? 2 * Math.PI - alpha_0 : alpha_0;
+            
+            const dt_est = Math.sqrt(Math.pow(mid_a, 3) / mu) * ((alpha - Math.sin(alpha)) - (beta - Math.sin(beta)));
+            
+            // For both branches, dt_est increases as mid_a increases 
+            // once we properly handle the alpha branch.
+            // Actually, for isLongWay=false, as a increases, dt_est decreases.
+            // For isLongWay=true, as a increases, dt_est increases.
+            
+            if (isLongWay) {
+                if (dt_est < dt) low_a = mid_a;
+                else high_a = mid_a;
+            } else {
+                if (dt_est < dt) high_a = mid_a;
+                else low_a = mid_a;
+            }
+
+            if (Math.abs(dt_est - dt) / dt < 1e-8) {
+                break;
+            }
+        }
+
+        a = (low_a + high_a) / 2;
+        let alpha_0 = 2 * Math.asin(Math.sqrt(s / (2 * a)));
+        let beta = 2 * Math.asin(Math.sqrt((s - c) / (2 * a)));
+        let alpha = isLongWay ? 2 * Math.PI - alpha_0 : alpha_0;
+        
+        const deltaE = alpha - beta;
+        const f = 1 - (a / r1) * (1 - Math.cos(deltaE));
+        const g = dt - Math.sqrt(Math.pow(a, 3) / mu) * (deltaE - Math.sin(deltaE));
+        const g_dot = 1 - (a / r2) * (1 - Math.cos(deltaE));
+
+        const v1 = r2Vec.clone().sub(r1Vec.clone().multiplyScalar(f)).multiplyScalar(1 / g);
+        const v2 = v1.clone().multiplyScalar(g_dot).addScaledVector(r1Vec, (f * g_dot - 1) / g);
+
+        return { v1, v2 };
+    }
+
+    /**
+     * Performs a global optimization search for a transfer:
+     * 1. 2D grid search (8x8) to find a good seed
+     * 2. Refined hill-climbing optimization from that seed
+     * 
+     * This isolates the mathematical search from the plotting code.
+     */
+    static calculateGlobalOptimizedTransfer(
+        startBody: OrbitalBody,
+        targetBody: OrbitalBody,
+        centralBodyMass: number,
+        startTime: number
+    ): GlobalOptimizationResult {
+        const startParams = startBody.getTrajectory().parameters;
+        const startPeriod = (startParams.period as any).over(seconds).value || 3600 * 24;
+        
+        const startPos = startBody.getPosition();
+        const targetPos = targetBody.getPosition();
+        const r1 = startPos.length();
+        const r2 = targetPos.length();
+        
+        const GValue = (G as any).over(gravitationalConstantUnit).value;
+        const mu = GValue * centralBodyMass;
+        const estTOF = Math.PI * Math.sqrt(Math.pow((r1 + r2) / 2, 3) / mu);
+
+        const searchRange = startPeriod; 
+        const xMinVal = 0;
+        const xMaxVal = searchRange;
+        const yMinVal = estTOF * 0.5;
+        const yMaxVal = estTOF * 1.5;
+
+        const resX = 8;
+        const resY = 8;
+        const dx = (xMaxVal - xMinVal) / resX;
+        const dy = (yMaxVal - yMinVal) / resY;
+
+        const heatmapX: number[] = [];
+        const heatmapY: number[] = [];
+        const heatmapZ: number[][] = [];
+        const heatmapTooltips: string[][] = [];
+
+        for (let i = 0; i < resX; i++) heatmapX.push(xMinVal + (i + 0.5) * dx);
+        for (let j = 0; j < resY; j++) heatmapY.push(yMinVal + (j + 0.5) * dy);
+
+        let zMin = Infinity;
+        let zMax = -Infinity;
+        let seedDelay = heatmapX[0];
+        let seedTOF = heatmapY[0];
+        let seedDV = Infinity;
+
+        for (let j = 0; j < resY; j++) {
+            const rowZ: number[] = [];
+            const rowTooltips: string[] = [];
+            const tof = heatmapY[j];
+
+            for (let i = 0; i < resX; i++) {
+                const delay = heatmapX[i];
+                const result = this.calculateHohmannTransfer(startBody, targetBody, centralBodyMass, startTime, delay, tof);
+
+                if (result) {
+                    const totalDV = result.deltaV1 + result.deltaV2;
+                    const logDV = Math.log10(Math.max(totalDV, 0.001));
+                    rowZ.push(logDV);
+                    zMin = Math.min(zMin, logDV);
+                    zMax = Math.max(zMax, logDV);
+
+                    if (totalDV < seedDV) {
+                        seedDV = totalDV;
+                        seedDelay = delay;
+                        seedTOF = tof;
+                    }
+                    rowTooltips.push(`Delay: ${formatTime(Measure.of(delay, seconds), true)}<br>TOF: ${formatTime(Measure.of(tof, seconds), true)}<br>Total ΔV: ${totalDV.toFixed(4)} km/s`);
+                } else {
+                    rowZ.push(-3);
+                    rowTooltips.push(`Delay: ${formatTime(Measure.of(delay, seconds), true)}<br>TOF: ${formatTime(Measure.of(tof, seconds), true)}<br>ΔV: N/A`);
+                }
+            }
+            heatmapZ.push(rowZ);
+            heatmapTooltips.push(rowTooltips);
+        }
+
+        const optimizedResult = this.calculateOptimizedTransferFromSeed(
+            startBody, targetBody, centralBodyMass, startTime,
+            seedDelay, seedTOF, dx, dy
+        );
+
+        return {
+            result: optimizedResult,
+            heatmap: {
+                x: heatmapX,
+                y: heatmapY,
+                z: heatmapZ,
+                zMin: zMin === Infinity ? -3 : zMin,
+                zMax: zMax === -Infinity ? 0 : zMax,
+                tooltips: heatmapTooltips
+            }
+        };
+    }
 }

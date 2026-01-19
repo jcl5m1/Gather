@@ -2,7 +2,7 @@ import { GameLoop } from './gameLoop';
 import { CommandProcessor } from './commandProcessor';
 import { OrbitalBody } from './orbitalBody';
 
-import { TransferCalculator } from './transferCalculator';
+import { TransferCalculator } from './orbitUtils';
 import { MeasureVector3, LengthVector3, VelocityVector3 } from './unitsVector3';
 import { Measure, kilometers, seconds, kilograms, Length, Velocity } from './units';
 import { TransferTrajectory } from './transferTrajectory';

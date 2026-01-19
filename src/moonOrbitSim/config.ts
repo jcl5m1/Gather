@@ -75,6 +75,7 @@ export interface PhysicsConfig {
     gravitationalConstant: GenericMeasure<number, any, any>; // G in km³/(kg·s²)
     defaultTimeScale: number; // Dimensionless
     orbitUpdateMethod: 'analytical' | 'numerical'; // Method for updating orbital body positions
+    burnAcceleration: GenericMeasure<number, any, any>; // km/s²
 }
 
 export interface BodiesConfig {
@@ -187,7 +188,8 @@ function parseConfig(data: any): SimulationConfig {
         physics: {
             gravitationalConstant: parseGravitationalConstant(data.physics.gravitationalConstant),
             defaultTimeScale: parseValueWithUnit(data.physics.defaultTimeScale),
-            orbitUpdateMethod: (data.physics.orbitUpdateMethod?.value || 'analytical') as 'analytical' | 'numerical'
+            orbitUpdateMethod: (data.physics.orbitUpdateMethod?.value || 'analytical') as 'analytical' | 'numerical',
+            burnAcceleration: parseLength(data.physics.burnAcceleration || { value: 0.01, unit: "km/s²" }) // Reusing parseLength for generic Measure with km units
         },
         bodies: (() => {
             const bodies: BodiesConfig = {};

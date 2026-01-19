@@ -19,12 +19,11 @@ The primary codebase for the orbital mechanics simulation.
 - `orbitalBody.ts` - OrbitalBody class (extends Body) with physics update logic (numerical/analytical/bezier), dual-rendering support, and dynamic LOD rendering (mesh vs dot)
 - `trajectory.ts` - Trajectory class for orbit calculation (elliptical/hyperbolic) and visualization. **Includes Rational Bezier logic** (BezierCurve, TrajectoryRenderer).
 - `transferTrajectory.ts` - Manages calculation and visualization of transfer orbits
-- `transferCalculator.ts` - Utilities for calculating Hohmann transfers and other orbital maneuvers
 - `types.ts` - Body base class; JSON serialization utilities; OrbitControls interface
 
 **Simulation & Physics:**
 - `simulationController.ts` - Controls time scaling and simulation state
-- `orbitUtils.ts` - Utility functions for orbital calculations (Kepler, Bezier generation)
+- `orbitUtils.ts` - Utility functions for orbital calculations (Kepler, Bezier generation) and **TransferCalculator** for maneuvers
 - `gpuOrbitCompute.ts` - GPU-accelerated massive batch orbit position computation using Data Textures and Shaders (GPGPU)
 
 **UI & Interaction:**
@@ -45,6 +44,7 @@ The primary codebase for the orbital mechanics simulation.
 - `performanceTest.ts` - Benchmarking suite
 - `velocitySymmetryTest.ts` - Verifies velocity calculations
 - `testCommands.ts` - Command interface testing script
+- `testLambert.ts` - **Lambert Solver Test** - Verification for orbital transfer math
 
 **Documentation:**
 - `COMMAND_INTERFACE.md` - Documentation for text commands
@@ -69,6 +69,8 @@ Secondary game module focusing on resource management.
 
 ### Orbit Geometry
 - **Bezier Orbits**: Rational Bezier curves are used for high-performance orbit rendering and exact position calculation. This logic is centralized in `trajectory.ts` and `orbitUtils.ts`.
+- All orbital math should be in the `orbitUtils.ts` file. The classes should not contain any orbital math.
+- The only code using the analytical orbit math should be in orbit utils and used only to generate the bezier approximations. Everything else should use the bezier approximations for speed.
 
 ### Units
 - **Internal**: kilometers, radians, kilograms, seconds
@@ -78,5 +80,6 @@ Secondary game module focusing on resource management.
 - **Text Commands**: Primary method for automated testing and precise control (see `COMMAND_INTERFACE.md`).
 
 ## Development
+- always check for build errors after finishing changes.  if there are errors, keep attempting to fix them.
 - **Dev Server**: Auto-reloads on changes.
 - **Testing**: Use text commands and browser console.

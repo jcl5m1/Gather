@@ -79,7 +79,7 @@ export function runPerformanceBenchmark(args: number | BenchmarkOptions = 100000
     if (!skipAnalytical) {
         const startAnalytical = performance.now();
         for (const t of testTimes) {
-            trajectory.getPosition(t, 'analytical');
+            trajectory.getPosition(t);
         }
         const endAnalytical = performance.now();
         timeAnalytical = endAnalytical - startAnalytical;
@@ -90,7 +90,7 @@ export function runPerformanceBenchmark(args: number | BenchmarkOptions = 100000
         trajectory.setInterpolationMode('linear');
         const startLinear = performance.now();
         for (const t of testTimes) {
-            trajectory.getPosition(t, 'bezier');
+            trajectory.getPosition(t);
         }
         const endLinear = performance.now();
         timeLinear = endLinear - startLinear;
@@ -101,7 +101,7 @@ export function runPerformanceBenchmark(args: number | BenchmarkOptions = 100000
         trajectory.setInterpolationMode('cubic');
         const startCubic = performance.now();
         for (const t of testTimes) {
-            trajectory.getPosition(t, 'bezier');
+            trajectory.getPosition(t);
         }
         const endCubic = performance.now();
         timeCubic = endCubic - startCubic;

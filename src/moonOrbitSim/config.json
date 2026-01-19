@@ -13,7 +13,11 @@
       "unit": "dimensionless",
       "comment": "Options: 'analytical' (uses Kepler's equation) or 'numerical' (uses numerical integration)"
     },
-    "comment": "G in km³/(kg·s²). Converted from SI: 6.67430e-11 m³/(kg·s²) * (1 m / 1000 km)³ = 6.67430e-20. defaultTimeScale speeds up simulation"
+    "burnAcceleration": {
+      "value": 0.001,
+      "unit": "km/s²"
+    },
+    "comment": "G in km³/(kg·s²) or km³/(kg·s²). Converted from SI: 6.67430e-11 m³/(kg·s²) * (1 m / 1000 km)³ = 6.67430e-20. defaultTimeScale speeds up simulation. burnAcceleration used for transfer blending."
   },
   "bodies": {
     "earth": {
@@ -151,7 +155,7 @@
         "unit": "dimensionless"
       },
       "near": {
-        "value": 0.001,
+        "value": 0.0001,
         "unit": "km"
       },
       "far": {

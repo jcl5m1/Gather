@@ -1,21 +1,25 @@
 import * as THREE from 'three';
-import { Trajectory } from './trajectory';
+import { Trajectory, TrajectoryRender, TransferTrajectoryRender, TransferTrajectoryRenderer } from './trajectory';
+import { config } from './config';
 import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, formatVelocity, formatTime, formatDistanceWithAstronomicalUnits } from './units';
 import { LengthVector3, VelocityVector3 } from './unitsVector3';
+import { G, calculateInitialE, getAnalyticalState, calculateOrbitBasis, calculateEllipticalPositionFromBasis, BezierCurve } from './orbitUtils';
+import { gravitationalConstantUnit } from './units';
 
 export class TransferTrajectory extends Trajectory {
     // Transfer Annotation Markers
-    private _startLabel: THREE.Sprite | null = null;
     private _midLabel: THREE.Sprite | null = null;
-    private _endLabel: THREE.Sprite | null = null;
     
     // Markers
     private _startMarker: THREE.Mesh | null = null;
     private _endMarker: THREE.Mesh | null = null;
+    private _startTrajectory: Trajectory | null = null;
+    private _targetTrajectory: Trajectory | null = null;
+    
+    // Original Transfer Window
     private _transferStartTime: number = 0;
     private _transferEndTime: number = 0;
-    private _targetTrajectory: Trajectory | null = null;
-
+    
     // Public properties for Property Inspector
     public deltaV1: Velocity = Measure.of(0, kilometers.per(seconds));
     public deltaV2: Velocity = Measure.of(0, kilometers.per(seconds));
@@ -29,22 +33,34 @@ export class TransferTrajectory extends Trajectory {
 
     constructor(scene: THREE.Scene, color: number = 0xffff00) {
         super(scene, color);
-        this._debugMarkerEnabled = true; // Enable debug markers for transfers by default
+        // Debug markers enabled by default for transfers, but standard Trajectory logic handles visibility
+        this._debugMarkerEnabled = true; 
+        this._isClosedLoop = false;
+    }
+
+    protected override createRenderer(): TrajectoryRender {
+        return new TransferTrajectoryRenderer(this._scene, this._color);
     }
 
     setTimes(startTime: number, endTime: number, startDelay: number = 0): void {
         this._transferStartTime = startTime + startDelay;
         this._transferEndTime = endTime + startDelay;
-        this._startTime = this._transferStartTime;
-        this._endTime = this._transferEndTime;
         this.timeOfFlight = Measure.of(endTime - startTime, seconds);
         this.startDelay = Measure.of(startDelay, seconds);
+        
+        // Exact window
+        this._startTime = this._transferStartTime;
+        this._endTime = this._transferEndTime;
     }
     
     setDeltaVs(dv1: number, dv2: number): void {
         this.deltaV1 = Measure.of(dv1, kilometers.per(seconds));
         this.deltaV2 = Measure.of(dv2, kilometers.per(seconds));
         this.totalDeltaV = Measure.of(dv1 + dv2, kilometers.per(seconds));
+    }
+
+    setStartTrajectory(traj: Trajectory | null): void {
+        this._startTrajectory = traj;
     }
 
     setTargetTrajectory(traj: Trajectory | null): void {
@@ -69,7 +85,7 @@ export class TransferTrajectory extends Trajectory {
     createMarkers(startPos: THREE.Vector3, endPos: THREE.Vector3, radius: number): void {
         this.clearMarkers();
         
-        // Create Mid Label Only (Start/End removed as per request)
+        // Create Mid Label Only
         this._midLabel = this.createLabelSprite();
         const midPos = new THREE.Vector3().addVectors(startPos, endPos).multiplyScalar(0.5);
         if (this._analyticalPoints.length > 0) {
@@ -86,6 +102,17 @@ export class TransferTrajectory extends Trajectory {
     update(currentTime: number): void {
         super.update(currentTime);
         
+        // Dynamic Position Insertion
+        // We manually trigger updateOrbitVisualization here because TransferTrajectory might not be owned by an OrbitalBody
+        // that handles this automatically.
+        const currentT = this.getBezierT(currentTime);
+        const currentPos = this.getPosition(currentTime);
+        if (currentPos) {
+            this.updateOrbitVisualization(currentT, currentPos);
+        }
+
+
+
         // Update Mid Label (Static info mostly)
         const midText = [
             `TOF: ${formatTime(this.timeOfFlight, true)}`,
@@ -120,8 +147,8 @@ export class TransferTrajectory extends Trajectory {
         lines.push(`Total ΔV: ${formatVelocity(this.totalDeltaV, true)}`);
 
         if (this._targetTrajectory) {
-            const myPos = this.getPosition(currentTime, 'bezier');
-            const targetPos = this._targetTrajectory.getPosition(currentTime, 'bezier');
+            const myPos = this.getPosition(currentTime);
+            const targetPos = this._targetTrajectory.getPosition(currentTime);
 
             if (myPos && targetPos) {
                 const distKm = myPos.distanceTo(targetPos);
@@ -142,7 +169,7 @@ export class TransferTrajectory extends Trajectory {
             depthWrite: false
         });
         const sprite = new THREE.Sprite(material);
-        sprite.scale.set(0.24, 0.12, 1); // Aspect 2:1 roughly (Reduced 20% from 0.3, 0.15)
+        sprite.scale.set(0.24, 0.12, 1); 
         sprite.renderOrder = 1000;
         return sprite;
     }
@@ -194,25 +221,11 @@ export class TransferTrajectory extends Trajectory {
             this._endMarker = null;
         }
 
-        if (this._startLabel) {
-            if (this._startLabel.parent) this._startLabel.parent.remove(this._startLabel);
-            if (this._startLabel.material.map) this._startLabel.material.map.dispose();
-            this._startLabel.material.dispose();
-            this._startLabel = null;
-        }
-
         if (this._midLabel) {
             if (this._midLabel.parent) this._midLabel.parent.remove(this._midLabel);
             if (this._midLabel.material.map) this._midLabel.material.map.dispose();
             this._midLabel.material.dispose();
             this._midLabel = null;
-        }
-
-        if (this._endLabel) {
-            if (this._endLabel.parent) this._endLabel.parent.remove(this._endLabel);
-            if (this._endLabel.material.map) this._endLabel.material.map.dispose();
-            this._endLabel.material.dispose();
-            this._endLabel = null;
         }
     }
     
@@ -222,14 +235,7 @@ export class TransferTrajectory extends Trajectory {
     public override setVisibility(visible: boolean): void {
         super.setVisibility(visible);
         if (this._plot) {
-            if (visible) {
-                /* 
-                // Disabled as per request to not show plot entirely
-                if (typeof this._plot.isOpen !== 'function' || this._plot.isOpen()) {
-                    if (typeof this._plot.show === 'function') this._plot.show();
-                }
-                */
-            } else {
+            if (!visible) {
                 if (typeof this._plot.hide === 'function') this._plot.hide();
             }
         }
@@ -248,51 +254,101 @@ export class TransferTrajectory extends Trajectory {
     }
 
     getStartTime(): number {
-        return this._transferStartTime;
+        return this._startTime;
     }
 
     getEndTime(): number {
-        return this._transferEndTime;
+        return this._endTime!;
     }
 
     calculateFromState(position: LengthVector3, velocity: VelocityVector3, centralBodyMass: Mass, startTime: Time): void {
+        // 1. Calculate Standard Orbit
         super.calculateFromState(position, velocity, centralBodyMass, startTime);
         
-        // Ensure Bezier estimation is enabled for this trajectory
+        // 2. Ensure Bezier estimation is enabled
         this.useBezierEstimation = true;
 
-        // Generate actual transfer arc points using Bezier approximation
-        const tof = this.timeOfFlight.over(seconds).value;
-        const startT = startTime.over(seconds).value;
-        
-        const numSamples = 100;
-        const transferPoints: THREE.Vector3[] = [];
-        const bezierPoints: { position: THREE.Vector3, t: number }[] = [];
-        
-        for (let i = 0; i <= numSamples; i++) {
-            const u = i / numSamples;
-            const t = startT + u * tof;
+        // 3. Trim Points to Transfer Window
+        // Use high-precision checking against start/end times
+        if (this._bezierPoints.length > 0) {
+            const startT = this.getBezierT(this._startTime);
+            const endT = this.getBezierT(this._endTime!);
             
-            // Primary path uses Bezier approximation for plotting
-            const pos = this.getPosition(t, 'bezier');
-            if (pos) {
-                transferPoints.push(pos);
-                bezierPoints.push({ position: pos.clone(), t: u });
+            // Handle wrap-around case depending on orbit direction and window
+            // Since this is a transfer, it should be a contiguous segment.
+            // However, getBezierT wraps to [0,1].
+            
+            // Simple approach: Filter points whose time falls within [startTime, endTime]
+            // We can reconstruct time from T, or just use getPosition(t_sec) for each point to check?
+            // Expensive.
+            // Better: We know the points are sorted by T.
+            
+            // Let's rely on the fact that for a transfer, we likely want the segment that corresponds to the duration
+            // But super.calculateFromState gives 0..1 (full orbit).
+            
+            // Filter logic:
+            let newPoints: { position: THREE.Vector3, t: number }[] = [];
+            
+            // Case 1: startT <= endT (Normal segment)
+            if (startT <= endT) {
+                 newPoints = this._bezierPoints.filter(p => p.t >= startT && p.t <= endT);
+                 
+                 // Add exact start/end
+                 const pStart = this.getPosition(this._startTime);
+                 const pEnd = this.getPosition(this._endTime!);
+                 
+                 if (pStart) newPoints.push({ position: pStart, t: startT });
+                 if (pEnd) newPoints.push({ position: pEnd, t: endT });
+                 
+                 // Sort strictly by T for normal segment
+                 newPoints.sort((a, b) => a.t - b.t);
+            } 
+            // Case 2: startT > endT (Wraps around apoapsis/0.0)
+            else {
+                 // We need two segments: [startT, 1.0] AND [0.0, endT]
+                 // And we want to render them in that order: start->1->0->end
+                 
+                 const latePoints = this._bezierPoints.filter(p => p.t >= startT);
+                 const earlyPoints = this._bezierPoints.filter(p => p.t <= endT);
+                 
+                 // Sort internal segments
+                 latePoints.sort((a, b) => a.t - b.t);
+                 earlyPoints.sort((a, b) => a.t - b.t);
+                 
+                 // Add exact points to respective segments
+                 const pStart = this.getPosition(this._startTime);
+                 const pEnd = this.getPosition(this._endTime!);
+
+                 if (pStart) latePoints.unshift({ position: pStart, t: startT }); // Add to start of late sequence (or end, but it's start of Transfer)
+                 // Actually pStart has t=startT. latePoints are t >= startT. So pStart is the first point.
+                 // Ensure we don't duplicate if filter caught it? Filter is inclusive.
+                 // Let's rely on sort + unique filter later? Or just insert and sort.
+                 
+                 // Push to arrays then sort again to be safe
+                 if (pStart) latePoints.push({ position: pStart, t: startT });
+                 if (pEnd) earlyPoints.push({ position: pEnd, t: endT });
+                 
+                 latePoints.sort((a, b) => a.t - b.t);
+                 earlyPoints.sort((a, b) => a.t - b.t);
+
+                 // Concatenate: Late (Start->1) then Early (0->End)
+                 newPoints = [...latePoints, ...earlyPoints];
             }
-        }
-        
-        // Update both analytical (for baseline) and bezier visual paths
-        // In the current renderer, bezierLine is the main visual.
-        this._analyticalPoints = transferPoints;
-        this._bezierPoints = bezierPoints;
-        
-        this._renderer.updateOrbitLine(this._analyticalPoints);
-        this._renderer.updateBezierLine(this._bezierPoints.map(p => p.position));
-        
-        // Update label position
-        if (this._midLabel && this._analyticalPoints.length > 0) {
-            const midIdx = Math.floor(this._analyticalPoints.length / 2);
-            this._midLabel.position.copy(this._analyticalPoints[midIdx]).add(new THREE.Vector3(0, 5, 0));
+            
+            // Deduplicate points (simple distance check or T check)
+            // T check might be tricky with wrap around if we just concat.
+            // But we know late points are t>0.5 and early are t<0.5 typically.
+            // Just return the newPoints array, do NOT sort it globally by T.
+            
+            this._bezierPoints = newPoints;
+
+            // Also update analytical points for consistency (approximation)
+            // Just clear them or filter? Super uses them for "orbitLine" which we hide.
+            // Let's just keep them as is or clear them to save memory.
+            this._analyticalPoints = []; 
+            
+            // Update renderer
+            this._renderer.updateBezierLine(this._bezierPoints.map(p => p.position));
         }
     }
 }

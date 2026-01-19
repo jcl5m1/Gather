@@ -1,6 +1,6 @@
 
 import * as THREE from 'three';
-import { TransferCalculator } from './transferCalculator';
+import { TransferCalculator } from './orbitUtils';
 
 /**
  * Test for Lambert Solver using known variables.

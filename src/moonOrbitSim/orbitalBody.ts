@@ -762,7 +762,7 @@ export class OrbitalBody extends Body {
 
             // Primary Position
             if (ORBIT_UPDATE_METHOD === 'analytical') {
-                const pos = this._trajectory.getPosition(currentTime, 'analytical');
+                const pos = this._trajectory.getPosition(currentTime);
                 if (pos) {
                     this.position.copy(pos).add(centralBodyPosition);
                     // Velocity? Trajectory doesn't currently return velocity. 
@@ -776,7 +776,7 @@ export class OrbitalBody extends Body {
             }
 
             // Secondary (Ghost) Position -> Standard Bezier
-            const ghostPos = this._trajectory.getPosition(currentTime, 'bezier');
+            const ghostPos = this._trajectory.getPosition(currentTime);
             if (ghostPos) {
                 this._bezierPosition = ghostPos.clone().add(centralBodyPosition);
             } else {
@@ -1140,8 +1140,8 @@ export class OrbitalBody extends Body {
 
         const warpedTime = warpFunc(normalizedTime);
 
-        if (typeof this._trajectory.computeBezierPositionFromTime === 'function') {
-            return this._trajectory.computeBezierPositionFromTime(warpedTime);
+        if (typeof this._trajectory.getPointFromCurves === 'function') {
+            return this._trajectory.getPointFromCurves(warpedTime);
         }
         return null;
     }
