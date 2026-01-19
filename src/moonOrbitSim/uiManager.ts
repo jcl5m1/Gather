@@ -250,9 +250,20 @@ export class UIManager {
                     }
                     this.tooltipManager.updatePosition();
                 } else {
-                    // Not hovering a body
-                    if (this.tooltipManager.isActive()) {
-                        // Check if mouse is over tooltip
+                    // Check for transfer point hover
+                    const transferHit = this.cameraManager.getHoveredTransferPoint();
+                    if (transferHit) {
+                         if (hideTimeout !== null) {
+                            clearTimeout(hideTimeout);
+                            hideTimeout = null;
+                        }
+                        
+                        const data = transferHit.transfer.getPointData(transferHit.index);
+                        this.tooltipManager.showDataTooltip("Transfer Point", data, transferHit.point);
+                        this.tooltipManager.updatePosition();
+                    } else if (this.tooltipManager.isActive()) {
+                        // Not hovering a body or point
+                        // Check if mouse is over tooltip (if it's interactive)
                         const isOverTooltip = this.tooltipManager.isMouseOver();
                         
                         if (isOverTooltip) {
@@ -263,7 +274,7 @@ export class UIManager {
                             }
                             this.tooltipManager.updatePosition();
                         } else {
-                            // Neither hovering body nor tooltip -> start hide timer if not already running
+                            // Neither hovering body/point nor tooltip -> start hide timer if not already running
                             if (hideTimeout === null) {
                                 hideTimeout = window.setTimeout(() => {
                                     this.tooltipManager?.hide();
@@ -272,7 +283,7 @@ export class UIManager {
                             }
                         }
                     } else {
-                         // Tooltip not active and not hovering body -> ensure timer is clear
+                         // Tooltip not active and not hovering anything -> ensure timer is clear
                          if (hideTimeout !== null) {
                              clearTimeout(hideTimeout);
                              hideTimeout = null;

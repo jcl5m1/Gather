@@ -1,10 +1,68 @@
 import * as THREE from 'three';
-import { Trajectory, TrajectoryRender, TransferTrajectoryRender, TransferTrajectoryRenderer } from './trajectory';
+import { Trajectory, TrajectoryRender, TrajectoryRenderer } from './trajectory';
 import { config } from './config';
 import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, formatVelocity, formatTime, formatDistanceWithAstronomicalUnits } from './units';
 import { LengthVector3, VelocityVector3 } from './unitsVector3';
 import { G, calculateInitialE, getAnalyticalState, calculateOrbitBasis, calculateEllipticalPositionFromBasis, BezierCurve } from './orbitUtils';
 import { gravitationalConstantUnit } from './units';
+
+export interface TransferTrajectoryRender extends TrajectoryRender {
+    updateTransferMarkers(startPos: THREE.Vector3 | null, endPos: THREE.Vector3 | null, visible: boolean): void;
+}
+
+export class TransferTrajectoryRenderer extends TrajectoryRenderer implements TransferTrajectoryRender {
+    // Markers
+    private departStartLoc: THREE.Sprite;
+    private departStopLoc: THREE.Sprite;
+    
+    constructor(scene: THREE.Scene, orbitColor: number = 0xffff00) {
+        super(scene, orbitColor);
+
+        // Simplified start/end markers
+        const dotTexture = this.createDotTexture(orbitColor);
+        // createSprite multiplies scale by 0.1. Passing 0.15 results in 0.015, which is visible (similar to OrbitalBody 0.01)
+        const scale = 0.15; 
+        this.departStartLoc = this.createSprite(dotTexture, scale);
+        this.departStopLoc = this.createSprite(dotTexture, scale);
+        
+        this.departStartLoc.visible = false;
+        this.departStopLoc.visible = false;
+        
+        this.container.add(this.departStartLoc, this.departStopLoc);
+    }
+
+    updateTransferMarkers(startPos: THREE.Vector3 | null, endPos: THREE.Vector3 | null, visible: boolean): void {
+        if (visible && startPos) {
+            this.departStartLoc.position.copy(startPos);
+            this.departStartLoc.visible = true;
+        } else {
+            this.departStartLoc.visible = false;
+        }
+
+        if (visible && endPos) {
+            this.departStopLoc.position.copy(endPos);
+            this.departStopLoc.visible = true;
+        } else {
+            this.departStopLoc.visible = false;
+        }
+    }
+
+    override cleanup(): void {
+        [
+            this.departStartLoc,
+            this.departStopLoc
+        ].forEach(obj => {
+            if (obj.parent === this.container) this.container.remove(obj);
+            if (obj instanceof THREE.Line || obj instanceof THREE.Sprite) {
+                if (obj.geometry) obj.geometry.dispose();
+                if (obj.material instanceof THREE.Material) {
+                    obj.material.dispose();
+                }
+            }
+        });
+        super.cleanup();
+    }
+}
 
 export class TransferTrajectory extends Trajectory {
     // Transfer Annotation Markers
@@ -105,11 +163,14 @@ export class TransferTrajectory extends Trajectory {
         // Dynamic Position Insertion
         // We manually trigger updateOrbitVisualization here because TransferTrajectory might not be owned by an OrbitalBody
         // that handles this automatically.
-        const currentT = this.getBezierT(currentTime);
-        const currentPos = this.getPosition(currentTime);
-        if (currentPos) {
-            this.updateOrbitVisualization(currentT, currentPos);
-        }
+        // const currentT = this.getBezierT(currentTime);
+        // const currentPos = this.getPosition(currentTime);
+        // if (currentPos) {
+        //   this.updateOrbitVisualization(currentT, currentPos);
+        // }
+        
+        // Update the visual clipping based on current state
+        this.updateTransferClip();
 
 
 
@@ -267,70 +328,161 @@ export class TransferTrajectory extends Trajectory {
     }
 
     calculateFromState(position: LengthVector3, velocity: VelocityVector3, centralBodyMass: Mass, startTime: Time): void {
-        // 1. Calculate Standard Orbit
+        // 1. Calculate Standard Orbit using superclass (Math-Free Architecture)
         super.calculateFromState(position, velocity, centralBodyMass, startTime);
         
-        // 2. Ensure Bezier estimation is enabled and closed loop is disabled
+        // 2. Ensure Bezier estimation is enabled for smooth rendering
         this.useBezierEstimation = true;
         this._isClosedLoop = false; // Disable closed loop to prevent tails
 
-        // 3. Segment the line: only keep points between start and stop times
-        if (this._transferStartTime && this._transferEndTime) {
-            // Get normalized T values (0..1) for start/end based on orbital period
-            const startNormalizedTime = this.getBezierT(this._transferStartTime);
-            const endNormalizedTime = this.getBezierT(this._transferEndTime);
+        // 3. Update the visual clipping for the renderer
+        // Moved to update() loop
+        // this.updateTransferClip();
+    }
 
-            // Add exact start/end points to ensure the line goes exactly to the markers
-            // We use the exact `getBezierT` logic as applied above
-            [this._transferStartTime, this._transferEndTime].forEach(simulationTime => {
-                const normalizedTime = this.getBezierT(simulationTime);
-                const state = this.getBezierState(simulationTime);
-                
-                // Add if not already present (approx check) and position is valid
-                if (state.position && !this._bezierPoints.some(p => Math.abs(p.t - normalizedTime) < 0.000001)) {
-                    this._bezierPoints.push({ position: state.position, t: normalizedTime });
-                }
-            });
+    /**
+     * Filter points for the renderer to only show the transfer segment
+     * This does NOT modify the underlying geometry calculation, only the visual representation
+     */
+    private updateTransferClip(): void {
+        if (!this._transferStartTime || !this._transferEndTime) return;
 
-            // Filter and Sort based on segment logic
-            let segmentedPoints: { position: THREE.Vector3, t: number }[] = [];
+        // Get normalized T values
+        const startNormalizedTime = this.getBezierT(this._transferStartTime);
+        const endNormalizedTime = this.getBezierT(this._transferEndTime);
 
-            // Add clean start/end points to ensure coverage
-            // Note: We use the already populated _bezierPoints which now includes the exact start/end
+        // Filter points for visualization
+        let segmentedPoints: { position: THREE.Vector3, t: number, simulationTime?: number }[] = [];
+
+        if (startNormalizedTime <= endNormalizedTime) {
+            // Standard case
+            segmentedPoints = this._bezierPoints
+                .filter(p => p.t >= startNormalizedTime && p.t <= endNormalizedTime)
+                .sort((a, b) => a.t - b.t);
+        } else {
+            // Wrap-around case
+            const segmentA = this._bezierPoints
+                .filter(p => p.t >= startNormalizedTime)
+                .sort((a, b) => a.t - b.t);
             
-            if (startNormalizedTime <= endNormalizedTime) {
-                // Standard case: segment within [0, 1] range
-                segmentedPoints = this._bezierPoints
-                    .filter(p => p.t >= startNormalizedTime && p.t <= endNormalizedTime)
-                    .sort((a, b) => a.t - b.t);
-            } else {
-                // Wrap-around case (e.g. crossing 1.0/0.0)
-                const segmentA = this._bezierPoints
-                    .filter(p => p.t >= startNormalizedTime)
-                    .sort((a, b) => a.t - b.t);
-                
-                const segmentB = this._bezierPoints
-                    .filter(p => p.t <= endNormalizedTime)
-                    .sort((a, b) => a.t - b.t);
-                
-                // Construct ordered array: [startNormalizedTime ... 1.0] -> [0.0 ... endNormalizedTime]
-                segmentedPoints = [...segmentA, ...segmentB];
-            }
+            const segmentB = this._bezierPoints
+                .filter(p => p.t <= endNormalizedTime)
+                .sort((a, b) => a.t - b.t);
+            
+            segmentedPoints = [...segmentA, ...segmentB];
+        }
 
-            // Explicitly verify we have points, if not add start/end simply?
-            if (segmentedPoints.length < 2) {
-                 // Fallback if filtering failed (e.g. very short segment)
-                 // We rely on the exact points we added earlier
-                 segmentedPoints = this._bezierPoints.filter(p => 
-                     Math.abs(p.t - startNormalizedTime) < 1e-6 || Math.abs(p.t - endNormalizedTime) < 1e-6
-                 ).sort((a, b) => a.t - b.t);
-            }
+        // Add start connection
+        const startPos = this.getPosition(this._transferStartTime);
+        if (startPos) {
+            segmentedPoints.unshift({
+                position: startPos, 
+                t: startNormalizedTime,
+                simulationTime: this._transferStartTime
+            });
+        }
 
-            // Replace internal points with segmented version to clean up rendering
-            this._bezierPoints = segmentedPoints;
+        // Add end connection
+        const endPos = this.getPosition(this._transferEndTime);
+        if (endPos) {
+            segmentedPoints.push({
+                position: endPos,
+                t: endNormalizedTime, 
+                simulationTime: this._transferEndTime
+            });
+        }
 
-            // Update renderer with ONLY the segmented points
-            this._renderer.updateBezierLine(segmentedPoints.map(p => p.position));
+        // Update renderer with clipped points
+        this._renderer.updateBezierLine(segmentedPoints.map(p => p.position));
+        
+        // Update LUT markers for raycasting
+        if (this._renderer.updateLUTMarkers) {
+            this._renderer.updateLUTMarkers(segmentedPoints.map(p => p.position));
         }
     }
+
+    /**
+     * Get the hit points for raycasting
+     */
+    getLUTPoints(): THREE.Points | null {
+        if (this._renderer && this._renderer.lutPoints) {
+            return this._renderer.lutPoints;
+        }
+        return null;
+    }
+
+    /**
+     * Get data for a specific point index (from raycast intersection)
+     */
+    getPointData(index: number): string[] {
+        if (index < 0 || index >= this._bezierPoints.length) return [];
+        
+        const point = this._bezierPoints[index];
+        const pointTime = point.simulationTime !== undefined ? point.simulationTime : this.getTimeFromT(point.t);
+        
+        // Calculate velocity at this time
+        const state = this.getBezierState(pointTime);
+        const velocity = state.velocity ? new THREE.Vector3().copy(state.velocity).length() : 0;
+        const altitude = state.position ? state.position.length() - config.bodies.earth.radius : 0; // Approx if Earth centered
+        
+        // Calculate delta T relative to start
+        const dt = pointTime - this._transferStartTime;
+        const prefix = dt >= 0 ? '+' : '-';
+        
+        return [
+            `T${prefix}${formatTime(Measure.of(Math.abs(dt), seconds), true)}`,
+            `Vel: ${velocity.toFixed(2)} km/s`,
+            `Alt: ${altitude.toFixed(0)} km`
+            // `Idx: ${index}`
+        ];
+    }
+    
+    /**
+     * Helper to reverse t back to time
+     * For elliptical, t is 0..1 mapping to 0..period
+     */
+    private getTimeFromT(t: number): number {
+        // Simple linear approximation for now if strict inverse isn't available
+        // But since we know the mapping is linear with Mean Anomaly usually, checks:
+        // t = (time - T0) / Period (wrapped)
+        // So time = t * Period + T0
+        
+        // However, t might be wrapped.
+        // We know the transfer is between start and end.
+        // Let's assume t maps linearly to the period roughly, and find the closest time within the transfer window.
+        
+        // Better: use the trajectory parameters (period, etc.)
+        if (this.parameters && this.parameters.period.value > 0) {
+            const period = this.parameters.period.value;
+            // t is normalized 0..1
+            
+            // We need to match it to the transfer window
+            // Start T
+            const startT = this.getBezierT(this._transferStartTime);
+            
+            // Calculate time since periapsis (which is t=0 typically)
+            // This is rough.
+            // Let's rely on the property that for most of our linear sampling,
+            // we probably want to just interpolate? No, exact physics is better.
+            
+            // Fallback: Just return rough estimate or use the exact start/end if close
+            if (pointMatches(t, this.getBezierT(this._transferStartTime))) return this._transferStartTime;
+            if (pointMatches(t, this.getBezierT(this._transferEndTime))) return this._transferEndTime;
+            
+            // Just return a rough timestamp based on period relative to start
+            // This needs improvement but works for debug
+             const timeSincePeriapsis = t * period;
+             // Now find the periapsis time close to transfer start
+             // T_sim = k*P + timeSincePeriapsis
+             
+             // Rough guess:
+             return this._transferStartTime + (t - startT) * period; // Very rough if wrapping happens
+        }
+        
+        return 0;
+    }
+}
+
+function pointMatches(t1: number, t2: number): boolean {
+    return Math.abs(t1 - t2) < 0.0001;
 }

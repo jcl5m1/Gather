@@ -17,6 +17,7 @@ export class TooltipManager extends UIWindow {
     // private controlsElement: HTMLDivElement;
     
     private currentBody: OrbitalBody | null = null;
+    private fixedPosition: THREE.Vector3 | null = null;
     private isVisible: boolean = false;
     
     // Callbacks
@@ -149,6 +150,7 @@ export class TooltipManager extends UIWindow {
      * Show tooltip for a body
      */
     showTooltip(body: OrbitalBody): void {
+        this.fixedPosition = null; // Clear fixed position
         this.currentBody = body;
         // Update Title via UIWindow method
         this.setTitle(body.getName());
@@ -157,6 +159,31 @@ export class TooltipManager extends UIWindow {
         this.updateButtons();
         
         this.show(); // Call UIWindow.show()
+        this.isVisible = true;
+        this.updatePosition();
+    }
+
+    /**
+     * Show generic data tooltip at a specific 3D position
+     */
+    showDataTooltip(title: string, data: string[], position: THREE.Vector3): void {
+        this.currentBody = null;
+        this.fixedPosition = position.clone();
+        this.setTitle(title);
+        
+        const content = this.getContentArea();
+        content.innerHTML = '';
+        content.style.padding = '6px 8px';
+        content.style.display = 'block';
+        
+        data.forEach(line => {
+            const div = document.createElement('div');
+            div.textContent = line;
+            div.style.cssText = 'color: #ddd; font-family: monospace; font-size: 11px; margin-bottom: 2px;';
+            content.appendChild(div);
+        });
+        
+        this.show();
         this.isVisible = true;
         this.updatePosition();
     }
@@ -188,10 +215,17 @@ export class TooltipManager extends UIWindow {
      * Update tooltip position based on current body position
      */
     updatePosition(): void {
-        if (!this.isVisible || !this.currentBody) return;
+        if (!this.isVisible) return;
         
-        // Get body position in world space
-        const worldPos = this.currentBody.getPosition();
+        let worldPos: THREE.Vector3;
+        
+        if (this.currentBody) {
+             worldPos = this.currentBody.getPosition();
+        } else if (this.fixedPosition) {
+             worldPos = this.fixedPosition;
+        } else {
+             return; 
+        }
         
         // Project to screen space
         const v = worldPos.clone();

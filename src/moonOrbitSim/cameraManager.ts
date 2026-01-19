@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { OrbitalBody } from './orbitalBody';
 import { config } from './config';
 import { Body } from './types';
+import { TransferTrajectory } from './transferTrajectory';
 
 /**
  * CameraManager class that handles all camera-related functionality
@@ -307,6 +308,67 @@ export class CameraManager extends Body {
      */
     public getHoveredBody(): OrbitalBody | null {
         return this.raycastBody();
+    }
+
+    /**
+     * Get the transfer trajectory point currently under the mouse cursor
+     */
+    public getHoveredTransferPoint(): { transfer: TransferTrajectory, index: number, point: THREE.Vector3 } | null {
+        // Reuse current mouse coordinates
+        this._raycaster.setFromCamera(this._mouse, this._camera);
+        
+        const originalThreshold = this._raycaster.params.Points.threshold;
+        // Set a reasonable threshold for picking (points are visible even if disconnected from line)
+        // Since we disabled sizeAttenuation (screen space size), ideally we want pixel threshold.
+        // But Three.js Raycaster usually uses world units for threshold.
+        // We'll pick a value that allows easy selection without too much clutter.
+        this._raycaster.params.Points.threshold = 2000; // 2000 km tolerance
+
+        let closestHit: { distance: number, transfer: TransferTrajectory, index: number, point: THREE.Vector3 } | null = null;
+        
+        // Check all valid bodies
+        const bodies = this.getAllBodies();
+        
+        for (const body of bodies) {
+            if (!body) continue; // Skip free camera (null)
+            
+            // Check transfer if it exists
+            // Cast to any to access generic getTransferTrajectory if specific type isn't fully imported/typed here
+            // (Though we imported TransferTrajectory class, OrbitalBody definition is separate)
+            const b = body as any;
+            if (typeof b.getTransferTrajectory === 'function') {
+                const transfer = b.getTransferTrajectory() as TransferTrajectory;
+                if (transfer && typeof transfer.getLUTPoints === 'function') {
+                    const points = transfer.getLUTPoints();
+                    if (points) {
+                        const intersects = this._raycaster.intersectObject(points, false);
+                        if (intersects.length > 0) {
+                            const hit = intersects[0];
+                            if (!closestHit || hit.distance < closestHit.distance) {
+                                closestHit = {
+                                    distance: hit.distance,
+                                    transfer: transfer,
+                                    index: hit.index!,
+                                    point: hit.point
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        this._raycaster.params.Points.threshold = originalThreshold; // Restore
+        
+        if (closestHit) {
+            return {
+                transfer: closestHit.transfer,
+                index: closestHit.index,
+                point: closestHit.point
+            };
+        }
+        
+        return null;
     }
 
     private _isUserInteracting: boolean = false;

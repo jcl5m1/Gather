@@ -592,63 +592,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
     }
 }
 
-export interface TransferTrajectoryRender extends TrajectoryRender {
-    updateTransferMarkers(startPos: THREE.Vector3 | null, endPos: THREE.Vector3 | null, visible: boolean): void;
-}
 
-export class TransferTrajectoryRenderer extends TrajectoryRenderer implements TransferTrajectoryRender {
-    // Markers
-    private departStartLoc: THREE.Sprite;
-    private departStopLoc: THREE.Sprite;
-    
-    constructor(scene: THREE.Scene, orbitColor: number = 0xffff00) {
-        super(scene, orbitColor);
-
-        // Simplified start/end markers
-        const dotTexture = this.createDotTexture(orbitColor);
-        // createSprite multiplies scale by 0.1. Passing 0.15 results in 0.015, which is visible (similar to OrbitalBody 0.01)
-        const scale = 0.15; 
-        this.departStartLoc = this.createSprite(dotTexture, scale);
-        this.departStopLoc = this.createSprite(dotTexture, scale);
-        
-        this.departStartLoc.visible = false;
-        this.departStopLoc.visible = false;
-        
-        this.container.add(this.departStartLoc, this.departStopLoc);
-    }
-
-    updateTransferMarkers(startPos: THREE.Vector3 | null, endPos: THREE.Vector3 | null, visible: boolean): void {
-        if (visible && startPos) {
-            this.departStartLoc.position.copy(startPos);
-            this.departStartLoc.visible = true;
-        } else {
-            this.departStartLoc.visible = false;
-        }
-
-        if (visible && endPos) {
-            this.departStopLoc.position.copy(endPos);
-            this.departStopLoc.visible = true;
-        } else {
-            this.departStopLoc.visible = false;
-        }
-    }
-
-    override cleanup(): void {
-        [
-            this.departStartLoc,
-            this.departStopLoc
-        ].forEach(obj => {
-            if (obj.parent === this.container) this.container.remove(obj);
-            if (obj instanceof THREE.Line || obj instanceof THREE.Sprite) {
-                if (obj.geometry) obj.geometry.dispose();
-                if (obj.material instanceof THREE.Material) {
-                    obj.material.dispose();
-                }
-            }
-        });
-        super.cleanup();
-    }
-}
 
 // ============================================================================
 // Trajectory Parameters and Type
@@ -677,7 +621,7 @@ export class Trajectory {
     protected _renderer: TrajectoryRender; // Changed type to TrajectoryRender
     public type: TrajectoryType;
     protected _analyticalPoints: THREE.Vector3[] = [];  // Protected - use underscore prefix
-    protected _bezierPoints: { position: THREE.Vector3, t: number }[] = [];      // Protected - use underscore prefix
+    protected _bezierPoints: { position: THREE.Vector3, t: number, simulationTime?: number }[] = [];      // Protected - use underscore prefix
     protected _bezierCurves: any[] = [];               // Protected - use underscore prefix
     protected _periapsisPoint?: LengthVector3;         // Protected - use underscore prefix
     protected _apoapsisPoint?: LengthVector3;          // Protected - use underscore prefix
