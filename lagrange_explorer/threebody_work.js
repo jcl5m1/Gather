@@ -682,7 +682,7 @@ function powerIteration(M, invert=false) {
 }
 
 function generateManifolds(duration) {
-    const { l1 } = solveLagrangePoints();
+    const { l1, l2 } = solveLagrangePoints();
     
     // 1. Compute L1 Lyapunov Orbit
     const amp_km = 3500;
@@ -705,11 +705,11 @@ function generateManifolds(duration) {
     
     // We will store orbit points and STMs along the orbit for sampling
     const orbitSamples = [];
-    const sampleInterval = Math.floor(steps / 20); // 20 samples
+    const sampleInterval = Math.floor(steps / 16); // 16 samples
     
     let t = 0;
     for(let i=0; i<=steps; i++) {
-        if (i % sampleInterval === 0 && orbitSamples.length < 20) {
+        if (i % sampleInterval === 0 && orbitSamples.length < 16) {
             // Store current state and STM phi(t, 0)
             const phi_t_0 = s.slice(4);
             const state_t = { x: s[0], y: s[1], vx: s[2], vy: s[3] };
@@ -838,6 +838,127 @@ function generateManifolds(duration) {
             manifolds.push({ type: 'stable', path: res_s.path }); 
         });
     });
+
+    // ========================================================================
+    // L2 STABLE MANIFOLDS (Interior & Exterior)
+    // ========================================================================
+    {
+        // 1. Compute L2 Lyapunov Orbit
+        const amp_km = 3500; 
+        const l2_orbit = computeLyapunov(l2, amp_km);
+        
+        // Initial State
+        const x0 = l2 - kmToNorm(amp_km);
+        const vy0 = l2_orbit.vy0;
+        const period = l2_orbit.period;
+        
+        // 2. Monodromy Matrix (M) - Reusing buffers
+        let s = new Float64Array(20);
+        s[0] = x0; s[1] = 0; s[2] = 0; s[3] = vy0;
+        s[4] = 1; s[9] = 1; s[14] = 1; s[19] = 1; 
+        
+        const steps = 2000;
+        const dt = period / steps;
+        
+        const orbitSamples = [];
+        const sampleInterval = Math.floor(steps / 16); 
+        
+        let t = 0;
+        for(let i=0; i<=steps; i++) {
+            if (i % sampleInterval === 0 && orbitSamples.length < 16) {
+                const phi_t_0 = s.slice(4);
+                const state_t = { x: s[0], y: s[1], vx: s[2], vy: s[3] };
+                orbitSamples.push({ state: state_t, phi: phi_t_0 });
+            }
+            s = rk4Variational(s, dt, t);
+            t += dt;
+        }
+        
+        const M = s.slice(4);
+        // Stable Eigenvector (v_s) -> Backward
+        const v_s = powerIteration(M, true); 
+        // Unstable Eigenvector (v_u) -> Forward
+        const v_u = powerIteration(M, false);
+
+        const epsilon = 1e-5; 
+        const moon_x = 1 - MASS_RATIO;
+        const earth_x = -MASS_RATIO;
+        
+        orbitSamples.forEach((sample) => {
+            let local_vs = matVecMul(sample.phi, v_s);
+            let local_vu = matVecMul(sample.phi, v_u);
+            
+            const norm_s = Math.sqrt(local_vs[0]**2 + local_vs[1]**2 + local_vs[2]**2 + local_vs[3]**2);
+            const norm_u = Math.sqrt(local_vu[0]**2 + local_vu[1]**2 + local_vu[2]**2 + local_vu[3]**2);
+            
+            for(let k=0; k<4; k++) local_vs[k] /= norm_s;
+            for(let k=0; k<4; k++) local_vu[k] /= norm_u;
+            
+            // --- L2 STABLE MANIFOLDS (Backward) ---
+            [1, -1].forEach(dir => {
+                const state_s = {
+                    x: sample.state.x + epsilon * local_vs[0] * dir,
+                    y: sample.state.y + epsilon * local_vs[1] * dir,
+                    vx: sample.state.vx + epsilon * local_vs[2] * dir,
+                    vy: sample.state.vy + epsilon * local_vs[3] * dir
+                };
+                
+                // For L2 (Beyond Moon, x > 1-mu):
+                // Interior Branch (from Moon): Goes Left (-x direction from L2)
+                // Exterior Branch (from Outside): Goes Right (+x direction from L2)
+                
+                // Stable Manifold is arriving at L2.
+                // We integrate BACKWARD.
+                // If perturbed state is Left of sample (x < x_sample), it leads towards Moon (Interior).
+                // If perturbed state is Right of sample (x > x_sample), it leads away (Exterior).
+                
+                const is_interior = (state_s.x < sample.state.x);
+
+                const stopFn = is_interior
+                    ? (s) => (s.x <= moon_x) 
+                    : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0); 
+
+                const prop_duration = is_interior ? duration : duration * 8;
+                const max_steps = is_interior ? 10000 : 40000;
+                
+                const res_s = propagate(state_s, prop_duration, -0.002, 0, max_steps, true, stopFn);
+                
+                if (res_s.path.length > 10) {
+                    manifolds.push({ type: 'stable', path: res_s.path }); 
+                }
+            });
+
+            // --- L2 UNSTABLE MANIFOLDS (Forward) ---
+            [1, -1].forEach(dir => {
+                const state_u = {
+                    x: sample.state.x + epsilon * local_vu[0] * dir,
+                    y: sample.state.y + epsilon * local_vu[1] * dir,
+                    vx: sample.state.vx + epsilon * local_vu[2] * dir,
+                    vy: sample.state.vy + epsilon * local_vu[3] * dir
+                };
+
+                // Unstable Manifold is departing L2.
+                // We integrate FORWARD.
+                // If perturbed state is Left (x < sample.x), it falls into the Moon well (Interior).
+                // If perturbed state is Right (x > sample.x), it escapes outward (Exterior).
+
+                const is_interior = (state_u.x < sample.state.x);
+
+                const stopFn = is_interior
+                    ? (s) => (s.x <= moon_x) // Stop at Moon vertical line
+                    : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0); // Loop around Earth
+
+                const prop_duration = is_interior ? duration : duration * 8;
+                const max_steps = is_interior ? 10000 : 40000;
+
+                const res_u = propagate(state_u, prop_duration, 0.002, 0, max_steps, true, stopFn);
+
+                if (res_u.path.length > 10) {
+                    manifolds.push({ type: 'unstable', path: res_u.path });
+                }
+            });
+        });
+    }
 
     postMessage({
         type: 'MANIFOLDS_GENERATED',
