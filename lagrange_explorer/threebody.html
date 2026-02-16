@@ -459,10 +459,12 @@ function initializeLEO(altitude_km) {
 // ============================================================================
 // WORKER SETUP
 // ============================================================================
-const searchWorker = new Worker('ballistic_worker.js');
+const searchWorker = new Worker('threebody_work.js');
 
 // Request System Info immediately
 searchWorker.postMessage({ type: 'COMPUTE_SYSTEM_INFO' });
+// Trigger manifold generation for visualization
+searchWorker.postMessage({ type: 'GENERATE_MANIFOLDS' });
 
 let systemInfo = null;
 
@@ -851,12 +853,25 @@ function draw() {
         
         // Draw Manifold Regions (Faint)
         if (manifoldPaths && manifoldPaths.length > 0) {
-            ctx.lineWidth = 2; // Faint but thick
-            manifoldPaths.forEach(path => {
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)'; // Very faint white/gray
+            ctx.lineWidth = 1.5; 
+            manifoldPaths.forEach(item => {
+                // Support both old format (array) and new format (object)
+                const path = item.path || item;
+                const type = item.type || 'unknown';
+                
+                if (type === 'stable') {
+                    ctx.strokeStyle = 'rgba(0, 255, 136, 0.1)'; // Greenish for stable (approaching)
+                } else if (type === 'unstable') {
+                    ctx.strokeStyle = 'rgba(255, 80, 80, 0.1)'; // Reddish for unstable (departing)
+                } else {
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)'; // Fallback
+                }
+
+                if (!path || path.length < 2) return;
+
                 ctx.beginPath();
                 let started = false;
-                for (let i = 0; i < path.length; i += 2) { // Subsample for perf
+                for (let i = 0; i < path.length; i += 2) { 
                     const p = worldToCanvas(path[i].x, path[i].y);
                     if (!started) {
                         ctx.moveTo(p.x, p.y);
