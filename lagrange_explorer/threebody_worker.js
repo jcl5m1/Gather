@@ -97,121 +97,227 @@ function getEigenDecomposition(l_point_x) {
 
 function computeLyapunov(l_x, amplitude_km) {
     console.log(`Computing Lyapunov orbit at ${l_x.toFixed(5)} with amplitude ${amplitude_km} km`);
-    const amp_norm = kmToNorm(amplitude_km);
     const decomp = getEigenDecomposition(l_x);
     const nu = decomp.nu;
     const Uxx = decomp.Uxx;
     
-    // Initial State: Start on the LEFT side of the Lagrange point
-    // x = L - A
-    let x0 = l_x - amp_norm;
-    
-    // Velocity Guess (Linear Theory)
-    // vy > 0 (Up) to create +x Coriolis force (Right) to counteract -x Gravity (Left)
-    const vy_guess = 0.5 * (nu*nu + Uxx) * amp_norm; 
-    let best_vy = Math.abs(vy_guess); 
+    // Internal Helper: Single Shooting Solver
+    // Internal Helper: Single Shooting Solver
+    const solveForAmp = (target_amp_norm, guess_vy) => {
+        let best_vy = Math.abs(guess_vy);
+        const x0 = l_x - target_amp_norm;
+        
+        let final_s = null;
+        let final_period = 0;
+        let converged = false;
 
-    // Differential Correction (Single Shooting)
-    for (let iter=0; iter<30; iter++) {
-        let s = { x: x0, y: 0, vx: 0, vy: best_vy };
-        
-        let dt = 0.005;
-        let t = 0;
-        let crossed = false;
-        
-        // Duration limit: slightly more than half period
-        // Period T = 2*PI/nu. Half T = PI/nu.
-        const half_period = Math.PI / nu;
-        const limit_t = half_period * 1.5; 
-        
-        while (t < limit_t) {
-            const next = rk4Step(s, dt, t);
+        // Single Shooting Loop
+        for (let iter=0; iter<50; iter++) { // Increased iterations
+            let s = { x: x0, y: 0, vx: 0, vy: best_vy };
             
-            // Crossing check (y changes sign)
-            if (s.y * next.y < 0 && t > 0.1) { 
-                const frac = -s.y / (next.y - s.y);
-                // Linear interpolate to exact crossing
-                s = {
-                    x: s.x + frac * (next.x - s.x),
-                    y: 0, 
-                    vx: s.vx + frac * (next.vx - s.vx),
-                    vy: s.vy + frac * (next.vy - s.vy)
-                };
-                t += dt * frac;
-                crossed = true;
-                break;
-            }
+            let dt = 0.002; 
+            let t = 0;
+            let crossed = false;
             
-            // Abort if lost
-            if (Math.abs(s.y) > 4 * amp_norm || Math.abs(s.x - l_x) > 4 * amp_norm) break; 
+            // Allow for significant period variation
+            const limit_t = (Math.PI / nu) * 4.0;
             
-            // Abort if crashed into moon
-            if (l_x > 0.5) {
+            while (t < limit_t) {
+                const next = rk4Step(s, dt, t);
+                
+                // Crossing check (y changes sign)
+                if (s.y * next.y < 0 && t > 0.1) { 
+                    const frac = -s.y / (next.y - s.y);
+                    s = {
+                        x: s.x + frac * (next.x - s.x),
+                        y: 0, 
+                        vx: s.vx + frac * (next.vx - s.vx),
+                        vy: s.vy + frac * (next.vy - s.vy)
+                    };
+                    t += dt * frac;
+                    crossed = true;
+                    break;
+                }
+                
+                // Escape checks
+                const dist = Math.abs(s.x - l_x);
+                // Flexible bound: at least 60,000km, or 4x amplitude
+                const max_dist = Math.max(0.15, 4 * target_amp_norm); 
+                if (dist > max_dist || Math.abs(s.y) > max_dist) break;
+                
+                // Crash into Moon check
                 const dx_moon = s.x - (1 - MASS_RATIO);
-                const r_moon = Math.sqrt(dx_moon*dx_moon + s.y*s.y);
-                if (r_moon < kmToNorm(MOON_RADIUS)) break;
-            }
+                if (Math.sqrt(dx_moon*dx_moon + s.y*s.y) < kmToNorm(MOON_RADIUS)) break;
 
-            s = next;
-            t += dt;
-        }
-        
-        if (!crossed) {
-             // Heuristic retry
-             if (iter < 5) best_vy *= 1.05; 
-             else best_vy *= 0.95;
-             continue;
-        }
-        
-        // Target: vx = 0 at crossing.
-        if (Math.abs(s.vx) < 1e-9) break; // Converged
-        
-        // Calculate Jacobian term d(vx_final) / d(vy_initial) numerically
-        const d_vy = 1e-6;
-        let s_p = { x: x0, y: 0, vx: 0, vy: best_vy + d_vy };
-        let t_p = 0;
-        let p_crossed = false;
-        
-        while (t_p < limit_t) {
-            const next = rk4Step(s_p, dt, t_p);
-            if (s_p.y * next.y < 0 && t_p > 0.1) {
-                const frac = -s_p.y / (next.y - s_p.y);
-                s_p = {
-                    x: s_p.x + frac * (next.x - s_p.x),
-                    y: 0,
-                    vx: s_p.vx + frac * (next.vx - s_p.vx),
-                    vy: s_p.vy + frac * (next.vy - s_p.vy)
-                };
-                p_crossed = true;
+                s = next;
+                t += dt;
+            }
+            
+            if (!crossed) {
+                 // Severe failure to cross y=0 inside bounds/time
+                 if (iter < 20) best_vy *= 1.05; // Try adding energy
+                 else best_vy *= 0.95;
+                 continue;
+            }
+            
+            final_s = s;
+            final_period = 2 * t;
+
+            // Convergence check
+            if (Math.abs(s.vx) < 1e-10) {
+                converged = true;
                 break;
             }
-            if (Math.abs(s_p.y) > 4 * amp_norm) break;
-            s_p = next;
-            t_p += dt;
+            
+            // Newton Step
+            const d_vy = 1e-7;
+            let s_p = { x: x0, y: 0, vx: 0, vy: best_vy + d_vy };
+            let t_p = 0;
+            let p_crossed = false;
+            
+            while (t_p < limit_t) {
+                const next = rk4Step(s_p, dt, t_p);
+                if (s_p.y * next.y < 0 && t_p > 0.1) {
+                    const frac = -s_p.y / (next.y - s_p.y);
+                    s_p = {
+                        x: s_p.x + frac * (next.x - s_p.x),
+                        y: 0,
+                        vx: s_p.vx + frac * (next.vx - s_p.vx),
+                        vy: s_p.vy + frac * (next.vy - s_p.vy)
+                    };
+                    p_crossed = true;
+                    break;
+                }
+                const dist = Math.abs(s_p.x - l_x);
+                 const max_dist = Math.max(0.15, 4 * target_amp_norm);
+                if (dist > max_dist || Math.abs(s_p.y) > max_dist) break;
+                s_p = next;
+                t_p += dt;
+            }
+            
+            if (!p_crossed) {
+                 best_vy *= 1.001; 
+                 continue;
+            }
+            
+            const grad = (s_p.vx - s.vx) / d_vy;
+            
+            if (Math.abs(grad) < 1e-12) {
+                 best_vy += (s.vx > 0 ? -1 : 1) * 0.001; 
+            } else {
+                 const adj = -s.vx / grad;
+                 // Damped Newton
+                 let step = adj;
+                 const max_change = best_vy * 0.1; // Allowed 10% change
+                 if (Math.abs(step) > max_change) step = max_change * Math.sign(step);
+                 best_vy += step;
+            }
+        }
+        return { vy: best_vy, period: final_period, converged: converged };
+    };
+
+    // ADAPTIVE STEP-SIZE CONTINUATION STRATEGY
+    // We maintain a history of successful solves (amp, vy)
+    // We extrapolate the next guess from the last 2 points.
+    // If a step fails, we halve the step size and retry.
+    
+    // History: { a: dist_km, v: vy }
+    
+    let history = [];
+    
+    // Bootstrap with very small amplitude (Linear Theory is accurate here)
+    const seed_amp_km = 100;
+    const seed_amp_norm = kmToNorm(seed_amp_km);
+    const seed_vy = 0.5 * (nu*nu + Uxx) * seed_amp_norm;
+    
+    // Solve seed
+    const seed_res = solveForAmp(seed_amp_norm, seed_vy);
+    
+    // Always add seed 
+    history.push({ a: seed_amp_km, v: seed_res.vy });
+    
+    let current_amp_km = seed_amp_km;
+    let step_size_km = 500; // Start with bigger steps and adapt down
+    
+    while (current_amp_km < amplitude_km) {
+        // If we are close to target, just step to target
+        if (current_amp_km + step_size_km > amplitude_km) {
+            step_size_km = amplitude_km - current_amp_km;
         }
         
-        if (!p_crossed) {
-             best_vy *= 1.01;
-             continue;
-        }
+        const next_amp_km = current_amp_km + step_size_km;
+        const next_amp_norm = kmToNorm(next_amp_km);
         
-        const grad = (s_p.vx - s.vx) / d_vy;
-        
-        if (Math.abs(grad) < 1e-12) {
-             best_vy += (s.vx > 0 ? -1 : 1) * 0.001; 
+        // Extrapolate Guess
+        let guess_vy;
+        const n = history.length;
+        if (n >= 2) {
+            const last = history[n-1];
+            const prev = history[n-2];
+            const slope = (last.v - prev.v) / (last.a - prev.a);
+            guess_vy = last.v + slope * (next_amp_km - last.a);
         } else {
-             const adj = -s.vx / grad;
-             const max_step = Math.abs(best_vy) * 0.2; 
-             best_vy += Math.max(-max_step, Math.min(max_step, adj));
+            // Linear through zero
+            const last = history[n-1];
+            guess_vy = last.v * (next_amp_km / last.a);
+        }
+        
+        const res = solveForAmp(next_amp_norm, guess_vy);
+        
+        if (res.converged) {
+            // Success: Advance
+            history.push({ a: next_amp_km, v: res.vy });
+            current_amp_km = next_amp_km;
+            
+            // Heuristic to increase step size if things are going smoothing
+            if (step_size_km < 1000 && n > 5) step_size_km *= 1.2;
+            if (step_size_km > 1000) step_size_km = 1000;
+        } else {
+            // Failure: Reduce Step Size
+            step_size_km *= 0.5;
+            
+            // Check for minimum step
+            if (step_size_km < 10) {
+                console.warn(`Failed to converge at ${next_amp_km}km even with small steps. Stopping continuation.`);
+                break; // Give up
+            }
         }
     }
     
-    // Generate full path (simulate for a few periods)
-    let final_s = { x: x0, y: 0, vx: 0, vy: best_vy };
-    const period_approx = 2 * Math.PI / nu;
-    const res = propagate(final_s, period_approx * 1.5, 0.01, 0, 1000, false);
+    // Final result is the last entry in history
+    let final_res = history[history.length - 1];
     
-    return { path: res.path, period: period_approx, vy0: best_vy, amplitude_km: amplitude_km };
+    let final_vy = final_res.v;
+    let effective_amp_km = final_res.a;
+    
+    // If we didn't reach target, try ONE LAST HAIL MARY at the full target 
+    // using the best extrapolation we have. 
+    if (Math.abs(effective_amp_km - amplitude_km) > 1.0) {
+         let guess_vy;
+         const n = history.length;
+         if (n >= 2) {
+            const last = history[n-1];
+            const prev = history[n-2];
+            const slope = (last.v - prev.v) / (last.a - prev.a);
+            guess_vy = last.v + slope * (amplitude_km - last.a);
+         } else {
+             guess_vy = final_res.v * (amplitude_km / final_res.a);
+         }
+         const res = solveForAmp(kmToNorm(amplitude_km), guess_vy);
+         
+         // Even if not converged, use it if it's better than nothing
+         if (res.converged || (res.period > 0 && Math.abs(res.vy) > 0)) {
+             final_vy = res.vy;
+             effective_amp_km = amplitude_km;
+         }
+    }
+    
+    const x0 = l_x - kmToNorm(effective_amp_km);
+    const period_approx = (2 * Math.PI / nu) * 1.5;
+    
+    const res = propagate({ x: x0, y: 0, vx: 0, vy: final_vy }, period_approx * 1.05, 0.01, 0, 1000, false);
+    
+    return { path: res.path, period: period_approx, vy0: final_vy, amplitude_km: amplitude_km };
 }
 
 function getPotential(x, y, z=0) {
