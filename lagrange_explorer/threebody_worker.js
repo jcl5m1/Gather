@@ -237,7 +237,6 @@ function solveLagrangePoints() {
     let l1 = 1 - MASS_RATIO - Math.pow(MASS_RATIO/3, 1/3); 
     for(let i=0; i<20; i++) {
         const val = f(l1);
-        // Approximate derivative
         const df = (f(l1+1e-6) - f(l1-1e-6)) / 2e-6; 
         l1 -= val/df;
     }
@@ -249,8 +248,20 @@ function solveLagrangePoints() {
         const df = (f(l2+1e-6) - f(l2-1e-6)) / 2e-6; 
         l2 -= val/df;
     }
+
+    // L3: Opposite side of Earth
+    let l3 = -(1 + 5/12 * MASS_RATIO);
+    for(let i=0; i<20; i++) {
+        const val = f(l3);
+        const df = (f(l3+1e-6) - f(l3-1e-6)) / 2e-6; 
+        l3 -= val/df;
+    }
+
+    // L4 and L5 (Analytical)
+    const l4 = { x: 0.5 - MASS_RATIO, y: Math.sqrt(3)/2 };
+    const l5 = { x: 0.5 - MASS_RATIO, y: -Math.sqrt(3)/2 };
     
-    return { l1, l2 };
+    return { l1, l2, l3, l4, l5 };
 }
 
 function rk4Step(s, dt, t_current) {
@@ -547,7 +558,7 @@ self.onmessage = function(e) {
         const { duration_norm = daysToNorm(60), amp_l1, amp_l2 } = payload || {};
         
         // RECOMPUTE Orbits with new amplitudes
-        const { l1, l2 } = solveLagrangePoints();
+        const { l1, l2, l3, l4, l5 } = solveLagrangePoints();
         const l1_orbit = computeLyapunov(l1, amp_l1);
         const l2_orbit = computeLyapunov(l2, amp_l2);
 
@@ -558,13 +569,16 @@ self.onmessage = function(e) {
             type: 'SYSTEM_INFO',
             payload: {
                 l1: { x: l1, decomp: l1_decomp, orbit: l1_orbit },
-                l2: { x: l2, decomp: l2_decomp, orbit: l2_orbit }
+                l2: { x: l2, decomp: l2_decomp, orbit: l2_orbit },
+                l3: { x: l3, y: 0 },
+                l4: l4,
+                l5: l5
             }
         });
 
         generateManifolds(duration_norm, amp_l1, amp_l2);
     } else if (type === 'COMPUTE_SYSTEM_INFO') {
-        const { l1, l2 } = solveLagrangePoints();
+        const { l1, l2, l3, l4, l5 } = solveLagrangePoints();
         const l1_decomp = getEigenDecomposition(l1);
         const l2_decomp = getEigenDecomposition(l2);
         
@@ -577,7 +591,10 @@ self.onmessage = function(e) {
             type: 'SYSTEM_INFO',
             payload: {
                 l1: { x: l1, decomp: l1_decomp, orbit: l1_orbit },
-                l2: { x: l2, decomp: l2_decomp, orbit: l2_orbit }
+                l2: { x: l2, decomp: l2_decomp, orbit: l2_orbit },
+                l3: { x: l3, y: 0 },
+                l4: l4,
+                l5: l5
             }
         });
     }
