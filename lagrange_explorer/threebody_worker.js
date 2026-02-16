@@ -404,7 +404,7 @@ function rk4Step(s, dt, t_current) {
 
 function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, stopOnCollision = true, customStop = null) {
     let s = { ...state };
-    let path = [{ x: s.x, y: s.y }];
+    let path = [{ x: s.x, y: s.y, vx: s.vx, vy: s.vy }];
     let t = 0;
     const is_backward = dt < 0;
     const abs_duration = Math.abs(duration);
@@ -448,11 +448,12 @@ function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, s
         }
         
         if (customStop && customStop(s, prev_s)) {
+            path.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy });
             break;
         }
         
         if (path.length < max_steps || Math.abs(t) >= abs_duration - 1e-9) {
-            path.push({ x: s.x, y: s.y });
+            path.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy });
         }
     }
     return { state: s, path, collision };
@@ -689,9 +690,9 @@ self.onmessage = function(e) {
         const l2_decomp = getEigenDecomposition(l2);
         
         // Compute Orbits
-        // Default amplitudes: L1=4000km, L2=15000km
-        const l1_orbit = computeLyapunov(l1, 4000);
-        const l2_orbit = computeLyapunov(l2, 15000);
+        // Default amplitudes: L1=10000km, L2=20000km
+        const l1_orbit = computeLyapunov(l1, 10000);
+        const l2_orbit = computeLyapunov(l2, 20000);
         
         postMessage({
             type: 'SYSTEM_INFO',
@@ -822,7 +823,7 @@ function powerIteration(M, invert=false) {
     return v;
 }
 
-function generateManifolds(duration, amp_l1 = 4000, amp_l2 = 15000) {
+function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
     console.log(`Generating Manifolds: Duration=${duration}, L1_Amp=${amp_l1}, L2_Amp=${amp_l2}`);
     const { l1, l2 } = solveLagrangePoints();
     
@@ -847,11 +848,12 @@ function generateManifolds(duration, amp_l1 = 4000, amp_l2 = 15000) {
     
     // We will store orbit points and STMs along the orbit for sampling
     const orbitSamples = [];
-    const sampleInterval = Math.floor(steps / 16); // 16 samples
+    const sampleInterval = Math.floor(steps / 256); // 256 samples
+    const poincareIntersections = [];
     
     let t = 0;
     for(let i=0; i<=steps; i++) {
-        if (i % sampleInterval === 0 && orbitSamples.length < 16) {
+        if (i % sampleInterval === 0 && orbitSamples.length < 256) {
             // Store current state and STM phi(t, 0)
             const phi_t_0 = s.slice(4);
             const state_t = { x: s[0], y: s[1], vx: s[2], vy: s[3] };
@@ -916,10 +918,30 @@ function generateManifolds(duration, amp_l1 = 4000, amp_l2 = 15000) {
             const prop_duration = is_moon_bound ? duration : duration * 4;
             const res_u = propagate(state_u, prop_duration, 0.002, 0, 10000, true, stopFn);
             
-            manifolds.push({ type: 'unstable', path: res_u.path });
+            // Perform Intersection Check
+            for(let k=0; k<res_u.path.length-1; k++) {
+                const p1 = res_u.path[k];
+                const p2 = res_u.path[k+1];
+                if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
+                     const t_int = (moon_x - p1.x) / (p2.x - p1.x);
+                     const y_int = p1.y + t_int * (p2.y - p1.y);
+                     const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                     poincareIntersections.push({ y: y_int, vy: vy_int, type: 'unstable' });
+                }
+            }
+            
+            // Only keep 32 paths for visual rendering (256/8 = 32)
+            if (idx % 8 === 0) {
+                manifolds.push({ type: 'unstable', path: res_u.path });
+            }
 
             // Only use Moon-bound trajectories for Ballistic Capture Seeding
-            if (is_moon_bound) {
+            // (Keep this logic restricted to visual subset or all? 
+            // Optimally, use all for better seeding, but maybe expensive. 
+            // Let's stick to using the visual subset for consistency with current search density 
+            // or just use all if high density search is desired. 
+            // For now, let's restrict seeding to the subset to avoid explosion of seeds.)
+            if (is_moon_bound && idx % 8 === 0) {
                 let min_dist = Infinity;
                 let best_t = 0;
                 
@@ -975,9 +997,28 @@ function generateManifolds(duration, amp_l1 = 4000, amp_l2 = 15000) {
                 ? (s) => (s.x >= moon_x) 
                 : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0);
 
+            // Perform Intersection Check (U2/U3 at x = moon_x)
+            // U3: y > 0 (roughly), U2: y < 0 (roughly). But we just store all interactions at x=moon_x.
+            // The UI filters by yMin/yMax.
+            
             const prop_duration = is_from_moon ? duration : duration * 4;
-            const res_s = propagate(state_s, prop_duration, -0.002, 0, 10000, true, stopFn);
-            manifolds.push({ type: 'stable', path: res_s.path }); 
+            const res_s = propagate(state_s, prop_duration, -0.002, 0, 10000, true, stopFn); // Re-add missing propagation
+            
+            for(let k=0; k<res_s.path.length-1; k++) {
+                const p1 = res_s.path[k];
+                const p2 = res_s.path[k+1];
+                if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
+                     const t_int = (moon_x - p1.x) / (p2.x - p1.x);
+                     const y_int = p1.y + t_int * (p2.y - p1.y);
+                     const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                     poincareIntersections.push({ y: y_int, vy: vy_int, type: 'stable' });
+                }
+            }
+            
+            // Only keep 32 paths for visual rendering (256 / 8 = 32)
+            if (idx % 8 === 0) {
+                manifolds.push({ type: 'stable', path: res_s.path }); 
+            }
         });
     });
 
@@ -1003,11 +1044,11 @@ function generateManifolds(duration, amp_l1 = 4000, amp_l2 = 15000) {
         const dt = period / steps;
         
         const orbitSamples = [];
-        const sampleInterval = Math.floor(steps / 16); 
+        const sampleInterval = Math.floor(steps / 256); // 256 samples
         
         let t = 0;
         for(let i=0; i<=steps; i++) {
-            if (i % sampleInterval === 0 && orbitSamples.length < 16) {
+            if (i % sampleInterval === 0 && orbitSamples.length < 256) {
                 const phi_t_0 = s.slice(4);
                 const state_t = { x: s[0], y: s[1], vx: s[2], vy: s[3] };
                 orbitSamples.push({ state: state_t, phi: phi_t_0 });
@@ -1016,17 +1057,19 @@ function generateManifolds(duration, amp_l1 = 4000, amp_l2 = 15000) {
             t += dt;
         }
         
-        const M = s.slice(4);
+        // Capture Monodromy Matrix for L2
+        const M_l2 = s.slice(4);
+        
         // Stable Eigenvector (v_s) -> Backward
-        const v_s = powerIteration(M, true); 
+        const v_s = powerIteration(M_l2, true); 
         // Unstable Eigenvector (v_u) -> Forward
-        const v_u = powerIteration(M, false);
+        const v_u = powerIteration(M_l2, false);
 
         const epsilon = 1e-5; 
         const moon_x = 1 - MASS_RATIO;
         const earth_x = -MASS_RATIO;
         
-        orbitSamples.forEach((sample) => {
+        orbitSamples.forEach((sample, idx) => {
             let local_vs = matVecMul(sample.phi, v_s);
             let local_vu = matVecMul(sample.phi, v_u);
             
@@ -1044,29 +1087,32 @@ function generateManifolds(duration, amp_l1 = 4000, amp_l2 = 15000) {
                     vx: sample.state.vx + epsilon * local_vs[2] * dir,
                     vy: sample.state.vy + epsilon * local_vs[3] * dir
                 };
-                
-                // For L2 (Beyond Moon, x > 1-mu):
-                // Interior Branch (from Moon): Goes Left (-x direction from L2)
-                // Exterior Branch (from Outside): Goes Right (+x direction from L2)
-                
-                // Stable Manifold is arriving at L2.
-                // We integrate BACKWARD.
-                // If perturbed state is Left of sample (x < x_sample), it leads towards Moon (Interior).
-                // If perturbed state is Right of sample (x > x_sample), it leads away (Exterior).
-                
+
                 const is_interior = (state_s.x < sample.state.x);
-
                 const stopFn = is_interior
-                    ? (s) => (s.x <= moon_x) 
-                    : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0); 
-
+                    ? (s) => (s.x <= moon_x)
+                    : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0);
+                    
                 const prop_duration = is_interior ? duration : duration * 8;
                 const max_steps = is_interior ? 10000 : 40000;
                 
                 const res_s = propagate(state_s, prop_duration, -0.002, 0, max_steps, true, stopFn);
-                
-                if (res_s.path.length > 10) {
-                    manifolds.push({ type: 'stable', path: res_s.path }); 
+
+                // Check Intersections
+                for(let k=0; k<res_s.path.length-1; k++) {
+                    const p1 = res_s.path[k];
+                    const p2 = res_s.path[k+1];
+                    if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
+                         const t_int = (moon_x - p1.x) / (p2.x - p1.x);
+                         const y_int = p1.y + t_int * (p2.y - p1.y);
+                         const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                         poincareIntersections.push({ y: y_int, vy: vy_int, type: 'stable' });
+                    }
+                }
+
+                // Keep 32 samples (256 / 8 = 32)
+                if (res_s.path.length > 10 && idx % 8 === 0) {
+                     manifolds.push({ type: 'stable', path: res_s.path });
                 }
             });
 
@@ -1079,23 +1125,30 @@ function generateManifolds(duration, amp_l1 = 4000, amp_l2 = 15000) {
                     vy: sample.state.vy + epsilon * local_vu[3] * dir
                 };
 
-                // Unstable Manifold is departing L2.
-                // We integrate FORWARD.
-                // If perturbed state is Left (x < sample.x), it falls into the Moon well (Interior).
-                // If perturbed state is Right (x > sample.x), it escapes outward (Exterior).
-
                 const is_interior = (state_u.x < sample.state.x);
-
                 const stopFn = is_interior
-                    ? (s) => (s.x <= moon_x) // Stop at Moon vertical line
-                    : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0); // Loop around Earth
+                    ? (s) => (s.x <= moon_x) 
+                    : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0); 
 
                 const prop_duration = is_interior ? duration : duration * 8;
                 const max_steps = is_interior ? 10000 : 40000;
 
                 const res_u = propagate(state_u, prop_duration, 0.002, 0, max_steps, true, stopFn);
 
-                if (res_u.path.length > 10) {
+                // Check Intersections
+                for(let k=0; k<res_u.path.length-1; k++) {
+                    const p1 = res_u.path[k];
+                    const p2 = res_u.path[k+1];
+                    if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
+                         const t_int = (moon_x - p1.x) / (p2.x - p1.x);
+                         const y_int = p1.y + t_int * (p2.y - p1.y);
+                         const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                         poincareIntersections.push({ y: y_int, vy: vy_int, type: 'unstable' });
+                    }
+                }
+
+                // Keep 32 samples (256 / 8 = 32)
+                if (res_u.path.length > 10 && idx % 8 === 0) {
                     manifolds.push({ type: 'unstable', path: res_u.path });
                 }
             });

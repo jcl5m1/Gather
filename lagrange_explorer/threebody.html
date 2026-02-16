@@ -131,7 +131,7 @@
             width: 0%;
             transition: width 0.3s;
         }
-    .scatter-panel {
+        .scatter-panel {
             position: absolute;
             bottom: 20px;
             right: 20px;
@@ -144,6 +144,29 @@
             display: flex;
             flex-direction: column;
             z-index: 10;
+        }
+        .poincare-panel {
+            position: absolute;
+            top: 20px;
+            right: 400px; /* Position to the left of stats/scatter */
+            padding: 15px;
+            background: rgba(20, 20, 30, 0.95);
+            border-radius: 8px;
+            border: 1px solid #444;
+            width: 300px;
+            height: 300px;
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+            display: none; /* Hidden by default until clicked */
+        }
+        #poincareCanvas {
+            flex: 1;
+            width: 100%;
+            background: rgba(10, 10, 15, 0.5);
+            border: 1px solid #333;
+            border-radius: 4px;
+            margin-top: 5px;
         }
         #scatterCanvas {
             flex: 1;
@@ -169,19 +192,19 @@
         </div>
 
          <div class="control-group" style="margin-bottom: 5px;">
-            <label for="l1AmpSlider">L1 Amplitude: <span id="l1AmpVal">4000</span> km</label>
+            <label for="l1AmpSlider">L1 Amplitude: <span id="l1AmpVal">10000</span> km</label>
             <div style="display: flex; gap: 5px;">
                 <button id="l1AmpDec" style="background: #444; width: 40px;">-</button>
-                <input type="range" id="l1AmpSlider" min="1000" max="50000" step="50" value="4000" style="flex: 1;">
+                <input type="range" id="l1AmpSlider" min="1000" max="50000" step="50" value="10000" style="flex: 1;">
                 <button id="l1AmpInc" style="background: #444; width: 40px;">+</button>
             </div>
         </div>
 
         <div class="control-group" style="margin-bottom: 15px;">
-            <label for="l2AmpSlider">L2 Amplitude: <span id="l2AmpVal">15000</span> km</label>
+            <label for="l2AmpSlider">L2 Amplitude: <span id="l2AmpVal">20000</span> km</label>
             <div style="display: flex; gap: 5px;">
                 <button id="l2AmpDec" style="background: #444; width: 40px;">-</button>
-                <input type="range" id="l2AmpSlider" min="5000" max="50000" step="100" value="15000" style="flex: 1;">
+                <input type="range" id="l2AmpSlider" min="5000" max="50000" step="100" value="20000" style="flex: 1;">
                 <button id="l2AmpInc" style="background: #444; width: 40px;">+</button>
             </div>
         </div>
@@ -235,6 +258,15 @@
     <div class="scatter-panel">
         <h3>Solution Space (Δv vs Time)</h3>
         <canvas id="scatterCanvas"></canvas>
+    </div>
+
+    <div class="poincare-panel" id="poincarePanel">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+             <h3>Poincaré Section <span id="poincareLabel"></span></h3>
+             <button id="closePoincare" style="width:auto; padding:2px 8px; font-size:10px; margin:0;">X</button>
+        </div>
+        <div style="font-size: 10px; color: #aaa; margin-bottom: 5px;">y vs vy</div>
+        <canvas id="poincareCanvas"></canvas>
     </div>
 
     <canvas id="simCanvas"></canvas>
@@ -327,6 +359,17 @@ const canvasToWorld = (cx, cy) => ({
 });
 
 // ============================================================================
+// POTENTIAL FUNCTION
+// ============================================================================
+function getPotential(x, y, z=0) {
+    const x1 = -MASS_RATIO;
+    const x2 = 1 - MASS_RATIO;
+    const r1 = Math.sqrt((x-x1)**2 + y**2 + z**2);
+    const r2 = Math.sqrt((x-x2)**2 + y**2 + z**2);
+    return 0.5*(x**2 + y**2) + (1-MASS_RATIO)/r1 + MASS_RATIO/r2;
+}
+
+// ============================================================================
 // BCR4BP DYNAMICS (Bicircular Restricted Four-Body Problem)
 // Earth-Moon CR3BP + Solar Perturbations
 // ============================================================================
@@ -403,7 +446,7 @@ function rk4Step(s, dt, t_current) {
 
 function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, stopOnCollision = true) {
     let s = { ...state };
-    let path = [{ x: s.x, y: s.y }];
+    let path = [{ x: s.x, y: s.y, vx: s.vx, vy: s.vy }];
     let t = 0;
     const is_backward = dt < 0;
     const abs_duration = Math.abs(duration);
@@ -447,7 +490,7 @@ function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, s
         
         // Store path points (subsample or truncate)
         if (path.length < max_steps || Math.abs(t) >= abs_duration - 1e-9) {
-            path.push({ x: s.x, y: s.y });
+            path.push({ x: s.x, y: s.y, vx: s.vx, vy: s.vy });
         }
     }
     
@@ -483,6 +526,8 @@ function initializeLEO(altitude_km) {
 // ============================================================================
 // WORKER SETUP
 // ============================================================================
+let hoveredManifold = null;
+let customTrajectories = [];
 const searchWorker = new Worker('threebody_worker.js');
 
 // Request System Info immediately
@@ -533,6 +578,11 @@ searchWorker.onmessage = function(e) {
              }
         }
         // Trigger a redraw if not animating (loop usually handles it, but just in case)
+        
+        // Auto-update Poincaré plot if active
+        if (typeof currentPoincareSection !== 'undefined' && currentPoincareSection) {
+            showPoincareSection(currentPoincareSection);
+        }
     }
 };
 
@@ -944,12 +994,15 @@ function draw() {
                 const path = item.path || item;
                 const type = item.type || 'unknown';
                 
+                const isHovered = (item === hoveredManifold);
+                const opacity = isHovered ? 1.0 : 0.1;
+                
                 if (type === 'stable') {
-                    ctx.strokeStyle = 'rgba(0, 255, 136, 0.1)'; // Greenish for stable (approaching)
+                    ctx.strokeStyle = `rgba(0, 255, 136, ${opacity})`; // Greenish for stable (approaching)
                 } else if (type === 'unstable') {
-                    ctx.strokeStyle = 'rgba(255, 80, 80, 0.1)'; // Reddish for unstable (departing)
+                    ctx.strokeStyle = `rgba(255, 80, 80, ${opacity})`; // Reddish for unstable (departing)
                 } else {
-                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)'; // Fallback
+                    ctx.strokeStyle = `rgba(255, 255, 255, ${isHovered ? 1.0 : 0.03})`; // Fallback
                 }
 
                 if (!path || path.length < 2) return;
@@ -1053,6 +1106,105 @@ function draw() {
             });
         }
         
+        // Highlight Hovered Manifold from Poincare
+        // Highlight Hovered Manifold from Poincare (White Highlight Removed, now handled by opacity)
+        // if (hoveredManifold) { ... }
+        
+        // Draw Custom Trajectories (from Poincare clicks)
+        if (customTrajectories && customTrajectories.length > 0) {
+            customTrajectories.forEach(path => {
+                drawPathFaded(path, '#00ff00', 2);
+                
+                // Draw start point on the section line
+                if (path.length > 0) {
+                    // The path is constructed as [...bwd.reverse(), ...fwd]
+                    // The "start" (click point) is actually in the middle where they join.
+                    // However, we propagate from startState.
+                    // Let's explicitly store the start point or just find the one on the section line?
+                    // Actually, the path array is just points. The propagation logic merged them.
+                    // But we know 'startState' from the click handler was used to generate it.
+                    // The click handler doesn't store startState globally, but we can infer it
+                    // or just draw the point that matches the section X.
+                    
+                    // Better approach: User asked for the "starting" point.
+                    // In the click handler, we formed the path by merging backward (reversed) and forward.
+                    // So the "start" of the simulation is the connection point.
+                    // Let's just find the point in the path closest to the section X?
+                    // Or simpler: The path is literally valid trajectory.
+                    // We can just draw the point where we clicked?
+                    // We don't have that point stored easily here unless we look at 'path'.
+                    // Wait, the bwd path was reversed. So bwd.reverse() ends at startState.
+                    // fwd starts at startState.
+                    // So the "middle" of the array is roughly where the startState is.
+                    // But an even better way is to iterate and find the point with x ≈ section.x
+                    // and draw that.
+                    
+                    // Actually, let's just make it simple. The user wants to see where it starts.
+                    // We can just draw a dot at the intersection of the path and the section line.
+                    // Since we know the section line X, let's finding the point with closest X 
+                    // that also has the expected Y.
+                    
+                    // For now, let's just draw valid start points if we can find them.
+                    // But wait, "path[0]" is the start of the *backward* propagation (far in the past).
+                    // We want the point *on the section line*.
+                    
+                    // Let's store the click point globally? simpler.
+                    // stored in window.lastPoincareClick = {x, y}
+                }
+            });
+            
+            if (window.lastPoincareClick) {
+                 const p = worldToCanvas(window.lastPoincareClick.x, window.lastPoincareClick.y);
+                 ctx.fillStyle = '#00ff00';
+                 ctx.beginPath();
+                 ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+                 ctx.fill();
+                 ctx.strokeStyle = 'white';
+                 ctx.lineWidth = 2;
+                 ctx.stroke();
+            }
+        }
+
+        // Draw Poincaré Lines (U2 / U3)
+        // defined at Moon's X, spanning from surface to Hill radius
+        if (typeof MOON_RADIUS !== 'undefined' && typeof MOON_HILL_KM !== 'undefined') {
+             const moon_x = 1 - MASS_RATIO;
+             const r_moon = kmToNorm(MOON_RADIUS);
+             const r_hill = kmToNorm(MOON_HILL_KM);
+             
+             // Define Sections
+             window.poincareSections = [
+                 { id: 'u3', label: "U3", x: moon_x, yMin: r_moon, yMax: r_hill, color: '#ffaa44' },
+                 { id: 'u2', label: "U2", x: moon_x, yMin: -r_hill, yMax: -r_moon, color: '#ffaa44' }
+             ];
+             
+             ctx.lineWidth = 3;
+             ctx.font = 'bold 12px sans-serif';
+             
+             window.poincareSections.forEach(sec => {
+                 const pStart = worldToCanvas(sec.x, sec.yMin);
+                 const pEnd = worldToCanvas(sec.x, sec.yMax);
+                 
+                 ctx.strokeStyle = 'white'; // sec.color;
+                 ctx.setLineDash([2, 2]);
+                 ctx.beginPath();
+                 ctx.moveTo(pStart.x, pStart.y);
+                 ctx.lineTo(pEnd.x, pEnd.y);
+                 ctx.stroke();
+                 ctx.setLineDash([]);
+                 
+                 // Draw End Caps
+                 ctx.fillStyle = 'white';
+                 ctx.fillRect(pStart.x - 3, pStart.y - 1, 6, 2);
+                 ctx.fillRect(pEnd.x - 3, pEnd.y - 1, 6, 2);
+                 
+                 // Label
+                 ctx.fillStyle = '#ffaa44';
+                 const pLabel = worldToCanvas(sec.x, (sec.yMin + sec.yMax)/2);
+                 ctx.fillText(sec.label, pLabel.x + 8, pLabel.y + 4);
+             });
+        }
+        
     } catch (e) {
         console.error("Rendering error:", e);
     }
@@ -1077,6 +1229,58 @@ function drawPath(path, color, width) {
     });
     
     ctx.stroke();
+}
+
+function drawPathFaded(path, color, width) {
+    if (!path || !Array.isArray(path) || path.length < 2) return;
+    
+    // Optimized: Calculate alpha per segment but batch similar alphas?
+    // No, easiest is to draw segments.
+    // To speed up, we can subsample if points are dense.
+    // Or we can draw in chunks: e.g. 100 points per stroke with constant alpha? Not smooth.
+    // Let's draw segments but only if delta pos > 1 px?
+    
+    // We want fade at both ends.
+    // Alpha = 1 - Math.abs(2*i/N - 1)
+    // Center (i=N/2) -> Alpha=1. Ends -> Alpha=0.
+    
+    ctx.lineWidth = width;
+    // Iterate
+    const N = path.length;
+    
+    // To optimize, let's group segments into 10 groups of opacity?
+    // This creates "banding".
+    // Better: create gradient along the path? Not possible on complex path easily.
+    // Segment drawing is okay if N is not too huge.
+    // With 15s duration, N could be 15000+.
+    // We should stride.
+    
+    const stride = 5; // Draw every 5th point to reduce draw calls, but connect them
+    
+    // Parse hex color to rgb
+    // Assume #00ff00
+    const r = parseInt(color.slice(1,3), 16);
+    const g = parseInt(color.slice(3,5), 16);
+    const b = parseInt(color.slice(5,7), 16);
+    
+    for (let i = 0; i < N - 1; i += stride) {
+        const nextI = Math.min(i + stride, N - 1);
+        const p1 = worldToCanvas(path[i].x, path[i].y);
+        const p2 = worldToCanvas(path[nextI].x, path[nextI].y);
+        
+        // Avg alpha for this segment
+        const progress = (i + nextI) / 2 / N; // 0 to 1
+        const alpha = Math.max(0, 1 - Math.abs(2 * progress - 1));
+        
+        // Quadratic fade for smoother look? alpha = 1 - (2*p-1)^2
+        const alphaQuad = 1 - Math.pow(2 * progress - 1, 2);
+        
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alphaQuad})`;
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+    }
 }
 
 function drawGrid() {
@@ -1141,11 +1345,76 @@ canvas.addEventListener('mousemove', (e) => {
         camera.y += dy;
         
         panStart = { x: e.clientX, y: e.clientY };
+    } else {
+        // Highlight manifold on hover
+        // Screen coords
+        const mx = e.clientX;
+        const my = e.clientY;
+        
+        let found = null;
+        if (manifoldPaths) {
+             const threshold = 5; // pixels
+             for (const m of manifoldPaths) {
+                 const path = m.path || m;
+                 // Quick check bounding box? No, just optimize loop
+                 // Check every 10th point for speed?
+                 if (!path) continue;
+                 
+                 for (let i=0; i<path.length; i+=5) {
+                     const p = worldToCanvas(path[i].x, path[i].y);
+                     if (Math.abs(p.x - mx) < threshold && Math.abs(p.y - my) < threshold) {
+                         found = m;
+                         break;
+                     }
+                 }
+                 if (found) break;
+             }
+        }
+        
+        if (found !== hoveredManifold) {
+            hoveredManifold = found;
+        }
     }
 });
 
 canvas.addEventListener('mouseup', () => {
     isPanning = false;
+});
+
+// Click for Poincaré Selection
+canvas.addEventListener('click', (e) => {
+    if (isPanning) return; // Don't trigger if dragging
+    if (!window.poincareSections) return;
+    
+    // Map click to world x
+    const mouseWorld = canvasToWorld(e.clientX, e.clientY);
+    
+    const clickToleranceScreen = 15; 
+    
+    // Find clicked section
+    let clickedSection = null;
+    
+    for (const sec of window.poincareSections) {
+        const secScreenX = worldToCanvas(sec.x, 0).x;
+        // Check X distance (screen space for ease)
+        if (Math.abs(e.clientX - secScreenX) < clickToleranceScreen) {
+            // Check Y range (world space is better here)
+            // Note: sec.yMin is mathematically smaller (more negative) than sec.yMax? 
+            // In our definition:
+            // U3: yMin=Radius, yMax=Hill (Positive)
+            // U2: yMin=-Hill, yMax=-Radius (Negative)
+            // So logic holds: val >= min && val <= max
+            
+            if (mouseWorld.y >= Math.min(sec.yMin, sec.yMax) && mouseWorld.y <= Math.max(sec.yMin, sec.yMax)) {
+                clickedSection = sec;
+                break; 
+            }
+        }
+    }
+    
+    if (clickedSection) {
+        showPoincareSection(clickedSection);
+    }
 });
 
 // Keyboard shortcuts
@@ -1193,8 +1462,8 @@ document.getElementById('searchBtn').addEventListener('click', () => {
     searchBallisticCaptures();
 });
 
-let l1Amplitude = 4000;
-let l2Amplitude = 15000;
+let l1Amplitude = 10000;
+let l2Amplitude = 20000;
 
 const l1Slider = document.getElementById('l1AmpSlider');
 const l2Slider = document.getElementById('l2AmpSlider');
@@ -1537,6 +1806,320 @@ updateManifolds();
 
 // Start rendering
 draw();
+
+// ============================================================================
+// POINCARÉ LOGIC
+// ============================================================================
+const poincarePanel = document.getElementById('poincarePanel');
+const poincareCanvas = document.getElementById('poincareCanvas');
+const poincareCtx = poincareCanvas.getContext('2d');
+const poincareLabel = document.getElementById('poincareLabel');
+const closePoincare = document.getElementById('closePoincare');
+let currentPoincareSection = null;
+let currentPoincarePoints = [];
+
+closePoincare.addEventListener('click', () => {
+    poincarePanel.style.display = 'none';
+    currentPoincareSection = null;
+});
+
+function showPoincareSection(section) {
+    currentPoincareSection = section;
+    poincarePanel.style.display = 'flex';
+    poincareLabel.textContent = section.label;
+    
+    const x_section = section.x;
+    const yMin = Math.min(section.yMin, section.yMax);
+    const yMax = Math.max(section.yMin, section.yMax);
+    
+    // Compute Intersections
+    const points = [];
+    
+    if (manifoldPaths) {
+        manifoldPaths.forEach(m => {
+            const path = m.path || m;
+            const type = m.type || 'unknown';
+            
+            for (let i = 0; i < path.length - 1; i++) {
+                const p1 = path[i];
+                const p2 = path[i+1];
+                
+                // Check if segment crosses x_section
+                if ((p1.x - x_section) * (p2.x - x_section) < 0) {
+                    // Linear interpolation
+                    const t = (x_section - p1.x) / (p2.x - p1.x);
+                    const y = p1.y + t * (p2.y - p1.y);
+                    const vy = (p1.vy !== undefined) ? (p1.vy + t * (p2.vy - p1.vy)) : 0; 
+                    
+                    // Filter by Y range
+                    if (y >= yMin && y <= yMax) {
+                        if (p1.vy !== undefined) {
+                            points.push({ y, vy, type, manifold: m }); // Store ref to manifold
+                        }
+                    }
+                }
+            }
+        });
+    }
+    
+    currentPoincarePoints = points;
+    drawPoincarePlot(points);
+}
+
+function drawPoincarePlot(points) {
+    // Resize
+    const rect = poincareCanvas.getBoundingClientRect();
+    poincareCanvas.width = rect.width;
+    poincareCanvas.height = rect.height;
+    
+    const w = poincareCanvas.width;
+    const h = poincareCanvas.height;
+    poincareCtx.clearRect(0, 0, w, h);
+    
+    if (points.length === 0) {
+        poincareCtx.fillStyle = '#666';
+        poincareCtx.textAlign = 'center';
+        poincareCtx.fillText('No intersections found', w/2, h/2);
+        return;
+    }
+    
+    // Find bounds
+    let minY = Infinity, maxY = -Infinity;
+    let minVy = Infinity, maxVy = -Infinity;
+    
+    points.forEach(p => {
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+        if (p.vy < minVy) minVy = p.vy;
+        if (p.vy > maxVy) maxVy = p.vy;
+    });
+    
+    // Pad
+    const padY = (maxY - minY) * 0.1 || 0.1;
+    const padVy = (maxVy - minVy) * 0.1 || 0.1;
+    
+    minY -= padY; maxY += padY;
+    minVy -= padVy; maxVy += padVy;
+    
+    const rangeY = maxY - minY;
+    const rangeVy = maxVy - minVy;
+    
+    const margin = 30;
+    const plotW = w - margin * 2;
+    const plotH = h - margin * 2;
+    
+    const mapY = (val) => margin + ((val - minY) / rangeY) * plotW;
+    const mapVy = (val) => (h - margin) - ((val - minVy) / rangeVy) * plotH;
+    
+    // Draw Axes
+    poincareCtx.strokeStyle = '#555';
+    poincareCtx.beginPath();
+    // X-axis (y = 0 in plot coord, which is mapVy(0) ?) No, center lines
+    // Just box
+    poincareCtx.rect(margin, margin, plotW, plotH);
+    poincareCtx.stroke();
+    
+    // Store scale for interaction
+    poincareCanvas.scaleInfo = { 
+        minY, rangeY, minVy, rangeVy, 
+        margin, plotW, plotH, 
+        mapY, mapVy 
+    };
+    
+    // Draw Points
+    
+    // Split into groups for region filling
+    const stablePoints = points.filter(p => p.type === 'stable');
+    const unstablePoints = points.filter(p => p.type === 'unstable');
+    
+    const drawRegion = (pts, colorBase) => {
+        if (pts.length < 3) return;
+        poincareCtx.beginPath();
+        pts.forEach((p, i) => {
+            const cx = mapY(p.y);
+            const cy = mapVy(p.vy);
+            if (i === 0) poincareCtx.moveTo(cx, cy);
+            else poincareCtx.lineTo(cx, cy);
+        });
+        poincareCtx.closePath();
+        poincareCtx.fillStyle = colorBase.replace('1)', '0.25)').replace('0.1)', '0.25)'); // Hacky replace for opacity
+        // Better:
+        if (colorBase.includes('0, 255, 136')) poincareCtx.fillStyle = 'rgba(0, 255, 136, 0.25)';
+        else if (colorBase.includes('255, 80, 80')) poincareCtx.fillStyle = 'rgba(255, 80, 80, 0.25)';
+        else poincareCtx.fillStyle = 'rgba(200, 200, 200, 0.25)';
+        
+        poincareCtx.fill();
+        // Optional outline
+        // poincareCtx.strokeStyle = poincareCtx.fillStyle.replace('0.25', '0.5');
+        // poincareCtx.stroke();
+    };
+    
+    // Draw regions first (behind dots)
+    drawRegion(stablePoints, 'rgba(0, 255, 136, 1)');
+    drawRegion(unstablePoints, 'rgba(255, 80, 80, 1)');
+
+    // Draw Scatter Dots (keep them for precision/hover interaction)
+    points.forEach(p => {
+        const cx = mapY(p.y);
+        const cy = mapVy(p.vy);
+        
+        poincareCtx.beginPath();
+        poincareCtx.arc(cx, cy, 2, 0, Math.PI * 2);
+        
+        if (p.type === 'stable') {
+            poincareCtx.fillStyle = '#00ff88'; // Green
+        } else if (p.type === 'unstable') {
+            poincareCtx.fillStyle = '#ff5050'; // Red
+        } else {
+             poincareCtx.fillStyle = '#ccc';
+        }
+        poincareCtx.fill();
+    });
+    
+    // Labels
+    poincareCtx.fillStyle = '#aaa';
+    poincareCtx.font = '10px monospace';
+    poincareCtx.textAlign = 'center';
+    poincareCtx.fillText('y (position)', w/2, h - 5);
+    
+    poincareCtx.save();
+    poincareCtx.translate(10, h/2);
+    poincareCtx.rotate(-Math.PI/2);
+    poincareCtx.fillText('vy (velocity)', 0, 0);
+    poincareCtx.restore();
+}
+
+// Highlight on Hover
+poincareCanvas.addEventListener('mousemove', (e) => {
+    if (!poincareCanvas.scaleInfo || !currentPoincarePoints) return;
+    
+    const rect = poincareCanvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    
+    const s = poincareCanvas.scaleInfo;
+    let found = null;
+    let bestDist = 5; // pixels
+    
+    currentPoincarePoints.forEach(p => {
+         const cx = s.mapY(p.y);
+         const cy = s.mapVy(p.vy);
+         const dist = Math.sqrt((mx-cx)**2 + (my-cy)**2);
+         if (dist < bestDist) {
+             bestDist = dist;
+             found = p;
+         }
+    });
+
+    if (found) {
+        if (hoveredManifold !== found.manifold) {
+            hoveredManifold = found.manifold;
+            poincareCanvas.style.cursor = 'pointer';
+        }
+    } else {
+        if (hoveredManifold) {
+            hoveredManifold = null;
+            poincareCanvas.style.cursor = 'default';
+        }
+    }
+});
+
+// Handle Clicks on Poincaré Plot
+poincareCanvas.addEventListener('click', (e) => {
+    if (!poincareCanvas.scaleInfo || !currentPoincareSection) return;
+    
+    // 1. Get Click Pos
+    const rect = poincareCanvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    
+    const s = poincareCanvas.scaleInfo;
+    
+    // 2. Inverse Map
+    // cx = margin + ((val - minY) / rangeY) * plotW;
+    // val - minY = (cx - margin) / plotW * rangeY
+    const yVal = s.minY + ((mx - s.margin) / s.plotW) * s.rangeY;
+    let vyVal = s.minVy + ((s.plotH - (my - s.margin)) / s.plotH) * s.rangeVy; // Inverted Y logic
+    
+    // 3. Determine Physics State
+    // We need 'vx'. Use Jacobi Constant of the L1 orbit as reference.
+    if (!systemInfo || !systemInfo.l1 || !systemInfo.l1.orbit) {
+        console.warn("L1 orbit info missing, cannot determine energy.");
+        return;
+    }
+    
+    // Calculate Target C
+    const l1_orb = systemInfo.l1.orbit;
+    // Reconstruct seed state for L1 orbit to get its Energy
+    // The worker returns vy0, amplitude. 
+    // State: x = L1_x - amp, y=0, vx=0, vy=vy0
+    const l1_x = systemInfo.l1.x;
+    const amp_norm = kmToNorm(l1_orb.amplitude_km);
+    const seed_x = l1_x - amp_norm;
+    const seed_y = 0;
+    const seed_vx = 0;
+    const seed_vy = l1_orb.vy0;
+    
+    const pot_seed = getPotential(seed_x, seed_y);
+    const v2_seed = seed_vx**2 + seed_vy**2;
+    const C_target = 2 * pot_seed - v2_seed;
+    
+    // Now solve for vx at our click point (x_section, yVal)
+    // C = 2*Pot - (vx^2 + vy^2)
+    // vx^2 = 2*Pot - C - vy^2
+    
+    const x_sec = currentPoincareSection.x;
+    const pot_click = getPotential(x_sec, yVal);
+    const term = 2 * pot_click - C_target - vyVal**2;
+    
+    if (term < 0) {
+        console.warn("Forbidden Region: Energy insufficient.");
+        // Visual feedback?
+        poincareCtx.fillStyle = 'red';
+        poincareCtx.beginPath();
+        poincareCtx.arc(mx, my, 4, 0, Math.PI*2);
+        poincareCtx.fill();
+        return;
+    }
+    
+    let vxVal = Math.sqrt(term); // Assume +vx (L1 -> Moon direction) by default
+    
+    if (currentPoincareSection && currentPoincareSection.id === 'u3') {
+        vxVal = -vxVal;
+    }
+    
+    // 4. Propagate
+    const startState = { x: x_sec, y: yVal, vx: vxVal, vy: vyVal };
+    const duration = 15.0; // Increased to 15.0 (3x longer)
+    
+    // Forward
+    const fwd = propagate(startState, duration, 0.001, 0, 50000, false);
+    // Backward
+    const bwd = propagate(startState, duration, -0.001, 0, 50000, false);
+    
+    // Merge
+    // bwd path (reverse it) + fwd path
+    const fullPath = [...bwd.path.reverse(), ...fwd.path];
+    
+    // 5. Store & Visualize
+    customTrajectories = [fullPath]; // Overwrite previous
+    
+    // Store for drawing
+    window.lastPoincareClick = { x: x_sec, y: yVal };
+    
+    // Redraw plot to clear previous points
+    if (currentPoincarePoints) {
+        drawPoincarePlot(currentPoincarePoints);
+    }
+
+    // Draw point on plot
+    poincareCtx.fillStyle = '#00ff00';
+    poincareCtx.beginPath();
+    poincareCtx.arc(mx, my, 4, 0, Math.PI*2);
+    poincareCtx.fill();
+    poincareCtx.strokeStyle = 'white';
+    poincareCtx.stroke();
+});
 
 </script>
 </body>
