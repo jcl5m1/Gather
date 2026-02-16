@@ -167,6 +167,24 @@
             <label>Search Duration: <span id="durVal">120</span> days</label>
             <input type="range" id="durationSlider" min="30" max="360" value="120">
         </div>
+
+         <div class="control-group" style="margin-bottom: 5px;">
+            <label for="l1AmpSlider">L1 Amplitude: <span id="l1AmpVal">4000</span> km</label>
+            <div style="display: flex; gap: 5px;">
+                <button id="l1AmpDec" style="background: #444; width: 40px;">-</button>
+                <input type="range" id="l1AmpSlider" min="1000" max="6000" step="50" value="4000" style="flex: 1;">
+                <button id="l1AmpInc" style="background: #444; width: 40px;">+</button>
+            </div>
+        </div>
+
+        <div class="control-group" style="margin-bottom: 15px;">
+            <label for="l2AmpSlider">L2 Amplitude: <span id="l2AmpVal">15000</span> km</label>
+            <div style="display: flex; gap: 5px;">
+                <button id="l2AmpDec" style="background: #444; width: 40px;">-</button>
+                <input type="range" id="l2AmpSlider" min="5000" max="25000" step="100" value="15000" style="flex: 1;">
+                <button id="l2AmpInc" style="background: #444; width: 40px;">+</button>
+            </div>
+        </div>
         
         <button id="searchBtn">🔍 Search Ballistic Captures</button>
         
@@ -459,12 +477,12 @@ function initializeLEO(altitude_km) {
 // ============================================================================
 // WORKER SETUP
 // ============================================================================
-const searchWorker = new Worker('threebody_work.js');
+const searchWorker = new Worker('threebody_worker.js');
 
 // Request System Info immediately
 searchWorker.postMessage({ type: 'COMPUTE_SYSTEM_INFO' });
 // Trigger manifold generation for visualization
-searchWorker.postMessage({ type: 'GENERATE_MANIFOLDS' });
+// searchWorker.postMessage({ type: 'GENERATE_MANIFOLDS' }); // Moved to end of script to use slider values
 
 let systemInfo = null;
 
@@ -497,7 +515,17 @@ searchWorker.onmessage = function(e) {
     } else if (type === 'DONE') {
         stopSearch(payload);
     } else if (type === 'MANIFOLDS_GENERATED') {
-        manifoldPaths = payload;
+        if (Array.isArray(payload)) {
+             manifoldPaths = payload;
+        } else {
+             manifoldPaths = payload.manifolds;
+             if (payload.l1_orbit && systemInfo && systemInfo.l1) {
+                 systemInfo.l1.orbit = payload.l1_orbit;
+             }
+             if (payload.l2_orbit && systemInfo && systemInfo.l2) {
+                 systemInfo.l2.orbit = payload.l2_orbit;
+             }
+        }
         // Trigger a redraw if not animating (loop usually handles it, but just in case)
     }
 };
@@ -1108,6 +1136,73 @@ document.getElementById('searchBtn').addEventListener('click', () => {
     searchBallisticCaptures();
 });
 
+let l1Amplitude = 4000;
+let l2Amplitude = 15000;
+
+const l1Slider = document.getElementById('l1AmpSlider');
+const l2Slider = document.getElementById('l2AmpSlider');
+
+// Update function
+function updateManifolds() {
+    searchWorker.postMessage({ 
+        type: 'GENERATE_MANIFOLDS', 
+        payload: { 
+            amp_l1: l1Amplitude,
+            amp_l2: l2Amplitude
+        } 
+    });
+}
+
+// L1 Listeners
+function updateL1(val) {
+    l1Amplitude = parseInt(val);
+    l1Slider.value = l1Amplitude;
+    document.getElementById('l1AmpVal').textContent = l1Amplitude;
+    updateManifolds();
+}
+
+l1Slider.addEventListener('input', (e) => {
+    document.getElementById('l1AmpVal').textContent = e.target.value;
+});
+l1Slider.addEventListener('change', (e) => {
+    updateL1(e.target.value);
+});
+document.getElementById('l1AmpDec').addEventListener('click', () => {
+    let val = parseInt(l1Slider.value) - 100;
+    if (val < l1Slider.min) val = l1Slider.min;
+    updateL1(val);
+});
+document.getElementById('l1AmpInc').addEventListener('click', () => {
+    let val = parseInt(l1Slider.value) + 100;
+    if (val > l1Slider.max) val = l1Slider.max;
+    updateL1(val);
+});
+
+// L2 Listeners
+function updateL2(val) {
+    l2Amplitude = parseInt(val);
+    l2Slider.value = l2Amplitude;
+    document.getElementById('l2AmpVal').textContent = l2Amplitude;
+    updateManifolds();
+}
+
+l2Slider.addEventListener('input', (e) => {
+    document.getElementById('l2AmpVal').textContent = e.target.value;
+});
+l2Slider.addEventListener('change', (e) => {
+    updateL2(e.target.value);
+});
+document.getElementById('l2AmpDec').addEventListener('click', () => {
+    let val = parseInt(l2Slider.value) - 500;
+    if (val < l2Slider.min) val = l2Slider.min;
+    updateL2(val);
+});
+document.getElementById('l2AmpInc').addEventListener('click', () => {
+    let val = parseInt(l2Slider.value) + 500;
+    if (val > l2Slider.max) val = l2Slider.max;
+    updateL2(val);
+});
+
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
@@ -1379,6 +1474,9 @@ scatterCanvas.addEventListener('mouseleave', () => {
         drawScatterPlot();
     }
 });
+
+// Initial Manifold Generation
+updateManifolds();
 
 // Start rendering
 draw();

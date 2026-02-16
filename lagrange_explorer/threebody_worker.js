@@ -96,6 +96,7 @@ function getEigenDecomposition(l_point_x) {
 }
 
 function computeLyapunov(l_x, amplitude_km) {
+    console.log(`Computing Lyapunov orbit at ${l_x.toFixed(5)} with amplitude ${amplitude_km} km`);
     const amp_norm = kmToNorm(amplitude_km);
     const decomp = getEigenDecomposition(l_x);
     const nu = decomp.nu;
@@ -210,7 +211,7 @@ function computeLyapunov(l_x, amplitude_km) {
     const period_approx = 2 * Math.PI / nu;
     const res = propagate(final_s, period_approx * 1.5, 0.01, 0, 1000, false);
     
-    return { path: res.path, period: period_approx, vy0: best_vy };
+    return { path: res.path, period: period_approx, vy0: best_vy, amplitude_km: amplitude_km };
 }
 
 function getPotential(x, y, z=0) {
@@ -284,7 +285,7 @@ function rk4Step(s, dt, t_current) {
     };
 }
 
-function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, stopOnCollision = true) {
+function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, stopOnCollision = true, customStop = null) {
     let s = { ...state };
     let path = [{ x: s.x, y: s.y }];
     let t = 0;
@@ -310,6 +311,7 @@ function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, s
             step = is_backward ? -remaining : remaining;
         }
         
+        const prev_s = s;
         s = rk4Step(s, step, t_start + t);
         t += step;
         
@@ -326,6 +328,10 @@ function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, s
                 collision = 'moon';
                 break;
             }
+        }
+        
+        if (customStop && customStop(s, prev_s)) {
+            break;
         }
         
         if (path.length < max_steps || Math.abs(t) >= abs_duration - 1e-9) {
@@ -538,17 +544,34 @@ self.onmessage = function(e) {
     } else if (type === 'STOP_SEARCH') {
         isSearching = false;
     } else if (type === 'GENERATE_MANIFOLDS') {
-        const { duration_norm } = payload || { duration_norm: daysToNorm(60) };
-        generateManifolds(duration_norm);
+        const { duration_norm = daysToNorm(60), amp_l1, amp_l2 } = payload || {};
+        
+        // RECOMPUTE Orbits with new amplitudes
+        const { l1, l2 } = solveLagrangePoints();
+        const l1_orbit = computeLyapunov(l1, amp_l1);
+        const l2_orbit = computeLyapunov(l2, amp_l2);
+
+        // Send updated orbits to main thread immediately so UI updates
+        const l1_decomp = getEigenDecomposition(l1);
+        const l2_decomp = getEigenDecomposition(l2);
+        postMessage({
+            type: 'SYSTEM_INFO',
+            payload: {
+                l1: { x: l1, decomp: l1_decomp, orbit: l1_orbit },
+                l2: { x: l2, decomp: l2_decomp, orbit: l2_orbit }
+            }
+        });
+
+        generateManifolds(duration_norm, amp_l1, amp_l2);
     } else if (type === 'COMPUTE_SYSTEM_INFO') {
         const { l1, l2 } = solveLagrangePoints();
         const l1_decomp = getEigenDecomposition(l1);
         const l2_decomp = getEigenDecomposition(l2);
         
         // Compute Orbits
-        // ~3500 km amplitude
-        const l1_orbit = computeLyapunov(l1, 3500);
-        const l2_orbit = computeLyapunov(l2, 3500);
+        // Default amplitudes: L1=4000km, L2=15000km
+        const l1_orbit = computeLyapunov(l1, 4000);
+        const l2_orbit = computeLyapunov(l2, 15000);
         
         postMessage({
             type: 'SYSTEM_INFO',
@@ -560,124 +583,411 @@ self.onmessage = function(e) {
     }
 };
 
-function generateManifolds(duration) {
-    const { l1, l2 } = solveLagrangePoints();
-    const points = [
-        { x: l1, label: 'L1', dir: 1 }, // dir 1 = towards moon (approx)
-        { x: l2, label: 'L2', dir: -1 } 
+// ============================================================================
+// MANIFOLD GENERATION (Rigorous)
+// ============================================================================
+
+function matMul(A, B) {
+    const C = new Float64Array(16);
+    for(let i=0; i<4; i++) {
+        for(let j=0; j<4; j++) {
+            let sum = 0;
+            for(let k=0; k<4; k++) sum += A[i*4+k] * B[k*4+j];
+            C[i*4+j] = sum;
+        }
+    }
+    return C;
+}
+
+function matVecMul(A, v) {
+    const r = [0,0,0,0];
+    for(let i=0; i<4; i++) {
+        for(let j=0; j<4; j++) r[i] += A[i*4+j] * v[j];
+    }
+    return r;
+}
+
+function invertMatrix(M) {
+    const dim = 4;
+    const A = new Float64Array(M); 
+    const I = new Float64Array(16);
+    for(let i=0; i<16; i++) I[i] = (i%5===0) ? 1 : 0;
+    
+    for(let i=0; i<dim; i++) {
+        let pivot = A[i*4+i];
+        if(Math.abs(pivot) < 1e-12) return null;
+        for(let j=0; j<dim; j++) {
+            A[i*4+j] /= pivot;
+            I[i*4+j] /= pivot;
+        }
+        for(let k=0; k<dim; k++) {
+            if(k === i) continue;
+            let factor = A[k*4+i];
+            for(let j=0; j<dim; j++) {
+                A[k*4+j] -= factor * A[i*4+j];
+                I[k*4+j] -= factor * I[i*4+j];
+            }
+        }
+    }
+    return I;
+}
+
+function getVariationalDerivatives(s, t) {
+    const state = {x: s[0], y: s[1], vx: s[2], vy: s[3]};
+    const derivState = derivatives(state, t);
+    const J = getJacobian(state);
+    
+    const A = [
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+        J.Uxx, J.Uxy, 0, 2,
+        J.Uxy, J.Uyy, -2, 0
     ];
     
+    // Phi_dot = A * Phi
+    const Phi = s.slice(4);
+    const PhiDot = matMul(A, Phi);
+    
+    const ds = new Float64Array(20);
+    ds[0] = derivState.dx;
+    ds[1] = derivState.dy;
+    ds[2] = derivState.dvx;
+    ds[3] = derivState.dvy;
+    for(let i=0; i<16; i++) ds[4+i] = PhiDot[i];
+    
+    return ds;
+}
+
+function rk4Variational(s, dt, t) {
+    const k1 = getVariationalDerivatives(s, t);
+    
+    let s2 = new Float64Array(20);
+    for(let i=0;i<20;i++) s2[i] = s[i] + k1[i]*dt/2;
+    const k2 = getVariationalDerivatives(s2, t + dt/2);
+    
+    let s3 = new Float64Array(20);
+    for(let i=0;i<20;i++) s3[i] = s[i] + k2[i]*dt/2;
+    const k3 = getVariationalDerivatives(s3, t + dt/2);
+    
+    let s4 = new Float64Array(20);
+    for(let i=0;i<20;i++) s4[i] = s[i] + k3[i]*dt;
+    const k4 = getVariationalDerivatives(s4, t + dt);
+    
+    let next = new Float64Array(20);
+    for(let i=0;i<20;i++) next[i] = s[i] + (dt/6)*(k1[i] + 2*k2[i] + 2*k3[i] + k4[i]);
+    
+    return next;
+}
+
+function powerIteration(M, invert=false) {
+    let targetM = M;
+    if (invert) {
+        targetM = invertMatrix(M);
+        if (!targetM) return null;
+    }
+    
+    // Random initial vector
+    let v = [Math.random(), Math.random(), Math.random(), Math.random()];
+    let norm = Math.sqrt(v[0]**2 + v[1]**2 + v[2]**2 + v[3]**2);
+    for(let i=0; i<4; i++) v[i] /= norm;
+    
+    for(let iter=0; iter<50; iter++) {
+        v = matVecMul(targetM, v);
+        norm = Math.sqrt(v[0]**2 + v[1]**2 + v[2]**2 + v[3]**2);
+        for(let i=0; i<4; i++) v[i] /= norm;
+    }
+    return v;
+}
+
+function generateManifolds(duration, amp_l1 = 4000, amp_l2 = 15000) {
+    console.log(`Generating Manifolds: Duration=${duration}, L1_Amp=${amp_l1}, L2_Amp=${amp_l2}`);
+    const { l1, l2 } = solveLagrangePoints();
+    
+    let l2_orbit;
+    // 1. Compute L1 Lyapunov Orbit
+    const l1_orbit = computeLyapunov(l1, amp_l1);
+    
+    // Initial State of Orbit
+    const x0 = l1 - kmToNorm(amp_l1);
+    const vy0 = l1_orbit.vy0;
+    const period = l1_orbit.period;
+    
+    // 2. Integrate Variational Equations for one period to get Monodromy Matrix (M)
+    // Initial Augmented State: [x, y, vx, vy, 1, 0, 0, 0, 0, 1, 0, 0, ...]
+    let s = new Float64Array(20);
+    s[0] = x0; s[1] = 0; s[2] = 0; s[3] = vy0;
+    // Identity matrix for Phi
+    s[4] = 1; s[9] = 1; s[14] = 1; s[19] = 1;
+    
+    const steps = 2000;
+    const dt = period / steps;
+    
+    // We will store orbit points and STMs along the orbit for sampling
+    const orbitSamples = [];
+    const sampleInterval = Math.floor(steps / 16); // 16 samples
+    
+    let t = 0;
+    for(let i=0; i<=steps; i++) {
+        if (i % sampleInterval === 0 && orbitSamples.length < 16) {
+            // Store current state and STM phi(t, 0)
+            const phi_t_0 = s.slice(4);
+            const state_t = { x: s[0], y: s[1], vx: s[2], vy: s[3] };
+            orbitSamples.push({ state: state_t, phi: phi_t_0 });
+        }
+        s = rk4Variational(s, dt, t);
+        t += dt;
+    }
+    
+    // Monodromy Matrix M = Phi(T, 0)
+    const M = s.slice(4);
+    
+    // 3. Eigendecomposition of M
+    // Unstable Eigenvector (v_u) corresponds to largest eigenvalue of M
+    const v_u = powerIteration(M, false);
+    
+    // Stable Eigenvector (v_s) corresponds to largest eigenvalue of M^-1 (smallest of M)
+    const v_s = powerIteration(M, true);
+    
     const manifolds = [];
-    manifoldSeeds = []; // Reset seeds
+    manifoldSeeds = [];
     
-    const offset = kmToNorm(500); // 500km offset to get things moving
-    const vel_kick = kmsToNorm(0.01); // Tiny velocity kick
-
-    // We want to generate a dense set of seeds for the search
-    const branches = 50; 
+    const epsilon = 1e-5; // Perturbation magnitude (normalized)
+    const moon_x = 1 - MASS_RATIO;
+    const earth_x = -MASS_RATIO;
     
-    points.forEach(pt => {
-        // Generate Unstable Manifolds (Forward) -> Into the system
-        for (let i = 0; i < branches; i++) {
-            const angle = (Math.random() - 0.5) * Math.PI; // Cone towards/away
-            // Bias x direction towards moon
-            const dx = Math.cos(angle) * pt.dir; 
-            const dy = Math.sin(angle);
-            
-            const startState = {
-                x: pt.x + dx * offset,
-                y: dy * offset,
-                vx: dx * vel_kick, // Small push 
-                vy: dy * vel_kick
+    // 4. Generate Manifolds from Samples
+    orbitSamples.forEach((sample, idx) => {
+        // Transform eigenvectors to local time
+        let local_vu = matVecMul(sample.phi, v_u);
+        let local_vs = matVecMul(sample.phi, v_s);
+        
+        // Normalize
+        const norm_u = Math.sqrt(local_vu[0]**2 + local_vu[1]**2 + local_vu[2]**2 + local_vu[3]**2);
+        const norm_s = Math.sqrt(local_vs[0]**2 + local_vs[1]**2 + local_vs[2]**2 + local_vs[3]**2);
+        
+        for(let k=0; k<4; k++) local_vu[k] /= norm_u;
+        for(let k=0; k<4; k++) local_vs[k] /= norm_s;
+        
+// --- UNSTABLE MANIFOLDS (Forward) ---
+        // Iterate both directions (+1, -1) along the eigenvector
+        [1, -1].forEach(dir => {
+            const state_u = {
+                x: sample.state.x + epsilon * local_vu[0] * dir,
+                y: sample.state.y + epsilon * local_vu[1] * dir,
+                vx: sample.state.vx + epsilon * local_vu[2] * dir,
+                vy: sample.state.vy + epsilon * local_vu[3] * dir
             };
+            
+            // Check direction relative to L1 x-coordinate
+            // If perturbed x > x_sample, it's going towards Moon.
+            const is_moon_bound = (state_u.x > sample.state.x); 
+            
+            // If Moon-bound, stop at vertical Moon line
+            // If Earth-bound, stop at horizontal crossing (y=0) BEHIND Earth (x < earth_x)
+            const stopFn = is_moon_bound 
+                ? (s) => (s.x >= moon_x) 
+                : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0);
+            
+            // Propagate
+            // Increase duration for Earth-bound as it takes longer to swing around
+            const prop_duration = is_moon_bound ? duration : duration * 4;
+            const res_u = propagate(state_u, prop_duration, 0.002, 0, 10000, true, stopFn);
+            
+            manifolds.push({ type: 'unstable', path: res_u.path });
 
-            // Propagate Forward (Unstable)
-            const fwd = propagate(startState, duration, 0.002, 0, 2000, false);
-            if (fwd.path.length > 5) {
-                manifolds.push(fwd.path);
-                
-                // Analyze for Perilune (Closest Approach to Moon)
-                const moon_x = 1 - MASS_RATIO;
+            // Only use Moon-bound trajectories for Ballistic Capture Seeding
+            if (is_moon_bound) {
                 let min_dist = Infinity;
-                let best_state = null;
                 let best_t = 0;
                 
-                for (let j=0; j<fwd.path.length; j++) {
-                     const p = fwd.path[j];
-                     const dist = Math.sqrt((p.x - moon_x)**2 + p.y**2);
-                     if (dist < min_dist) {
-                         min_dist = dist;
-                         best_state = { x: p.x, y: p.y, vx: fwd.path[j].vx || 0, vy: fwd.path[j].vy || 0 }; // path needs vx/vy? propagate returns it in state but path only has xy usually?
-                         // Wait, propagate stores {x,y} in path. It does NOT store vx/vy in path array.
-                         // We need to re-propagate or store it. 
-                         // Let's modify propagate to return full state? Too expensive for drawing.
-                         // We can estimate velocity or just store index.
-                         best_t = j * 0.002;
-                     }
+                for(let j=0; j<res_u.path.length; j++) {
+                    const p = res_u.path[j];
+                    const dist = Math.sqrt((p.x - moon_x)**2 + p.y**2);
+                    if(dist < min_dist) { min_dist=dist; best_t = j*0.002; }
                 }
                 
-                // If it got reasonably close to Moon (e.g. < 20000km)
                 if (min_dist < kmToNorm(20000)) {
-                    // We need the full state at this point.
-                    // Fast-forward to this time to get velocity
-                    const fullState = propagate(startState, best_t, 0.002, 0, Math.ceil(best_t/0.002)+2, false).state;
-                    
-                    // Convert to Params
-                    // 1. Position -> Alt, Theta
+                    const fullState = propagate(state_u, best_t, 0.002, 0, Math.ceil(best_t/0.002)+2, false).state;
+                     
                     const r_vec_x = fullState.x - moon_x;
                     const r_vec_y = fullState.y;
                     const r_mag = Math.sqrt(r_vec_x**2 + r_vec_y**2);
                     const alt_km = normToKm(r_mag) - MOON_RADIUS;
                     const theta = Math.atan2(r_vec_y, r_vec_x);
-                    
-                    // 2. Velocity -> v_mag, v_angle_off
-                    // Convert Rotating Vel (vx, vy) to Inertial Vel (vx_in, vy_in)
                     const vx_in = fullState.vx - fullState.y;
                     const vy_in = fullState.vy + fullState.x;
                     const v_mag_norm = Math.sqrt(vx_in**2 + vy_in**2);
                     const v_mag_kms = normToKms(v_mag_norm);
                     const v_angle_in = Math.atan2(vy_in, vx_in);
-                    
-                    // v_angle = theta + PI/2 + off
-                    // off = v_angle - (theta + PI/2)
                     let angle_off = v_angle_in - (theta + Math.PI/2);
-                    // Normalize to -PI..PI
                     while (angle_off > Math.PI) angle_off -= 2*Math.PI;
                     while (angle_off < -Math.PI) angle_off += 2*Math.PI;
-                    
-                    // 3. Time -> Sun Phase
-                    // t is the time since start.
-                    // We assume start was at t=0 (sun_angle=0).
-                    // So sun_angle at intercept = best_t * SUN_FREQ
-                    const sun_phase = (best_t * SUN_FREQ_IN_FRAME) % (2*Math.PI);
-                    
-                    // 4. Jacobi Constant
-                    // C = 2*U - v^2
                     const pot = getPotential(fullState.x, fullState.y);
                     const v_rot_sq = fullState.vx**2 + fullState.vy**2;
                     const C = 2*pot - v_rot_sq;
-
+                    
                     manifoldSeeds.push({
-                        alt: alt_km,
-                        theta: theta,
-                        v_mag: v_mag_kms,
-                        v_angle_off: angle_off,
-                        sun_phase: sun_phase,
-                        C: C
+                        alt: alt_km, theta, v_mag: v_mag_kms, v_angle_off: angle_off, sun_phase: 0, C
                     });
                 }
             }
-        }
+        });
+
+        // --- STABLE MANIFOLDS (Backward) ---
+        // Iterate both directions
+        [1, -1].forEach(dir => {
+            const state_s = {
+                x: sample.state.x + epsilon * local_vs[0] * dir,
+                y: sample.state.y + epsilon * local_vs[1] * dir,
+                vx: sample.state.vx + epsilon * local_vs[2] * dir,
+                vy: sample.state.vy + epsilon * local_vs[3] * dir
+            };
+            
+            // Stable manifold is arriving. 
+            // If perturbed x > x_sample (right), it originated from Moon side.
+            // If perturbed x < x_sample (left), it originated from Earth side.
+            const is_from_moon = (state_s.x > sample.state.x);
+
+            const stopFn = is_from_moon 
+                ? (s) => (s.x >= moon_x) 
+                : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0);
+
+            const prop_duration = is_from_moon ? duration : duration * 4;
+            const res_s = propagate(state_s, prop_duration, -0.002, 0, 10000, true, stopFn);
+            manifolds.push({ type: 'stable', path: res_s.path }); 
+        });
     });
+
+    // ========================================================================
+    // L2 STABLE MANIFOLDS (Interior & Exterior)
+    // ========================================================================
+    {
+        // 1. Compute L2 Lyapunov Orbit
+        // Use L2 amplitude
+        l2_orbit = computeLyapunov(l2, amp_l2);
+        
+        // Initial State
+        const x0 = l2 - kmToNorm(amp_l2);
+        const vy0 = l2_orbit.vy0;
+        const period = l2_orbit.period;
+        
+        // 2. Monodromy Matrix (M) - Reusing buffers
+        let s = new Float64Array(20);
+        s[0] = x0; s[1] = 0; s[2] = 0; s[3] = vy0;
+        s[4] = 1; s[9] = 1; s[14] = 1; s[19] = 1; 
+        
+        const steps = 2000;
+        const dt = period / steps;
+        
+        const orbitSamples = [];
+        const sampleInterval = Math.floor(steps / 16); 
+        
+        let t = 0;
+        for(let i=0; i<=steps; i++) {
+            if (i % sampleInterval === 0 && orbitSamples.length < 16) {
+                const phi_t_0 = s.slice(4);
+                const state_t = { x: s[0], y: s[1], vx: s[2], vy: s[3] };
+                orbitSamples.push({ state: state_t, phi: phi_t_0 });
+            }
+            s = rk4Variational(s, dt, t);
+            t += dt;
+        }
+        
+        const M = s.slice(4);
+        // Stable Eigenvector (v_s) -> Backward
+        const v_s = powerIteration(M, true); 
+        // Unstable Eigenvector (v_u) -> Forward
+        const v_u = powerIteration(M, false);
+
+        const epsilon = 1e-5; 
+        const moon_x = 1 - MASS_RATIO;
+        const earth_x = -MASS_RATIO;
+        
+        orbitSamples.forEach((sample) => {
+            let local_vs = matVecMul(sample.phi, v_s);
+            let local_vu = matVecMul(sample.phi, v_u);
+            
+            const norm_s = Math.sqrt(local_vs[0]**2 + local_vs[1]**2 + local_vs[2]**2 + local_vs[3]**2);
+            const norm_u = Math.sqrt(local_vu[0]**2 + local_vu[1]**2 + local_vu[2]**2 + local_vu[3]**2);
+            
+            for(let k=0; k<4; k++) local_vs[k] /= norm_s;
+            for(let k=0; k<4; k++) local_vu[k] /= norm_u;
+            
+            // --- L2 STABLE MANIFOLDS (Backward) ---
+            [1, -1].forEach(dir => {
+                const state_s = {
+                    x: sample.state.x + epsilon * local_vs[0] * dir,
+                    y: sample.state.y + epsilon * local_vs[1] * dir,
+                    vx: sample.state.vx + epsilon * local_vs[2] * dir,
+                    vy: sample.state.vy + epsilon * local_vs[3] * dir
+                };
+                
+                // For L2 (Beyond Moon, x > 1-mu):
+                // Interior Branch (from Moon): Goes Left (-x direction from L2)
+                // Exterior Branch (from Outside): Goes Right (+x direction from L2)
+                
+                // Stable Manifold is arriving at L2.
+                // We integrate BACKWARD.
+                // If perturbed state is Left of sample (x < x_sample), it leads towards Moon (Interior).
+                // If perturbed state is Right of sample (x > x_sample), it leads away (Exterior).
+                
+                const is_interior = (state_s.x < sample.state.x);
+
+                const stopFn = is_interior
+                    ? (s) => (s.x <= moon_x) 
+                    : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0); 
+
+                const prop_duration = is_interior ? duration : duration * 8;
+                const max_steps = is_interior ? 10000 : 40000;
+                
+                const res_s = propagate(state_s, prop_duration, -0.002, 0, max_steps, true, stopFn);
+                
+                if (res_s.path.length > 10) {
+                    manifolds.push({ type: 'stable', path: res_s.path }); 
+                }
+            });
+
+            // --- L2 UNSTABLE MANIFOLDS (Forward) ---
+            [1, -1].forEach(dir => {
+                const state_u = {
+                    x: sample.state.x + epsilon * local_vu[0] * dir,
+                    y: sample.state.y + epsilon * local_vu[1] * dir,
+                    vx: sample.state.vx + epsilon * local_vu[2] * dir,
+                    vy: sample.state.vy + epsilon * local_vu[3] * dir
+                };
+
+                // Unstable Manifold is departing L2.
+                // We integrate FORWARD.
+                // If perturbed state is Left (x < sample.x), it falls into the Moon well (Interior).
+                // If perturbed state is Right (x > sample.x), it escapes outward (Exterior).
+
+                const is_interior = (state_u.x < sample.state.x);
+
+                const stopFn = is_interior
+                    ? (s) => (s.x <= moon_x) // Stop at Moon vertical line
+                    : (s, prev_s) => (s.x < earth_x && s.y * prev_s.y < 0); // Loop around Earth
+
+                const prop_duration = is_interior ? duration : duration * 8;
+                const max_steps = is_interior ? 10000 : 40000;
+
+                const res_u = propagate(state_u, prop_duration, 0.002, 0, max_steps, true, stopFn);
+
+                if (res_u.path.length > 10) {
+                    manifolds.push({ type: 'unstable', path: res_u.path });
+                }
+            });
+        });
+    }
 
     postMessage({
         type: 'MANIFOLDS_GENERATED',
-        payload: manifolds
+        payload: {
+            manifolds: manifolds,
+            l1_orbit: l1_orbit,
+            l2_orbit: l2_orbit
+        }
     });
 }
-
-
-
 async function runSearch(duration_norm, leo_r_norm) {
     const earth_x = -MASS_RATIO;
     const leo_tolerance_norm = kmToNorm(500);
