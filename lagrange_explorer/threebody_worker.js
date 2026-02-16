@@ -922,11 +922,23 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
             for(let k=0; k<res_u.path.length-1; k++) {
                 const p1 = res_u.path[k];
                 const p2 = res_u.path[k+1];
+                
+                // Vertical (Moon X)
                 if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
                      const t_int = (moon_x - p1.x) / (p2.x - p1.x);
                      const y_int = p1.y + t_int * (p2.y - p1.y);
                      const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                     poincareIntersections.push({ y: y_int, vy: vy_int, type: 'unstable' });
+                     const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                     poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'unstable', location: 'vertical_moon' });
+                }
+                
+                // Horizontal (y = 0, Left of Earth)
+                if (p1.y * p2.y < 0 && p1.x < earth_x) {
+                     const t_int = (0 - p1.y) / (p2.y - p1.y);
+                     const x_int = p1.x + t_int * (p2.x - p1.x);
+                     const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                     const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                     poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'unstable', location: 'horizontal_left' });
                 }
             }
             
@@ -1004,23 +1016,36 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
             const prop_duration = is_from_moon ? duration : duration * 4;
             const res_s = propagate(state_s, prop_duration, -0.002, 0, 10000, true, stopFn); // Re-add missing propagation
             
-            for(let k=0; k<res_s.path.length-1; k++) {
-                const p1 = res_s.path[k];
-                const p2 = res_s.path[k+1];
-                if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
-                     const t_int = (moon_x - p1.x) / (p2.x - p1.x);
-                     const y_int = p1.y + t_int * (p2.y - p1.y);
-                     const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                     poincareIntersections.push({ y: y_int, vy: vy_int, type: 'stable' });
+                // Check Intersections
+                for(let k=0; k<res_s.path.length-1; k++) {
+                    const p1 = res_s.path[k];
+                    const p2 = res_s.path[k+1];
+                    
+                    // Vertical (x = moon_x)
+                    if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
+                         const t_int = (moon_x - p1.x) / (p2.x - p1.x);
+                         const y_int = p1.y + t_int * (p2.y - p1.y);
+                         const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                         const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                         poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'stable', location: 'vertical_moon' });
+                    }
+                    
+                    // Horizontal (y = 0, Left of Earth)
+                    if (p1.y * p2.y < 0 && p1.x < earth_x) {
+                         const t_int = (0 - p1.y) / (p2.y - p1.y);
+                         const x_int = p1.x + t_int * (p2.x - p1.x);
+                         const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                         const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                         poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'stable', location: 'horizontal_left' });
+                    }
                 }
-            }
-            
-            // Only keep 32 paths for visual rendering (256 / 8 = 32)
-            if (idx % 8 === 0) {
-                manifolds.push({ type: 'stable', path: res_s.path }); 
-            }
+
+                // Only keep 32 paths for visual rendering (256 / 8 = 32)
+                if (idx % 8 === 0) {
+                    manifolds.push({ type: 'stable', path: res_s.path }); 
+                }
+            });
         });
-    });
 
     // ========================================================================
     // L2 STABLE MANIFOLDS (Interior & Exterior)
@@ -1102,11 +1127,23 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                 for(let k=0; k<res_s.path.length-1; k++) {
                     const p1 = res_s.path[k];
                     const p2 = res_s.path[k+1];
+                    
+                    // Vertical Moon
                     if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
                          const t_int = (moon_x - p1.x) / (p2.x - p1.x);
                          const y_int = p1.y + t_int * (p2.y - p1.y);
                          const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                         poincareIntersections.push({ y: y_int, vy: vy_int, type: 'stable' });
+                         const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                         poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'stable', location: 'vertical_moon' });
+                    }
+                    
+                    // Horizontal Left
+                    if (p1.y * p2.y < 0 && p1.x < earth_x) {
+                         const t_int = (0 - p1.y) / (p2.y - p1.y);
+                         const x_int = p1.x + t_int * (p2.x - p1.x);
+                         const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                         const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                         poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'stable', location: 'horizontal_left' });
                     }
                 }
 
@@ -1139,11 +1176,23 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                 for(let k=0; k<res_u.path.length-1; k++) {
                     const p1 = res_u.path[k];
                     const p2 = res_u.path[k+1];
+                    
+                    // Vertical Moon
                     if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
                          const t_int = (moon_x - p1.x) / (p2.x - p1.x);
                          const y_int = p1.y + t_int * (p2.y - p1.y);
                          const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                         poincareIntersections.push({ y: y_int, vy: vy_int, type: 'unstable' });
+                         const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                         poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'unstable', location: 'vertical_moon' });
+                    }
+                    
+                    // Horizontal Left
+                    if (p1.y * p2.y < 0 && p1.x < earth_x) {
+                         const t_int = (0 - p1.y) / (p2.y - p1.y);
+                         const x_int = p1.x + t_int * (p2.x - p1.x);
+                         const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                         const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                         poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'unstable', location: 'horizontal_left' });
                     }
                 }
 

@@ -570,6 +570,9 @@ searchWorker.onmessage = function(e) {
              manifoldPaths = payload;
         } else {
              manifoldPaths = payload.manifolds;
+             if (payload.intersections) {
+                 window.allIntersections = payload.intersections;
+             }
              if (payload.l1_orbit && systemInfo && systemInfo.l1) {
                  systemInfo.l1.orbit = payload.l1_orbit;
              }
@@ -583,6 +586,9 @@ searchWorker.onmessage = function(e) {
         if (typeof currentPoincareSection !== 'undefined' && currentPoincareSection) {
             showPoincareSection(currentPoincareSection);
         }
+        
+        // Update visual bounds of sections
+        updateSectionBounds();
     }
 };
 
@@ -1171,37 +1177,80 @@ function draw() {
              const moon_x = 1 - MASS_RATIO;
              const r_moon = kmToNorm(MOON_RADIUS);
              const r_hill = kmToNorm(MOON_HILL_KM);
-             
-             // Define Sections
-             window.poincareSections = [
-                 { id: 'u3', label: "U3", x: moon_x, yMin: r_moon, yMax: r_hill, color: '#ffaa44' },
-                 { id: 'u2', label: "U2", x: moon_x, yMin: -r_hill, yMax: -r_moon, color: '#ffaa44' }
-             ];
+                          // Define Sections (Initialize Once)
+              if (!window.poincareSections) {
+                  window.poincareSections = [
+                      // Vertical Sections (Moon)
+                      { id: 'u3', label: "U3", type: 'vertical', x: moon_x, yMin: r_moon, yMax: r_hill, color: '#ffaa44' },
+                      { id: 'u2', label: "U2", type: 'vertical', x: moon_x, yMin: -r_hill, yMax: -r_moon, color: '#ffaa44' }
+                  ];
+              }
+              
+              // Add U1/U4 if systemInfo is ready and they are missing
+              if (systemInfo && systemInfo.l3) {
+                  const hasU1 = window.poincareSections.find(s => s.id === 'u1');
+                  if (!hasU1) {
+                      const earth_x = -MASS_RATIO;
+                      const r_earth = kmToNorm(EARTH_RADIUS);
+                      const l3_x = systemInfo.l3.x;
+                      
+                      const sectionsToAdd = [
+                          { 
+                              id: 'u1', label: "U1", type: 'horizontal', y: 0, 
+                              xMin: l3_x, xMax: earth_x - r_earth, 
+                              color: '#44aaff' 
+                          },
+                          { 
+                              id: 'u4', label: "U4", type: 'horizontal', y: 0, 
+                              xMin: -4.5, xMax: l3_x, 
+                              color: '#44aaff' 
+                          }
+                      ];
+                      
+                      // Check if we have data to bounds immediately?
+                      // We can just add them, updateSectionBounds will catch formatting on next pass if triggered
+                      // Or we can manually trigger updateSectionBounds() here if data exists?
+                      window.poincareSections.push(...sectionsToAdd);
+                      updateSectionBounds(); // Immediate update if data available
+                  }
+              }
              
              ctx.lineWidth = 3;
              ctx.font = 'bold 12px sans-serif';
              
              window.poincareSections.forEach(sec => {
-                 const pStart = worldToCanvas(sec.x, sec.yMin);
-                 const pEnd = worldToCanvas(sec.x, sec.yMax);
-                 
                  ctx.strokeStyle = 'white'; // sec.color;
-                 ctx.setLineDash([2, 2]);
-                 ctx.beginPath();
-                 ctx.moveTo(pStart.x, pStart.y);
-                 ctx.lineTo(pEnd.x, pEnd.y);
-                 ctx.stroke();
+                  ctx.setLineDash([2, 2]);
+                  ctx.beginPath();
+                  let pStart, pEnd;
+                  if (sec.type === 'horizontal') {
+                      pStart = worldToCanvas(sec.xMin, sec.y);
+                      pEnd = worldToCanvas(sec.xMax, sec.y);
+                      ctx.moveTo(pStart.x, pStart.y);
+                      ctx.lineTo(pEnd.x, pEnd.y);
+                  } else { // vertical
+                      pStart = worldToCanvas(sec.x, sec.yMin);
+                      pEnd = worldToCanvas(sec.x, sec.yMax);
+                      ctx.moveTo(pStart.x, pStart.y);
+                      ctx.lineTo(pEnd.x, pEnd.y);
+                  }
+                  ctx.stroke();
                  ctx.setLineDash([]);
                  
                  // Draw End Caps
                  ctx.fillStyle = 'white';
                  ctx.fillRect(pStart.x - 3, pStart.y - 1, 6, 2);
                  ctx.fillRect(pEnd.x - 3, pEnd.y - 1, 6, 2);
-                 
-                 // Label
-                 ctx.fillStyle = '#ffaa44';
-                 const pLabel = worldToCanvas(sec.x, (sec.yMin + sec.yMax)/2);
-                 ctx.fillText(sec.label, pLabel.x + 8, pLabel.y + 4);
+                                  // Label
+                  ctx.fillStyle = '#ffaa44';
+                  let pLabel;
+                  if (sec.type === 'horizontal') {
+                       pLabel = worldToCanvas((sec.xMin + sec.xMax)/2, sec.y);
+                       ctx.fillText(sec.label, pLabel.x, pLabel.y - 8);
+                  } else {
+                       pLabel = worldToCanvas(sec.x, (sec.yMin + sec.yMax)/2);
+                       ctx.fillText(sec.label, pLabel.x + 8, pLabel.y + 4);
+                  }
              });
         }
         
@@ -1346,33 +1395,10 @@ canvas.addEventListener('mousemove', (e) => {
         
         panStart = { x: e.clientX, y: e.clientY };
     } else {
-        // Highlight manifold on hover
-        // Screen coords
-        const mx = e.clientX;
-        const my = e.clientY;
-        
-        let found = null;
-        if (manifoldPaths) {
-             const threshold = 5; // pixels
-             for (const m of manifoldPaths) {
-                 const path = m.path || m;
-                 // Quick check bounding box? No, just optimize loop
-                 // Check every 10th point for speed?
-                 if (!path) continue;
-                 
-                 for (let i=0; i<path.length; i+=5) {
-                     const p = worldToCanvas(path[i].x, path[i].y);
-                     if (Math.abs(p.x - mx) < threshold && Math.abs(p.y - my) < threshold) {
-                         found = m;
-                         break;
-                     }
-                 }
-                 if (found) break;
-             }
-        }
-        
-        if (found !== hoveredManifold) {
-            hoveredManifold = found;
+        // Highlight logic removed as requested.
+        // Only keep scatter plot hover effect.
+        if (hoveredManifold !== null) {
+            hoveredManifold = null;
         }
     }
 });
@@ -1395,22 +1421,29 @@ canvas.addEventListener('click', (e) => {
     let clickedSection = null;
     
     for (const sec of window.poincareSections) {
-        const secScreenX = worldToCanvas(sec.x, 0).x;
-        // Check X distance (screen space for ease)
-        if (Math.abs(e.clientX - secScreenX) < clickToleranceScreen) {
-            // Check Y range (world space is better here)
-            // Note: sec.yMin is mathematically smaller (more negative) than sec.yMax? 
-            // In our definition:
-            // U3: yMin=Radius, yMax=Hill (Positive)
-            // U2: yMin=-Hill, yMax=-Radius (Negative)
-            // So logic holds: val >= min && val <= max
-            
-            if (mouseWorld.y >= Math.min(sec.yMin, sec.yMax) && mouseWorld.y <= Math.max(sec.yMin, sec.yMax)) {
-                clickedSection = sec;
-                break; 
+            // Horizontal Check
+            if (sec.type === 'horizontal') {
+                const secScreenY = worldToCanvas(0, 0).y;
+                 if (Math.abs(e.clientY - secScreenY) < clickToleranceScreen) {
+                      if (mouseWorld.x >= Math.min(sec.xMin, sec.xMax) && mouseWorld.x <= Math.max(sec.xMin, sec.xMax)) {
+                          clickedSection = sec;
+                          break;
+                      }
+                 }
+            } else {
+                // Vertical Check
+                const secScreenX = worldToCanvas(sec.x, 0).x;
+                // Check X distance (screen space for ease)
+                if (Math.abs(e.clientX - secScreenX) < clickToleranceScreen) {
+                    // Check Y range (world space is better here)
+                    if (mouseWorld.y >= Math.min(sec.yMin, sec.yMax) && mouseWorld.y <= Math.max(sec.yMin, sec.yMax)) {
+                        clickedSection = sec;
+                        break; 
+                    }
+                }
             }
         }
-    }
+
     
     if (clickedSection) {
         showPoincareSection(clickedSection);
@@ -1804,6 +1837,54 @@ scatterCanvas.addEventListener('mouseleave', () => {
 // Initial Manifold Generation
 updateManifolds();
 
+// Update section bounds based on intersections
+function updateSectionBounds() {
+    if (!window.allIntersections || !window.poincareSections) return;
+    
+    // U1/U4 (Horizontal) -> Bounds on X (from y=0 crossings)
+    // U2/U3 (Vertical) -> Bounds on Y (from x=Moon crossings)
+    
+    // Reset or refine?
+    // Let's find min/max for each ID
+    const bounds = {};
+    
+    window.allIntersections.forEach(p => {
+        let id_location = null;
+        if (p.location === 'horizontal_left') {
+             // Distinguish U1 (Left of L3 up to Earth) vs U4 (Left of L3 outwards)
+             // Distinguish U1 (Left of L3 up to Earth) vs U4 (Left of L3 outwards)
+             // System L3 x is needed.
+             const l3_x = (systemInfo && systemInfo.l3) ? systemInfo.l3.x : -1.0; 
+             if (p.x < l3_x) id_location = 'u4';
+             else id_location = 'u1';
+        } else if (p.location === 'vertical_moon') {
+             if (p.y > 0) id_location = 'u3';
+             else id_location = 'u2';
+        }
+        
+        if (id_location) {
+            if (!bounds[id_location]) bounds[id_location] = { min: Infinity, max: -Infinity };
+            const val = (id_location === 'u1' || id_location === 'u4') ? p.x : p.y;
+            if (val < bounds[id_location].min) bounds[id_location].min = val;
+            if (val > bounds[id_location].max) bounds[id_location].max = val;
+        }
+    });
+    
+    window.poincareSections.forEach(sec => {
+        if (bounds[sec.id]) {
+            // Apply with some padding
+            const pad = 0.05;
+            if (sec.type === 'horizontal') {
+                sec.xMin = bounds[sec.id].min; // - pad;
+                sec.xMax = bounds[sec.id].max; // + pad;
+            } else {
+                sec.yMin = bounds[sec.id].min; // - pad;
+                sec.yMax = bounds[sec.id].max; // + pad;
+            }
+        }
+    });
+}
+ 
 // Start rendering
 draw();
 
@@ -1828,14 +1909,46 @@ function showPoincareSection(section) {
     poincarePanel.style.display = 'flex';
     poincareLabel.textContent = section.label;
     
-    const x_section = section.x;
-    const yMin = Math.min(section.yMin, section.yMax);
-    const yMax = Math.max(section.yMin, section.yMax);
     
-    // Compute Intersections
+    // Compute Intersections (Use worker data if available)
     const points = [];
-    
-    if (manifoldPaths) {
+    if (window.allIntersections && window.allIntersections.length > 0) {
+        if (section.type === 'horizontal') {
+            const xMin = Math.min(section.xMin, section.xMax);
+            const xMax = Math.max(section.xMin, section.xMax);
+            
+            window.allIntersections.forEach(p => {
+                if (p.location === 'horizontal_left') {
+                    if (p.x >= xMin && p.x <= xMax) {
+                        // For horizontal section, we plot X vs Vx (instead of Y vs Vy)
+                        // Store {y: p.x, vy: p.vx} conceptually for the plot function
+                        // We map p.x -> plot Y-axis (position)
+                        // We map p.vx -> plot Vy-axis (velocity)
+                        // Wait, usually Poincare map: (x, x_dot)
+                        points.push({ y: p.x, vy: p.vx, type: p.type, manifold: null }); 
+                    }
+                }
+            });
+        } else {
+             // Vertical (U2/U3)
+            const yMin = Math.min(section.yMin, section.yMax);
+            const yMax = Math.max(section.yMin, section.yMax);
+            
+            window.allIntersections.forEach(p => {
+                if (p.location === 'vertical_moon') { // or check x match
+                     if (p.y >= yMin && p.y <= yMax) {
+                         points.push({ y: p.y, vy: p.vy, type: p.type, manifold: null });
+                     }
+                } else if (!p.location && Math.abs(p.x - section.x) < 0.001) {
+                     // Legacy fallback
+                     if (p.y >= yMin && p.y <= yMax) {
+                         points.push({ y: p.y, vy: p.vy, type: p.type, manifold: null });
+                     }
+                }
+            });
+        }
+    } else if (manifoldPaths) {
+        // Fallback to calculating on fly (only 32 paths)
         manifoldPaths.forEach(m => {
             const path = m.path || m;
             const type = m.type || 'unknown';
@@ -1844,17 +1957,36 @@ function showPoincareSection(section) {
                 const p1 = path[i];
                 const p2 = path[i+1];
                 
-                // Check if segment crosses x_section
-                if ((p1.x - x_section) * (p2.x - x_section) < 0) {
-                    // Linear interpolation
-                    const t = (x_section - p1.x) / (p2.x - p1.x);
-                    const y = p1.y + t * (p2.y - p1.y);
-                    const vy = (p1.vy !== undefined) ? (p1.vy + t * (p2.vy - p1.vy)) : 0; 
-                    
-                    // Filter by Y range
-                    if (y >= yMin && y <= yMax) {
-                        if (p1.vy !== undefined) {
-                            points.push({ y, vy, type, manifold: m }); // Store ref to manifold
+                if (section.type === 'horizontal') {
+                    // Check y=0 crossing (Left of Earth)
+                    if (p1.y * p2.y < 0 && p1.x < -MASS_RATIO) {
+                         const t = (0 - p1.y) / (p2.y - p1.y);
+                         const x = p1.x + t * (p2.x - p1.x);
+                         const vx = p1.vx + t * (p2.vx - p1.vx);
+                         
+                         const xMin = Math.min(section.xMin, section.xMax);
+                         const xMax = Math.max(section.xMin, section.xMax);
+                         
+                         if (x >= xMin && x <= xMax) {
+                             points.push({ y: x, vy: vx, type, manifold: m });
+                         }
+                    }
+                } else {
+                    // Vertical
+                    const x_section = section.x;
+                    // Check if segment crosses x_section
+                    if ((p1.x - x_section) * (p2.x - x_section) < 0) {
+                        // Linear interpolation
+                        const t = (x_section - p1.x) / (p2.x - p1.x);
+                        const y = p1.y + t * (p2.y - p1.y);
+                        const vy = (p1.vy !== undefined) ? (p1.vy + t * (p2.vy - p1.vy)) : 0; 
+                        
+                        const yMin = Math.min(section.yMin, section.yMax);
+                        const yMax = Math.max(section.yMin, section.yMax);
+
+                        // Filter by Y range
+                        if (y >= yMin && y <= yMax) {
+                            points.push({ y, vy, type, manifold: m }); 
                         }
                     }
                 }
@@ -1980,12 +2112,21 @@ function drawPoincarePlot(points) {
     poincareCtx.fillStyle = '#aaa';
     poincareCtx.font = '10px monospace';
     poincareCtx.textAlign = 'center';
-    poincareCtx.fillText('y (position)', w/2, h - 5);
+    
+    let labelHoniz = 'y (position)';
+    let labelVert = 'vy (velocity)';
+    
+    if (currentPoincareSection && currentPoincareSection.type === 'horizontal') {
+        labelHoniz = 'x (position)';
+        labelVert = 'vx (velocity)';
+    }
+    
+    poincareCtx.fillText(labelHoniz, w/2, h - 5);
     
     poincareCtx.save();
     poincareCtx.translate(10, h/2);
     poincareCtx.rotate(-Math.PI/2);
-    poincareCtx.fillText('vy (velocity)', 0, 0);
+    poincareCtx.fillText(labelVert, 0, 0);
     poincareCtx.restore();
 }
 
@@ -2036,60 +2177,81 @@ poincareCanvas.addEventListener('click', (e) => {
     const s = poincareCanvas.scaleInfo;
     
     // 2. Inverse Map
-    // cx = margin + ((val - minY) / rangeY) * plotW;
-    // val - minY = (cx - margin) / plotW * rangeY
-    const yVal = s.minY + ((mx - s.margin) / s.plotW) * s.rangeY;
-    let vyVal = s.minVy + ((s.plotH - (my - s.margin)) / s.plotH) * s.rangeVy; // Inverted Y logic
+    // yVal (horizontal axis of plot) represents position (Y for vertical section, X for horizontal)
+    // vyVal (vertical axis of plot) represents velocity (Vy for vertical, Vx for horizontal)
+    const val1 = s.minY + ((mx - s.margin) / s.plotW) * s.rangeY;
+    let val2 = s.minVy + ((s.plotH - (my - s.margin)) / s.plotH) * s.rangeVy; 
     
     // 3. Determine Physics State
-    // We need 'vx'. Use Jacobi Constant of the L1 orbit as reference.
     if (!systemInfo || !systemInfo.l1 || !systemInfo.l1.orbit) {
         console.warn("L1 orbit info missing, cannot determine energy.");
         return;
     }
     
-    // Calculate Target C
+    // Calculate Target C (Jacobi Constant) from L1
     const l1_orb = systemInfo.l1.orbit;
-    // Reconstruct seed state for L1 orbit to get its Energy
-    // The worker returns vy0, amplitude. 
-    // State: x = L1_x - amp, y=0, vx=0, vy=vy0
     const l1_x = systemInfo.l1.x;
     const amp_norm = kmToNorm(l1_orb.amplitude_km);
-    const seed_x = l1_x - amp_norm;
-    const seed_y = 0;
-    const seed_vx = 0;
-    const seed_vy = l1_orb.vy0;
+    const seed_x_ref = l1_x - amp_norm;
+    const seed_y_ref = 0;
+    const seed_vx_ref = 0;
+    const seed_vy_ref = l1_orb.vy0;
     
-    const pot_seed = getPotential(seed_x, seed_y);
-    const v2_seed = seed_vx**2 + seed_vy**2;
+    const pot_seed = getPotential(seed_x_ref, seed_y_ref);
+    const v2_seed = seed_vx_ref**2 + seed_vy_ref**2;
     const C_target = 2 * pot_seed - v2_seed;
     
-    // Now solve for vx at our click point (x_section, yVal)
-    // C = 2*Pot - (vx^2 + vy^2)
-    // vx^2 = 2*Pot - C - vy^2
+    let startState;
+    let term;
     
-    const x_sec = currentPoincareSection.x;
-    const pot_click = getPotential(x_sec, yVal);
-    const term = 2 * pot_click - C_target - vyVal**2;
-    
-    if (term < 0) {
-        console.warn("Forbidden Region: Energy insufficient.");
-        // Visual feedback?
-        poincareCtx.fillStyle = 'red';
-        poincareCtx.beginPath();
-        poincareCtx.arc(mx, my, 4, 0, Math.PI*2);
-        poincareCtx.fill();
-        return;
-    }
-    
-    let vxVal = Math.sqrt(term); // Assume +vx (L1 -> Moon direction) by default
-    
-    if (currentPoincareSection && currentPoincareSection.id === 'u3') {
-        vxVal = -vxVal;
+    if (currentPoincareSection.type === 'horizontal') {
+        // Horizontal Section: y=0
+        // val1 = x position
+        // val2 = vx velocity
+        const rx = val1;
+        const rvx = val2;
+        const ry = 0; 
+        
+        // Solve for vy
+        // C = 2*Pot(x,0) - (vx^2 + vy^2)
+        // vy^2 = 2*Pot - C - vx^2
+        const pot_click = getPotential(rx, ry);
+        term = 2 * pot_click - C_target - rvx**2;
+        
+        if (term < 0) { console.warn("Forbidden"); return; }
+        
+        // Direction of vy? 
+        // For U1 (Earth-L3), unstable manifolds often spiral out.
+        // We usually assume +vy or -vy depending on manifold branch.
+        // Reverted to positive as per user request.
+        const rvy = Math.sqrt(term); 
+        
+        // Negate x-velocity for U1/U4 (Horizontal) as requested
+        // Also negate y-velocity as requested
+        startState = { x: rx, y: ry, vx: rvx, vy: rvy };
+        
+    } else {
+        // Vertical Section (Original Logic)
+        const ry = val1;
+        let rvy = val2;
+        const rx = currentPoincareSection.x;
+        
+        // Solve for vx
+        const pot_click = getPotential(rx, ry);
+        term = 2 * pot_click - C_target - rvy**2;
+        
+        if (term < 0) { console.warn("Forbidden"); return; }
+        
+        let rvx = Math.sqrt(term);
+        // U3/U2 logic
+        if (currentPoincareSection.id === 'u3') {
+             rvx = -rvx;
+        }
+        
+        startState = { x: rx, y: ry, vx: rvx, vy: rvy };
     }
     
     // 4. Propagate
-    const startState = { x: x_sec, y: yVal, vx: vxVal, vy: vyVal };
     const duration = 15.0; // Increased to 15.0 (3x longer)
     
     // Forward
@@ -2098,14 +2260,13 @@ poincareCanvas.addEventListener('click', (e) => {
     const bwd = propagate(startState, duration, -0.001, 0, 50000, false);
     
     // Merge
-    // bwd path (reverse it) + fwd path
     const fullPath = [...bwd.path.reverse(), ...fwd.path];
     
     // 5. Store & Visualize
     customTrajectories = [fullPath]; // Overwrite previous
     
-    // Store for drawing
-    window.lastPoincareClick = { x: x_sec, y: yVal };
+    // Store for drawing (Spatial coordinates for main view)
+    window.lastPoincareClick = { x: startState.x, y: startState.y };
     
     // Redraw plot to clear previous points
     if (currentPoincarePoints) {
