@@ -47,24 +47,209 @@ function derivatives(s, t = 0) {
     let ax = 2*s.vy + s.x - (1-MASS_RATIO)*(s.x - x1)/r1_cubed - MASS_RATIO*(s.x - x2)/r2_cubed;
     let ay = -2*s.vx + s.y - (1-MASS_RATIO)*s.y/r1_cubed - MASS_RATIO*s.y/r2_cubed;
     
-    // Solar perturbations
-    const sun_angle = SUN_FREQ_IN_FRAME * t; 
-    const sun_x = -SUN_DISTANCE_NORM * Math.cos(sun_angle); 
-    const sun_y = -SUN_DISTANCE_NORM * Math.sin(sun_angle); 
-    
-    const r_sun_sq = (s.x - sun_x)**2 + (s.y - sun_y)**2;
-    const r_sun_cubed = Math.pow(r_sun_sq, 1.5);
-    
-    const r_sun_bary_sq = sun_x**2 + sun_y**2;
-    const r_sun_bary_cubed = Math.pow(r_sun_bary_sq, 1.5);
-    
-    const sun_ax = -MASS_RATIO_SUN * ((s.x - sun_x) / r_sun_cubed + sun_x / r_sun_bary_cubed);
-    const sun_ay = -MASS_RATIO_SUN * ((s.y - sun_y) / r_sun_cubed + sun_y / r_sun_bary_cubed);
+    // Solar perturbations (BCR4BP) - DISABLED
+    const sun_ax = 0; // -MASS_RATIO_SUN * ((s.x - sun_x) / r_sun_cubed + sun_x / r_sun_bary_cubed);
+    const sun_ay = 0; // -MASS_RATIO_SUN * ((s.y - sun_y) / r_sun_cubed + sun_y / r_sun_bary_cubed);
     
     ax += sun_ax;
     ay += sun_ay;
     
     return { dx: s.vx, dy: s.vy, dvx: ax, dvy: ay };
+}
+
+function getJacobian(s) {
+    const x1 = -MASS_RATIO;
+    const x2 = 1 - MASS_RATIO;
+    const r1_sq = (s.x - x1)**2 + s.y**2;
+    const r2_sq = (s.x - x2)**2 + s.y**2;
+    const r1_5 = Math.pow(r1_sq, 2.5);
+    const r2_5 = Math.pow(r2_sq, 2.5);
+    const r1_3 = Math.pow(r1_sq, 1.5);
+    const r2_3 = Math.pow(r2_sq, 1.5);
+
+    const Uxx = 1 - (1-MASS_RATIO)*(1/r1_3 - 3*(s.x-x1)**2/r1_5) - MASS_RATIO*(1/r2_3 - 3*(s.x-x2)**2/r2_5);
+    const Uxy = 3*(1-MASS_RATIO)*(s.x-x1)*s.y/r1_5 + 3*MASS_RATIO*(s.x-x2)*s.y/r2_5;
+    const Uyy = 1 - (1-MASS_RATIO)*(1/r1_3 - 3*s.y**2/r1_5) - MASS_RATIO*(1/r2_3 - 3*s.y**2/r2_5);
+
+    return { Uxx, Uxy, Uyy };
+}
+
+function getEigenDecomposition(l_point_x) {
+    const s = { x: l_point_x, y: 0 };
+    const J = getJacobian(s);
+    
+    const b = 4 - J.Uxx - J.Uyy;
+    const c = J.Uxx * J.Uyy;
+    const disc = b*b - 4*c;
+    
+    const k1 = (-b + Math.sqrt(disc)) / 2;
+    const k2 = (-b - Math.sqrt(disc)) / 2;
+    
+    const lambda = Math.sqrt(k1); // Real eigenvalue
+    const nu = Math.sqrt(-k2);    // Imaginary part (frequency)
+    
+    const c_stable = (lambda*lambda - J.Uxx) / (2*lambda);
+    const v_unstable = [1, c_stable, lambda, c_stable*lambda];
+    const v_stable = [1, -c_stable, -lambda, c_stable*lambda];
+    
+    return { lambda, nu, v_unstable, v_stable, Uxx: J.Uxx, Uyy: J.Uyy, k2 };
+}
+
+function computeLyapunov(l_x, amplitude_km) {
+    const amp_norm = kmToNorm(amplitude_km);
+    const decomp = getEigenDecomposition(l_x);
+    const nu = decomp.nu;
+    const Uxx = decomp.Uxx;
+    
+    // Initial State: Start on the LEFT side of the Lagrange point
+    // x = L - A
+    let x0 = l_x - amp_norm;
+    
+    // Velocity Guess (Linear Theory)
+    // vy > 0 (Up) to create +x Coriolis force (Right) to counteract -x Gravity (Left)
+    const vy_guess = 0.5 * (nu*nu + Uxx) * amp_norm; 
+    let best_vy = Math.abs(vy_guess); 
+
+    // Differential Correction (Single Shooting)
+    for (let iter=0; iter<30; iter++) {
+        let s = { x: x0, y: 0, vx: 0, vy: best_vy };
+        
+        let dt = 0.005;
+        let t = 0;
+        let crossed = false;
+        
+        // Duration limit: slightly more than half period
+        // Period T = 2*PI/nu. Half T = PI/nu.
+        const half_period = Math.PI / nu;
+        const limit_t = half_period * 1.5; 
+        
+        while (t < limit_t) {
+            const next = rk4Step(s, dt, t);
+            
+            // Crossing check (y changes sign)
+            if (s.y * next.y < 0 && t > 0.1) { 
+                const frac = -s.y / (next.y - s.y);
+                // Linear interpolate to exact crossing
+                s = {
+                    x: s.x + frac * (next.x - s.x),
+                    y: 0, 
+                    vx: s.vx + frac * (next.vx - s.vx),
+                    vy: s.vy + frac * (next.vy - s.vy)
+                };
+                t += dt * frac;
+                crossed = true;
+                break;
+            }
+            
+            // Abort if lost
+            if (Math.abs(s.y) > 4 * amp_norm || Math.abs(s.x - l_x) > 4 * amp_norm) break; 
+            
+            // Abort if crashed into moon
+            if (l_x > 0.5) {
+                const dx_moon = s.x - (1 - MASS_RATIO);
+                const r_moon = Math.sqrt(dx_moon*dx_moon + s.y*s.y);
+                if (r_moon < kmToNorm(MOON_RADIUS)) break;
+            }
+
+            s = next;
+            t += dt;
+        }
+        
+        if (!crossed) {
+             // Heuristic retry
+             if (iter < 5) best_vy *= 1.05; 
+             else best_vy *= 0.95;
+             continue;
+        }
+        
+        // Target: vx = 0 at crossing.
+        if (Math.abs(s.vx) < 1e-9) break; // Converged
+        
+        // Calculate Jacobian term d(vx_final) / d(vy_initial) numerically
+        const d_vy = 1e-6;
+        let s_p = { x: x0, y: 0, vx: 0, vy: best_vy + d_vy };
+        let t_p = 0;
+        let p_crossed = false;
+        
+        while (t_p < limit_t) {
+            const next = rk4Step(s_p, dt, t_p);
+            if (s_p.y * next.y < 0 && t_p > 0.1) {
+                const frac = -s_p.y / (next.y - s_p.y);
+                s_p = {
+                    x: s_p.x + frac * (next.x - s_p.x),
+                    y: 0,
+                    vx: s_p.vx + frac * (next.vx - s_p.vx),
+                    vy: s_p.vy + frac * (next.vy - s_p.vy)
+                };
+                p_crossed = true;
+                break;
+            }
+            if (Math.abs(s_p.y) > 4 * amp_norm) break;
+            s_p = next;
+            t_p += dt;
+        }
+        
+        if (!p_crossed) {
+             best_vy *= 1.01;
+             continue;
+        }
+        
+        const grad = (s_p.vx - s.vx) / d_vy;
+        
+        if (Math.abs(grad) < 1e-12) {
+             best_vy += (s.vx > 0 ? -1 : 1) * 0.001; 
+        } else {
+             const adj = -s.vx / grad;
+             const max_step = Math.abs(best_vy) * 0.2; 
+             best_vy += Math.max(-max_step, Math.min(max_step, adj));
+        }
+    }
+    
+    // Generate full path (simulate for a few periods)
+    let final_s = { x: x0, y: 0, vx: 0, vy: best_vy };
+    const period_approx = 2 * Math.PI / nu;
+    const res = propagate(final_s, period_approx * 1.5, 0.01, 0, 1000, false);
+    
+    return { path: res.path, period: period_approx, vy0: best_vy };
+}
+
+function getPotential(x, y, z=0) {
+    const x1 = -MASS_RATIO;
+    const x2 = 1 - MASS_RATIO;
+    const r1 = Math.sqrt((x-x1)**2 + y**2 + z**2);
+    const r2 = Math.sqrt((x-x2)**2 + y**2 + z**2);
+    return 0.5*(x**2 + y**2) + (1-MASS_RATIO)/r1 + MASS_RATIO/r2;
+}
+
+function solveLagrangePoints() {
+    const f = (x) => {
+        const x1 = -MASS_RATIO;
+        const x2 = 1 - MASS_RATIO;
+        const r1 = Math.abs(x - x1);
+        const r2 = Math.abs(x - x2);
+        const term1 = (1-MASS_RATIO) * (x - x1) / (r1*r1*r1);
+        const term2 = MASS_RATIO * (x - x2) / (r2*r2*r2);
+        return x - term1 - term2;
+    };
+    
+    // L1: between Earth and Moon
+    let l1 = 1 - MASS_RATIO - Math.pow(MASS_RATIO/3, 1/3); 
+    for(let i=0; i<20; i++) {
+        const val = f(l1);
+        // Approximate derivative
+        const df = (f(l1+1e-6) - f(l1-1e-6)) / 2e-6; 
+        l1 -= val/df;
+    }
+    
+    // L2: beyond Moon
+    let l2 = 1 - MASS_RATIO + Math.pow(MASS_RATIO/3, 1/3);
+    for(let i=0; i<20; i++) {
+        const val = f(l2);
+        const df = (f(l2+1e-6) - f(l2-1e-6)) / 2e-6; 
+        l2 -= val/df;
+    }
+    
+    return { l1, l2 };
 }
 
 function rk4Step(s, dt, t_current) {
@@ -107,6 +292,7 @@ function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, s
     const abs_duration = Math.abs(duration);
     const abs_dt = Math.abs(dt);
     
+    // Collision thresholds (squared)
     const earth_x = -MASS_RATIO;
     const moon_x = 1 - MASS_RATIO;
     const earth_r_sq = (kmToNorm(EARTH_RADIUS))**2;
@@ -114,9 +300,11 @@ function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, s
     
     let collision = null;
     
+    // Use a small tolerance to avoid floating point issues with the loop condition
     while (Math.abs(t) < abs_duration - 1e-9) {
         let step = is_backward ? -abs_dt : abs_dt;
         
+        // Handle last step
         const remaining = abs_duration - Math.abs(t);
         if (remaining < abs_dt) {
             step = is_backward ? -remaining : remaining;
@@ -126,11 +314,13 @@ function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, s
         t += step;
         
         if (stopOnCollision) {
+            // Check collisions
             const r1_sq = (s.x - earth_x)**2 + s.y**2;
             if (r1_sq < earth_r_sq) {
                 collision = 'earth';
                 break;
             }
+            
             const r2_sq = (s.x - moon_x)**2 + s.y**2;
             if (r2_sq < moon_r_sq) {
                 collision = 'moon';
@@ -332,6 +522,7 @@ function optimizeCandidate(startParams, duration, leo_r) {
 // ============================================================================
 
 let isSearching = false;
+let manifoldSeeds = []; // Seeds for the search algorithm
 
 self.onmessage = function(e) {
     const { type, payload } = e.data;
@@ -339,15 +530,161 @@ self.onmessage = function(e) {
     if (type === 'START_SEARCH') {
         const { duration_norm, leo_r_norm } = payload;
         isSearching = true;
+        // Ensure manifolds are ready if not already
+        if (manifoldSeeds.length === 0) {
+             generateManifolds(daysToNorm(90));
+        }
         runSearch(duration_norm, leo_r_norm);
     } else if (type === 'STOP_SEARCH') {
         isSearching = false;
+    } else if (type === 'GENERATE_MANIFOLDS') {
+        const { duration_norm } = payload || { duration_norm: daysToNorm(60) };
+        generateManifolds(duration_norm);
+    } else if (type === 'COMPUTE_SYSTEM_INFO') {
+        const { l1, l2 } = solveLagrangePoints();
+        const l1_decomp = getEigenDecomposition(l1);
+        const l2_decomp = getEigenDecomposition(l2);
+        
+        // Compute Orbits
+        // ~3500 km amplitude
+        const l1_orbit = computeLyapunov(l1, 3500);
+        const l2_orbit = computeLyapunov(l2, 3500);
+        
+        postMessage({
+            type: 'SYSTEM_INFO',
+            payload: {
+                l1: { x: l1, decomp: l1_decomp, orbit: l1_orbit },
+                l2: { x: l2, decomp: l2_decomp, orbit: l2_orbit }
+            }
+        });
     }
 };
+
+function generateManifolds(duration) {
+    const { l1, l2 } = solveLagrangePoints();
+    const points = [
+        { x: l1, label: 'L1', dir: 1 }, // dir 1 = towards moon (approx)
+        { x: l2, label: 'L2', dir: -1 } 
+    ];
+    
+    const manifolds = [];
+    manifoldSeeds = []; // Reset seeds
+    
+    const offset = kmToNorm(500); // 500km offset to get things moving
+    const vel_kick = kmsToNorm(0.01); // Tiny velocity kick
+
+    // We want to generate a dense set of seeds for the search
+    const branches = 50; 
+    
+    points.forEach(pt => {
+        // Generate Unstable Manifolds (Forward) -> Into the system
+        for (let i = 0; i < branches; i++) {
+            const angle = (Math.random() - 0.5) * Math.PI; // Cone towards/away
+            // Bias x direction towards moon
+            const dx = Math.cos(angle) * pt.dir; 
+            const dy = Math.sin(angle);
+            
+            const startState = {
+                x: pt.x + dx * offset,
+                y: dy * offset,
+                vx: dx * vel_kick, // Small push 
+                vy: dy * vel_kick
+            };
+
+            // Propagate Forward (Unstable)
+            const fwd = propagate(startState, duration, 0.002, 0, 2000, false);
+            if (fwd.path.length > 5) {
+                manifolds.push(fwd.path);
+                
+                // Analyze for Perilune (Closest Approach to Moon)
+                const moon_x = 1 - MASS_RATIO;
+                let min_dist = Infinity;
+                let best_state = null;
+                let best_t = 0;
+                
+                for (let j=0; j<fwd.path.length; j++) {
+                     const p = fwd.path[j];
+                     const dist = Math.sqrt((p.x - moon_x)**2 + p.y**2);
+                     if (dist < min_dist) {
+                         min_dist = dist;
+                         best_state = { x: p.x, y: p.y, vx: fwd.path[j].vx || 0, vy: fwd.path[j].vy || 0 }; // path needs vx/vy? propagate returns it in state but path only has xy usually?
+                         // Wait, propagate stores {x,y} in path. It does NOT store vx/vy in path array.
+                         // We need to re-propagate or store it. 
+                         // Let's modify propagate to return full state? Too expensive for drawing.
+                         // We can estimate velocity or just store index.
+                         best_t = j * 0.002;
+                     }
+                }
+                
+                // If it got reasonably close to Moon (e.g. < 20000km)
+                if (min_dist < kmToNorm(20000)) {
+                    // We need the full state at this point.
+                    // Fast-forward to this time to get velocity
+                    const fullState = propagate(startState, best_t, 0.002, 0, Math.ceil(best_t/0.002)+2, false).state;
+                    
+                    // Convert to Params
+                    // 1. Position -> Alt, Theta
+                    const r_vec_x = fullState.x - moon_x;
+                    const r_vec_y = fullState.y;
+                    const r_mag = Math.sqrt(r_vec_x**2 + r_vec_y**2);
+                    const alt_km = normToKm(r_mag) - MOON_RADIUS;
+                    const theta = Math.atan2(r_vec_y, r_vec_x);
+                    
+                    // 2. Velocity -> v_mag, v_angle_off
+                    // Convert Rotating Vel (vx, vy) to Inertial Vel (vx_in, vy_in)
+                    const vx_in = fullState.vx - fullState.y;
+                    const vy_in = fullState.vy + fullState.x;
+                    const v_mag_norm = Math.sqrt(vx_in**2 + vy_in**2);
+                    const v_mag_kms = normToKms(v_mag_norm);
+                    const v_angle_in = Math.atan2(vy_in, vx_in);
+                    
+                    // v_angle = theta + PI/2 + off
+                    // off = v_angle - (theta + PI/2)
+                    let angle_off = v_angle_in - (theta + Math.PI/2);
+                    // Normalize to -PI..PI
+                    while (angle_off > Math.PI) angle_off -= 2*Math.PI;
+                    while (angle_off < -Math.PI) angle_off += 2*Math.PI;
+                    
+                    // 3. Time -> Sun Phase
+                    // t is the time since start.
+                    // We assume start was at t=0 (sun_angle=0).
+                    // So sun_angle at intercept = best_t * SUN_FREQ
+                    const sun_phase = (best_t * SUN_FREQ_IN_FRAME) % (2*Math.PI);
+                    
+                    // 4. Jacobi Constant
+                    // C = 2*U - v^2
+                    const pot = getPotential(fullState.x, fullState.y);
+                    const v_rot_sq = fullState.vx**2 + fullState.vy**2;
+                    const C = 2*pot - v_rot_sq;
+
+                    manifoldSeeds.push({
+                        alt: alt_km,
+                        theta: theta,
+                        v_mag: v_mag_kms,
+                        v_angle_off: angle_off,
+                        sun_phase: sun_phase,
+                        C: C
+                    });
+                }
+            }
+        }
+    });
+
+    postMessage({
+        type: 'MANIFOLDS_GENERATED',
+        payload: manifolds
+    });
+}
+
+
 
 async function runSearch(duration_norm, leo_r_norm) {
     const earth_x = -MASS_RATIO;
     const leo_tolerance_norm = kmToNorm(500);
+    
+    // Calculate Jacobi just for reference limits
+    const { l1 } = solveLagrangePoints();
+    const C_L1 = 2 * getPotential(l1, 0);
     
     let iterations = 0;
     const start_time = Date.now();
@@ -357,26 +694,54 @@ async function runSearch(duration_norm, leo_r_norm) {
         const batch_size = 20;
         let batchResults = [];
         let debugPaths = [];
+        let bestBatchDiff = Infinity;
+        let bestBatchCandidate = null;
         
         for (let i = 0; i < batch_size; i++) {
-            // Random Perilune State
-            const alt_km = 100 + Math.random() * 9900;
-            const theta = Math.random() * 2 * Math.PI;
-            const r_p_norm = kmToNorm(MOON_RADIUS + alt_km);
+            let params;
             
-            const v_esc = Math.sqrt(2 * MU_MOON / normToKm(r_p_norm)); 
-            const v_mag_kms = v_esc * (0.7 + Math.random() * 0.6); 
-            
-            const v_angle = theta + Math.PI/2 + (Math.random() - 0.5) * 0.2;
-            const sun_phase = Math.random() * 2 * Math.PI;
-             
-             const params = {
-                 alt: alt_km,
-                 theta: theta,
-                 v_mag: v_mag_kms,
-                 v_angle_off: v_angle - (theta + Math.PI/2),
-                 sun_phase: sun_phase
-             };
+            // USE MANIFOLD SEEDS (80% chance)
+            if (manifoldSeeds.length > 0 && Math.random() < 0.8) {
+                const seed = manifoldSeeds[Math.floor(Math.random() * manifoldSeeds.length)];
+                
+                // Mutable copy with PERTURBATION
+                // We must perturb them because the manifolds themselves don't necessarily hit Earth LEO,
+                // they just map the flow from L1/L2 to the Moon.
+                params = {
+                    alt: seed.alt + (Math.random() - 0.5) * 200, // +/- 100km
+                    theta: seed.theta + (Math.random() - 0.5) * 0.2, // +/- 0.1 rad
+                    v_mag: seed.v_mag + (Math.random() - 0.5) * 0.05, // +/- 0.025 km/s
+                    v_angle_off: seed.v_angle_off + (Math.random() - 0.5) * 0.05,
+                    sun_phase: seed.sun_phase + (Math.random() - 0.5) * 0.5,
+                    C: seed.C // derived, but we track it
+                };
+            } else {
+                // FALLBACK: Pure Random (Old Logic)
+                // ... (Keep existing random logic roughly)
+                const alt_km = 100 + Math.random() * 9900;
+                const theta = Math.random() * 2 * Math.PI;
+                const r_p_norm = kmToNorm(MOON_RADIUS + alt_km);
+                const moon_x = 1 - MASS_RATIO;
+                const pos_x = moon_x + r_p_norm * Math.cos(theta);
+                const pos_y = r_p_norm * Math.sin(theta);
+                const omega = getPotential(pos_x, pos_y);
+                const target_C = 2.95 + Math.random() * (C_L1 - 2.95);
+                const v_sq = 2 * omega - target_C;
+                if (v_sq < 0) continue;
+                const v_mag = Math.sqrt(v_sq);
+                const v_mag_kms = normToKms(v_mag);
+                const v_angle = theta + Math.PI/2 + (Math.random() - 0.5) * 2.0; 
+                const sun_phase = Math.random() * 2 * Math.PI;
+                
+                params = {
+                    alt: alt_km,
+                    theta: theta,
+                    v_mag: v_mag_kms,
+                    v_angle_off: v_angle - (theta + Math.PI/2),
+                    sun_phase: sun_phase,
+                    C: target_C
+                };
+            }
              
              const { state, t_arrival_abs } = getStateFromParams(params);
              
@@ -389,7 +754,7 @@ async function runSearch(duration_norm, leo_r_norm) {
                  debugPaths.push(result.path);
              }
              
-             // Check LEO Intercept
+            // Check LEO Intercept
              let best_leo_idx = -1;
              let min_leo_diff = Infinity;
              
@@ -404,59 +769,85 @@ async function runSearch(duration_norm, leo_r_norm) {
                  }
              }
              
-             if (min_leo_diff < leo_tolerance_norm) {
-                 const opt = optimizeCandidate(params, duration_norm, leo_r_norm);
-                 
-                 const finalParams = opt.params;
-                 const finalRes = opt.res;
-                 const finalDv = opt.dvs;
-                 const { state: finalState, t_arrival_abs: finalTArrival } = getStateFromParams(finalParams);
-                 const final_t_intercept = opt.t_intercept;
-                 const fwd_path = [...finalRes.path].reverse();
-                 
-                 let isValidAltitude = true;
-                 const min_allowed_r = leo_r_norm - kmToNorm(1.0);
-                 
-                 for (const p of fwd_path) {
-                     const r = Math.sqrt((p.x + MASS_RATIO)**2 + p.y**2);
-                     if (r < min_allowed_r) {
-                         isValidAltitude = false;
-                         break;
-                     }
-                 }
-                 
-                 if (isValidAltitude && finalDv.total < 4.0 && normToKm(opt.min_diff) <= 1.0) {
-                     const synodic_period = 2 * Math.PI / Math.abs(SUN_FREQ_IN_FRAME);
-                     const t_launch_norm = finalTArrival + final_t_intercept;
-                     let delay_norm = t_launch_norm % synodic_period;
-                     if (delay_norm < 0) delay_norm += synodic_period;
-                     
-                     const traj = {
-                         id: 'traj-' + Math.random().toString(36).substr(2, 9),
-                         dv_kms: finalDv.total,
-                         dv_earth_kms: finalDv.earth,
-                         dv_moon_kms: finalDv.moon,
-                         dv_norm: kmsToNorm(finalDv.total),
-                         time_days: normToDays(Math.abs(final_t_intercept)),
-                         delay_days: normToDays(delay_norm),
-                         path: fwd_path,
-                         lowResPath: fwd_path,
-                         highResComputed: false,
-                         min_moon_dist_km: finalParams.alt,
-                         lunar_orbit_km: finalParams.alt + MOON_RADIUS, 
-                         is_capture: true,
-                         initial_sun_angle: (t_launch_norm * SUN_FREQ_IN_FRAME) % (2*Math.PI),
-                         orbit_count: (Math.abs(final_t_intercept) / (2*Math.PI)),
-                         intercept_dist_km: normToKm(opt.min_diff),
-                         arrival_state: finalState,
-                         t_arrival_abs: finalTArrival,
-                         duration_norm: Math.abs(final_t_intercept),
-                         params: finalParams
-                     };
-                     
-                     batchResults.push(traj);
-                 }
+             // Track Best In Batch
+             if (min_leo_diff < bestBatchDiff) {
+                 bestBatchDiff = min_leo_diff;
+                 bestBatchCandidate = params;
              }
+        }
+        
+        // Optimize the Single Best Candidate from this Batch
+        if (bestBatchCandidate) {
+            const opt = optimizeCandidate(bestBatchCandidate, duration_norm, leo_r_norm);
+            
+            const finalParams = opt.params;
+            const finalRes = opt.res;
+            const { state: finalState, t_arrival_abs: finalTArrival } = getStateFromParams(finalParams);
+            
+            // REFINE INTERCEPT (High Precision)
+            const refine_dt = -0.0004; // 5x higher resolution (0.002 / 5)
+            const fwd_path = [...finalRes.path].reverse();
+            
+            const s_exact = getStateFromParams(finalParams);
+            const denseRes = propagate(s_exact.state, duration_norm, refine_dt, s_exact.t_arrival_abs, 50000, false);
+            
+            let best_idx = -1;
+            let min_diff = Infinity;
+            
+            for(let k=0; k<denseRes.path.length; k++) {
+                const p = denseRes.path[k];
+                const d = Math.abs(Math.sqrt((p.x - earth_x)**2 + p.y**2) - leo_r_norm);
+                if(d < min_diff) { min_diff = d; best_idx = k; }
+            }
+            
+            const t_best_intercept = best_idx * refine_dt;
+            const metrics = calculateDeltas(s_exact.state, t_best_intercept, s_exact.t_arrival_abs, leo_r_norm, finalParams);
+            
+            // Validate Results
+            let isValidAltitude = true;
+            const min_allowed_r = leo_r_norm - kmToNorm(1.0);
+            const refined_path_rev = [...denseRes.path.slice(0, best_idx+1)].reverse();
+            
+            for (const p of refined_path_rev) {
+                const r = Math.sqrt((p.x + MASS_RATIO)**2 + p.y**2);
+                if (r < min_allowed_r) {
+                    isValidAltitude = false;
+                    break;
+                }
+            }
+
+            if (isValidAltitude && metrics.total < 4.0 && normToKm(min_diff) <= 1.0) {
+                 const synodic_period = 2 * Math.PI / Math.abs(SUN_FREQ_IN_FRAME);
+                 const t_launch_norm = finalTArrival + t_best_intercept;
+                 let delay_norm = t_launch_norm % synodic_period;
+                 if (delay_norm < 0) delay_norm += synodic_period;
+                 
+                 const traj = {
+                     id: 'traj-' + Math.random().toString(36).substr(2, 9),
+                     delta_v: {
+                         total: metrics.total,
+                         earth: metrics.earth,
+                         moon: metrics.moon
+                     },
+                     time_days: normToDays(Math.abs(t_best_intercept)),
+                     delay_days: normToDays(delay_norm),
+                     path: refined_path_rev,
+                     lowResPath: fwd_path,
+                     highResComputed: false,
+                     min_moon_dist_km: finalParams.alt,
+                     lunar_orbit_km: finalParams.alt + MOON_RADIUS, 
+                     is_capture: true,
+                     initial_sun_angle: (t_launch_norm * SUN_FREQ_IN_FRAME) % (2*Math.PI),
+                     orbit_count: (Math.abs(t_best_intercept) / (2*Math.PI)),
+                     intercept_dist_km: normToKm(min_diff),
+                     arrival_state: finalState,
+                     t_arrival_abs: finalTArrival,
+                     duration_norm: Math.abs(t_best_intercept),
+                     params: finalParams
+                 };
+                
+                batchResults.push(traj);
+            }
         }
         
         iterations++;

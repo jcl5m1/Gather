@@ -277,14 +277,15 @@ let selectedTrajectory = null;
 let isSearching = false;
 let testParticles = []; // Test particles for visualization
 let backwardPaths = []; // Backward propagation paths for debugging
+let manifoldPaths = []; // Invariant Manifolds (L1/L2)
 
 // Camera
 let camera = { 
-    x: 0, 
+    x: 0.5 - MASS_RATIO, 
     y: 0, 
-    zoom: 800,
+    zoom: canvas.width * 0.60,
     target: null, // 'earth', 'moon', or null
-    focusX: 0,
+    focusX: 0.5 - MASS_RATIO,
     focusY: 0
 };
 
@@ -334,10 +335,9 @@ function derivatives(s, t = 0) {
     const r_sun_bary_sq = sun_x**2 + sun_y**2;
     const r_sun_bary_cubed = Math.pow(r_sun_bary_sq, 1.5);
     
-    // Solar perturbation (indirect term - tidal effect)
-    // This is the key to enabling L1/L2 ballistic captures
-    const sun_ax = -MASS_RATIO_SUN * ((s.x - sun_x) / r_sun_cubed + sun_x / r_sun_bary_cubed);
-    const sun_ay = -MASS_RATIO_SUN * ((s.y - sun_y) / r_sun_cubed + sun_y / r_sun_bary_cubed);
+    // Solar perturbation (indirect term - tidal effect) - DISABLED
+    const sun_ax = 0; // -MASS_RATIO_SUN * ((s.x - sun_x) / r_sun_cubed + sun_x / r_sun_bary_cubed);
+    const sun_ay = 0; // -MASS_RATIO_SUN * ((s.y - sun_y) / r_sun_cubed + sun_y / r_sun_bary_cubed);
     
     ax += sun_ax;
     ay += sun_ay;
@@ -461,10 +461,18 @@ function initializeLEO(altitude_km) {
 // ============================================================================
 const searchWorker = new Worker('ballistic_worker.js');
 
+// Request System Info immediately
+searchWorker.postMessage({ type: 'COMPUTE_SYSTEM_INFO' });
+
+let systemInfo = null;
+
 searchWorker.onmessage = function(e) {
     const { type, payload } = e.data;
     
-    if (type === 'PROGRESS') {
+    if (type === 'SYSTEM_INFO') {
+        systemInfo = payload;
+        console.log("System Info Received:", systemInfo);
+    } else if (type === 'PROGRESS') {
         const { iterations, trajectories: newTrajs, debugPaths } = payload;
         
         // Update stats
@@ -473,7 +481,7 @@ searchWorker.onmessage = function(e) {
         // Add new trajectories
         if (newTrajs && newTrajs.length > 0) {
             trajectories.push(...newTrajs);
-            trajectories.sort((a, b) => a.dv_kms - b.dv_kms);
+            trajectories.sort((a, b) => a.delta_v.total - b.delta_v.total);
             updateTrajectoryList();
             
             document.getElementById('statFound').textContent = trajectories.length;
@@ -486,6 +494,9 @@ searchWorker.onmessage = function(e) {
         }
     } else if (type === 'DONE') {
         stopSearch(payload);
+    } else if (type === 'MANIFOLDS_GENERATED') {
+        manifoldPaths = payload;
+        // Trigger a redraw if not animating (loop usually handles it, but just in case)
     }
 };
 
@@ -574,7 +585,7 @@ function stopSearch(message) {
 // ============================================================================
 function updateTrajectoryList() {
     // Ensure sorted by Delta-V
-    trajectories.sort((a, b) => a.dv_kms - b.dv_kms);
+    trajectories.sort((a, b) => a.delta_v.total - b.delta_v.total);
 
     const container = document.getElementById('trajectoryListContent');
     
@@ -617,10 +628,10 @@ function updateTrajectoryList() {
             
             // Only set innerHTML on creation
             item.innerHTML = `
-                <div class="dv">${captureLabel} | Total Δv: ${traj.dv_kms.toFixed(3)} km/s</div>
+                <div class="dv">${captureLabel} | Total Δv: ${traj.delta_v.total.toFixed(3)} km/s</div>
                 <div class="details" style="line-height: 1.5;">
-                    <span style="color: #4af">Earth Δv: ${traj.dv_earth_kms.toFixed(3)}</span> | 
-                    <span style="color: #ffaa44">Moon Δv: ${traj.dv_moon_kms.toFixed(3)}</span><br>
+                    <span style="color: #4af">Earth Δv: ${traj.delta_v.earth.toFixed(3)}</span> | 
+                    <span style="color: #ffaa44">Moon Δv: ${traj.delta_v.moon.toFixed(3)}</span><br>
                     Delay: <b style="color:#fff">${traj.delay_days.toFixed(1)}d</b> | 
                     Transfer: ${traj.time_days.toFixed(1)}d | 
                     Orbit: ${traj.lunar_orbit_km.toFixed(0)} km${orbitInfo}<br>
@@ -668,110 +679,8 @@ function updateTrajectoryList() {
 }
 
 function selectTrajectory(traj) {
-    // Restore previous selection to low-res to save memory/visuals
-    if (selectedTrajectory && selectedTrajectory !== traj && selectedTrajectory.lowResPath) {
-        selectedTrajectory.path = selectedTrajectory.lowResPath;
-        selectedTrajectory.highResComputed = false;
-    }
-    
     selectedTrajectory = traj;
     
-    // Compute High-Resolution Path for NEW selection
-    if (!traj.highResComputed && traj.arrival_state) {
-        // Save low-res first if not saved
-        if (!traj.lowResPath) {
-            traj.lowResPath = traj.path;
-        }
-        
-        const highResDt = -0.002/5;
-        const estSteps = Math.ceil(traj.duration_norm / Math.abs(highResDt));
-        const maxSteps = Math.floor(estSteps * 1.5) + 1000; // Safety margin
-
-        console.log(` Computing High-Res: Duration=${traj.duration_norm.toFixed(4)}, dt=${highResDt.toFixed(5)}, estSteps=${estSteps}, limit=${maxSteps}`);
-
-        // Re-propagate with 5x density (dt/5) and higher limit, NO COLLISION CHECK
-        const res = propagate(traj.arrival_state, traj.duration_norm, highResDt, traj.t_arrival_abs, maxSteps, false);
-        
-        // Find closest point to LEO to avoid overshoot
-        let bestIdx = -1;
-        let minDiff = Infinity;
-        const earth_x_pos = -MASS_RATIO;
-        const leo_r = leoOrbit.r_norm;
-        
-        for (let i = 0; i < res.path.length; i++) {
-            const p = res.path[i];
-            const r = Math.sqrt((p.x - earth_x_pos)**2 + p.y**2);
-            const diff = Math.abs(r - leo_r);
-            
-            if (diff < minDiff) {
-                minDiff = diff;
-                bestIdx = i;
-            }
-        }
-        
-        if (bestIdx !== -1) {
-                console.log(` Trimming overshoot: length ${res.path.length} -> ${bestIdx + 1}. Error: ${normToKm(minDiff).toFixed(3)} km`);
-                
-                // Recalculate State and Delta-V at refined intercept point
-                const oldDv = traj.dv_kms;
-                const refineDuration = Math.abs(bestIdx * highResDt);
-                
-                // We need the state at the intercept point
-                // Re-propagate exactly to that point
-                const interceptRes = propagate(traj.arrival_state, refineDuration, highResDt, traj.t_arrival_abs, bestIdx + 5, false);
-                const s_leo = interceptRes.state; // exact state at bestIdx
-                
-                // --- Delta-V Calculation ---
-                const earth_x_pos_dv = -MASS_RATIO;
-                const dx = s_leo.x - earth_x_pos_dv;
-                const dy = s_leo.y;
-                const r_sat = Math.sqrt(dx*dx + dy*dy);
-                
-                // Circular Velocity Magnitude at this radius (Inertial)
-                const v_circ_mag = Math.sqrt(MU_EARTH / normToKm(r_sat));
-                
-                // Satellite Velocity (Inertial)
-                const vx_in = s_leo.vx - s_leo.y;
-                const vy_in = s_leo.vy + s_leo.x;
-                
-                // Required Circular Velocity Vector (Inertial)
-                const angle = Math.atan2(dy, dx);
-                const vx_circ_in = -v_circ_mag * Math.sin(angle);
-                const vy_circ_in = v_circ_mag * Math.cos(angle);
-                
-                const dvx = vx_in - vx_circ_in;
-                const dvy = vy_in - vy_circ_in;
-                const newDv = Math.sqrt(dvx*dvx + dvy*dvy);
-                // Recalculate Delay
-                const synodic_period = 2 * Math.PI / Math.abs(SUN_FREQ_IN_FRAME);
-                let t_launch = (traj.t_arrival_abs - refineDuration) % synodic_period;
-                if (t_launch < 0) t_launch += synodic_period;
-                
-                // Update Trajectory Properties
-                const newDvEarth = newDv;
-                const newTotalDv = newDvEarth + (traj.dv_moon_kms || 0);
-                
-                traj.dv_earth_kms = newDvEarth;
-                traj.dv_kms = newTotalDv;
-                
-                traj.intercept_dist_km = normToKm(minDiff);
-                traj.time_days = normToDays(refineDuration);
-                traj.delay_days = normToDays(t_launch);
-                
-                console.log(` Refined Delta-V: ${oldDv.toFixed(3)} -> ${newTotalDv.toFixed(3)} km/s (Earth: ${newDvEarth.toFixed(3)})`);
-                
-                res.path = res.path.slice(0, bestIdx + 1);
-        }
-
-        console.log(` High-Res Result: ${res.path.length} points, Collision: ${res.collision}`);
-
-        // Update with high-res path
-        traj.path = [...res.path].reverse();
-        traj.highResComputed = true;
-        
-        console.log("Computed high-res path: " + traj.path.length + " points");
-    }
-
     // DEBUG: Print Green Dot Info
     if (traj.path.length > 0) {
         const startPoint = traj.path[0];
@@ -782,14 +691,14 @@ function selectTrajectory(traj) {
         const leo_orbit_km = EARTH_RADIUS + leoAltitude;
         const diff_km = Math.abs(r_dist_km - leo_orbit_km);
         
-        console.log("=== Green Dot (Start Point) Info ===");
-        console.log(`Position (World): x=${startPoint.x.toFixed(6)}, y=${startPoint.y.toFixed(6)}`);
-        console.log(`Distance from Earth Center: ${r_dist_km.toFixed(3)} km`);
-        console.log(`Target LEO Radius: ${leo_orbit_km.toFixed(3)} km`);
+        console.log("=== Selected Trajectory Info ===");
+        console.log(`ID: ${traj.id}`);
+        console.log(`Total Δv: ${traj.delta_v.total.toFixed(4)} km/s`);
+        console.log(`Earth Δv: ${traj.delta_v.earth.toFixed(4)} km/s`);
+        console.log(`Moon Δv: ${traj.delta_v.moon.toFixed(4)} km/s`);
         console.log(`Distance from LEO Orbit: ${diff_km.toFixed(3)} km`);
-        console.log(`Traj Duration: ${traj.duration_norm.toFixed(4)}`);
         console.log(`Path Length: ${traj.path.length}`);
-        console.log("====================================");
+        console.log("================================");
     }
 
     updateTrajectoryList();
@@ -807,9 +716,9 @@ function updateTransferInfo() {
     
     const t = selectedTrajectory;
     info.innerHTML = `
-        Total Δv: ${t.dv_kms.toFixed(3)} km/s<br>
-        <span style="color:#4af">Earth Exit: ${t.dv_earth_kms.toFixed(3)} km/s</span><br>
-        <span style="color:#ffaa44">Moon Insert: ${t.dv_moon_kms.toFixed(3)} km/s</span><br>
+        Total Δv: ${t.delta_v.total.toFixed(3)} km/s<br>
+        <span style="color:#4af">Earth Exit: ${t.delta_v.earth.toFixed(3)} km/s</span><br>
+        <span style="color:#ffaa44">Moon Insert: ${t.delta_v.moon.toFixed(3)} km/s</span><br>
         Launch Delay: ${(t.delay_days || 0).toFixed(1)} days<br>
         Transfer Time: ${(t.time_days || 0).toFixed(1)} days<br>
         Intercept Error: ${(t.intercept_dist_km || 0).toFixed(0)} km
@@ -888,15 +797,78 @@ function draw() {
         ctx.lineTo(sun_end.x, sun_end.y);
         ctx.stroke();
         
-        // Draw Sun icon
-        ctx.fillStyle = '#FFD700';
-        ctx.beginPath();
-        ctx.arc(sun_end.x, sun_end.y, 8, 0, Math.PI*2);
-        ctx.fill();
+        // Draw Sun icon (Inertial Frame Reference if needed)
+        // ctx.fillStyle = '#FFD700';
+        // ctx.beginPath();
+        // ctx.arc(sun_end.x, sun_end.y, 8, 0, Math.PI*2);
+        // ctx.fill();
+        
+        // Draw L1/L2 System Info
+        if (systemInfo) {
+            ctx.lineWidth = 2;
+            ctx.font = 'bold 12px monospace';
+            
+            // Helper to draw orbit
+            const drawOrbit = (orbit, color, dashed = false) => {
+                if (orbit && orbit.path) {
+                    ctx.save();
+                    ctx.strokeStyle = color;
+                    if (dashed) {
+                        ctx.setLineDash([2, 4]);
+                    }
+                    ctx.beginPath();
+                    orbit.path.forEach((p, i) => {
+                        const s = worldToCanvas(p.x, p.y);
+                        if (i === 0) ctx.moveTo(s.x, s.y);
+                        else ctx.lineTo(s.x, s.y);
+                    });
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            };
+
+            // L1
+            if (systemInfo.l1) {
+                const l1_pos = worldToCanvas(systemInfo.l1.x, 0);
+                ctx.fillStyle = '#00ffff';
+                ctx.fillText('L1', l1_pos.x - 5, l1_pos.y - 12);
+                ctx.fillRect(l1_pos.x - 2, l1_pos.y - 2, 4, 4); // Marker
+                drawOrbit(systemInfo.l1.orbit, '#888', true);
+            }
+            
+            // L2
+            if (systemInfo.l2) {
+                const l2_pos = worldToCanvas(systemInfo.l2.x, 0);
+                ctx.fillStyle = '#00ffff';
+                ctx.fillText('L2', l2_pos.x - 5, l2_pos.y - 12);
+                ctx.fillRect(l2_pos.x - 2, l2_pos.y - 2, 4, 4); // Marker
+                drawOrbit(systemInfo.l2.orbit, '#888', true);
+            }
+        }
         ctx.textAlign = 'right';
         ctx.fillText('Sun Direction', sun_end.x - 15, sun_end.y + 5);
         ctx.textAlign = 'left';
         
+        // Draw Manifold Regions (Faint)
+        if (manifoldPaths && manifoldPaths.length > 0) {
+            ctx.lineWidth = 2; // Faint but thick
+            manifoldPaths.forEach(path => {
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)'; // Very faint white/gray
+                ctx.beginPath();
+                let started = false;
+                for (let i = 0; i < path.length; i += 2) { // Subsample for perf
+                    const p = worldToCanvas(path[i].x, path[i].y);
+                    if (!started) {
+                        ctx.moveTo(p.x, p.y);
+                        started = true;
+                    } else {
+                        ctx.lineTo(p.x, p.y);
+                    }
+                }
+                ctx.stroke();
+            });
+        }
+
         // Draw LEO orbit
         if (leoOrbit && leoOrbit.r_norm) {
             ctx.strokeStyle = 'rgba(74, 158, 255, 0.3)';
@@ -1162,7 +1134,7 @@ function updateScatterPlot() {
 
     trajectories.forEach(t => {
         const x = (t.time_days || 0) + (t.delay_days || 0); // Total Time
-        const y = t.dv_kms; // Total Delta-V
+        const y = t.delta_v.total; // Total Delta-V
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
         if (y < minY) minY = y;
@@ -1214,7 +1186,7 @@ function drawScatterPlot() {
     // Draw Points
     trajectories.forEach(t => {
         const xVal = (t.time_days || 0) + (t.delay_days || 0);
-        const yVal = t.dv_kms;
+        const yVal = t.delta_v.total;
         
         const cx = mapX(xVal);
         const cy = mapY(yVal);
@@ -1249,7 +1221,7 @@ function drawScatterPlot() {
     if (hoveredTrajectory) {
         const t = hoveredTrajectory;
         const xVal = (t.time_days || 0) + (t.delay_days || 0);
-        const yVal = t.dv_kms;
+        const yVal = t.delta_v.total;
         
         const cx = mapX(xVal);
         const cy = mapY(yVal);
@@ -1339,7 +1311,7 @@ function getTrajectoryAt(mx, my) {
     
     trajectories.forEach(t => {
         const xVal = (t.time_days || 0) + (t.delay_days || 0);
-        const yVal = t.dv_kms;
+        const yVal = t.delta_v.total;
         
         const cx = marginL + ((xVal - minX) / rangeX) * plotW;
         const cy = (h - marginB) - ((yVal - minY) / rangeY) * plotH;
