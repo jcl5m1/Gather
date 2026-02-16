@@ -1913,40 +1913,57 @@ function showPoincareSection(section) {
     // Compute Intersections (Use worker data if available)
     const points = [];
     if (window.allIntersections && window.allIntersections.length > 0) {
-        if (section.type === 'horizontal') {
+
             const xMin = Math.min(section.xMin, section.xMax);
             const xMax = Math.max(section.xMin, section.xMax);
-            
+            const yMin = Math.min(section.yMin, section.yMax);
+            const yMax = Math.max(section.yMin, section.yMax);
+
             window.allIntersections.forEach(p => {
-                if (p.location === 'horizontal_left') {
-                    if (p.x >= xMin && p.x <= xMax) {
-                        // For horizontal section, we plot X vs Vx (instead of Y vs Vy)
-                        // Store {y: p.x, vy: p.vx} conceptually for the plot function
-                        // We map p.x -> plot Y-axis (position)
-                        // We map p.vx -> plot Vy-axis (velocity)
-                        // Wait, usually Poincare map: (x, x_dot)
-                        points.push({ y: p.x, vy: p.vx, type: p.type, manifold: null }); 
+                // Find manifold object
+                let manifoldObj = null;
+                if (manifoldPaths && p.manifoldId !== undefined) {
+                    manifoldObj = manifoldPaths.find(m => m.id === p.manifoldId);
+                }
+
+                if (section.type === 'horizontal') {
+                    if (p.location === 'horizontal_left') {
+                        // We need to check if this point belongs to the current section (U1 or U4)
+                        // A point can be in range [xMin, xMax] but belong to the OTHER section if both ranges overlap or are close.
+                        // Better logic: replicate the ID assignment logic used in updateSectionBounds
+                        // U1: x > l3_x, U4: x < l3_x
+                        
+                        const l3_x = (systemInfo && systemInfo.l3) ? systemInfo.l3.x : -1.0; 
+                        let p_section_id = (p.x < l3_x) ? 'u4' : 'u1';
+                        
+                        // Only add if it matches the current section's ID
+                        if (section.id === p_section_id) {
+                             // Also enable range check just in case, but ID match is primary
+                             if (p.x >= xMin && p.x <= xMax) {
+                                 points.push({ y: p.x, vy: p.vx, type: p.type, manifold: manifoldObj, ref: p }); 
+                             }
+                        }
+                    }
+                } else {
+                     // Vertical (U2/U3)
+                    if (p.location === 'vertical_moon') { 
+                        // Logic similar to updateSectionBounds
+                        // U3: y > 0, U2: y < 0
+                        let p_section_id = (p.y > 0) ? 'u3' : 'u2';
+                        
+                        if (section.id === p_section_id) {
+                             if (p.y >= yMin && p.y <= yMax) {
+                                 points.push({ y: p.y, vy: p.vy, type: p.type, manifold: manifoldObj, ref: p });
+                             }
+                        }
+                    } else if (!p.location && Math.abs(p.x - section.x) < 0.001) {
+                         // Legacy fallback
+                         if (p.y >= yMin && p.y <= yMax) {
+                             points.push({ y: p.y, vy: p.vy, type: p.type, manifold: manifoldObj, ref: p });
+                         }
                     }
                 }
             });
-        } else {
-             // Vertical (U2/U3)
-            const yMin = Math.min(section.yMin, section.yMax);
-            const yMax = Math.max(section.yMin, section.yMax);
-            
-            window.allIntersections.forEach(p => {
-                if (p.location === 'vertical_moon') { // or check x match
-                     if (p.y >= yMin && p.y <= yMax) {
-                         points.push({ y: p.y, vy: p.vy, type: p.type, manifold: null });
-                     }
-                } else if (!p.location && Math.abs(p.x - section.x) < 0.001) {
-                     // Legacy fallback
-                     if (p.y >= yMin && p.y <= yMax) {
-                         points.push({ y: p.y, vy: p.vy, type: p.type, manifold: null });
-                     }
-                }
-            });
-        }
     } else if (manifoldPaths) {
         // Fallback to calculating on fly (only 32 paths)
         manifoldPaths.forEach(m => {
@@ -1968,7 +1985,9 @@ function showPoincareSection(section) {
                          const xMax = Math.max(section.xMin, section.xMax);
                          
                          if (x >= xMin && x <= xMax) {
-                             points.push({ y: x, vy: vx, type, manifold: m });
+                             const vy = p1.vy + t * (p2.vy - p1.vy); 
+                             const state = { x: x, y: 0, vx: vx, vy: vy };
+                             points.push({ y: x, vy: vx, type, manifold: m, ref: state });
                          }
                     }
                 } else {
@@ -1979,6 +1998,7 @@ function showPoincareSection(section) {
                         // Linear interpolation
                         const t = (x_section - p1.x) / (p2.x - p1.x);
                         const y = p1.y + t * (p2.y - p1.y);
+                        const vx = p1.vx + t * (p2.vx - p1.vx); // Interpolate vx as well
                         const vy = (p1.vy !== undefined) ? (p1.vy + t * (p2.vy - p1.vy)) : 0; 
                         
                         const yMin = Math.min(section.yMin, section.yMax);
@@ -1986,7 +2006,8 @@ function showPoincareSection(section) {
 
                         // Filter by Y range
                         if (y >= yMin && y <= yMax) {
-                            points.push({ y, vy, type, manifold: m }); 
+                            const state = { x: section.x, y: y, vx: vx, vy: vy };
+                            points.push({ y, vy, type, manifold: m, ref: state }); 
                         }
                     }
                 }
@@ -1995,6 +2016,8 @@ function showPoincareSection(section) {
     }
     
     currentPoincarePoints = points;
+    // Signal reset of view
+    poincareView.reset = true;
     drawPoincarePlot(points);
 }
 
@@ -2015,26 +2038,48 @@ function drawPoincarePlot(points) {
         return;
     }
     
-    // Find bounds
-    let minY = Infinity, maxY = -Infinity;
-    let minVy = Infinity, maxVy = -Infinity;
+    // Calculate Base Bounds if reset needed or not set
+    if (!poincareView.base || poincareView.reset) {
+         let minY = Infinity, maxY = -Infinity;
+         let minVy = Infinity, maxVy = -Infinity;
+         
+         points.forEach(p => {
+             if (p.y < minY) minY = p.y;
+             if (p.y > maxY) maxY = p.y;
+             if (p.vy < minVy) minVy = p.vy;
+             if (p.vy > maxVy) maxVy = p.vy;
+         });
+         
+         const padY = (maxY - minY) * 0.1 || 0.1;
+         const padVy = (maxVy - minVy) * 0.1 || 0.1;
+         
+         minY -= padY; maxY += padY;
+         minVy -= padVy; maxVy += padVy;
+         
+         poincareView.base = {
+             cx: (minY + maxY) / 2,
+             cy: (minVy + maxVy) / 2,
+             w: maxY - minY,
+             h: maxVy - minVy
+         };
+         // Reset view
+         poincareView.zoom = 1;
+         poincareView.cx = poincareView.base.cx;
+         poincareView.cy = poincareView.base.cy;
+         poincareView.reset = false;
+    }
     
-    points.forEach(p => {
-        if (p.y < minY) minY = p.y;
-        if (p.y > maxY) maxY = p.y;
-        if (p.vy < minVy) minVy = p.vy;
-        if (p.vy > maxVy) maxVy = p.vy;
-    });
+    // Effective Bounds based on Zoom/Pan
+    const viewW = poincareView.base.w / poincareView.zoom;
+    const viewH = poincareView.base.h / poincareView.zoom;
     
-    // Pad
-    const padY = (maxY - minY) * 0.1 || 0.1;
-    const padVy = (maxVy - minVy) * 0.1 || 0.1;
+    const minY = poincareView.cx - viewW / 2;
+    const maxY = poincareView.cx + viewW / 2;
+    const minVy = poincareView.cy - viewH / 2;
+    const maxVy = poincareView.cy + viewH / 2;
     
-    minY -= padY; maxY += padY;
-    minVy -= padVy; maxVy += padVy;
-    
-    const rangeY = maxY - minY;
-    const rangeVy = maxVy - minVy;
+    const rangeY = viewW; // maxY - minY
+    const rangeVy = viewH; // maxVy - minVy
     
     const margin = 30;
     const plotW = w - margin * 2;
@@ -2051,6 +2096,18 @@ function drawPoincarePlot(points) {
     poincareCtx.rect(margin, margin, plotW, plotH);
     poincareCtx.stroke();
     
+    // Zero Velocity Line
+    const yZero = mapVy(0);
+    if (yZero >= margin && yZero <= h - margin) {
+        poincareCtx.strokeStyle = '#555';
+        poincareCtx.setLineDash([2, 4]);
+        poincareCtx.beginPath();
+        poincareCtx.moveTo(margin, yZero);
+        poincareCtx.lineTo(w - margin, yZero);
+        poincareCtx.stroke();
+        poincareCtx.setLineDash([]);
+    }
+    
     // Store scale for interaction
     poincareCanvas.scaleInfo = { 
         minY, rangeY, minVy, rangeVy, 
@@ -2060,7 +2117,7 @@ function drawPoincarePlot(points) {
     
     // Draw Points
     
-    // Split into groups for region filling
+    // Draw Regions
     const stablePoints = points.filter(p => p.type === 'stable');
     const unstablePoints = points.filter(p => p.type === 'unstable');
     
@@ -2069,29 +2126,29 @@ function drawPoincarePlot(points) {
         poincareCtx.beginPath();
         pts.forEach((p, i) => {
             const cx = mapY(p.y);
+            // cy = h - margin - ((val - minVy) / rangeVy) * plotH
             const cy = mapVy(p.vy);
             if (i === 0) poincareCtx.moveTo(cx, cy);
             else poincareCtx.lineTo(cx, cy);
         });
         poincareCtx.closePath();
-        poincareCtx.fillStyle = colorBase.replace('1)', '0.25)').replace('0.1)', '0.25)'); // Hacky replace for opacity
-        // Better:
+        
+        // Opacity hack
         if (colorBase.includes('0, 255, 136')) poincareCtx.fillStyle = 'rgba(0, 255, 136, 0.25)';
         else if (colorBase.includes('255, 80, 80')) poincareCtx.fillStyle = 'rgba(255, 80, 80, 0.25)';
         else poincareCtx.fillStyle = 'rgba(200, 200, 200, 0.25)';
         
         poincareCtx.fill();
-        // Optional outline
-        // poincareCtx.strokeStyle = poincareCtx.fillStyle.replace('0.25', '0.5');
-        // poincareCtx.stroke();
     };
     
-    // Draw regions first (behind dots)
     drawRegion(stablePoints, 'rgba(0, 255, 136, 1)');
     drawRegion(unstablePoints, 'rgba(255, 80, 80, 1)');
 
-    // Draw Scatter Dots (keep them for precision/hover interaction)
+    // Draw Scatter Dots
     points.forEach(p => {
+        // Skip if out of view (optimization)
+        if (p.y < minY || p.y > maxY || p.vy < minVy || p.vy > maxVy) return;
+        
         const cx = mapY(p.y);
         const cy = mapVy(p.vy);
         
@@ -2099,9 +2156,9 @@ function drawPoincarePlot(points) {
         poincareCtx.arc(cx, cy, 2, 0, Math.PI * 2);
         
         if (p.type === 'stable') {
-            poincareCtx.fillStyle = '#00ff88'; // Green
+            poincareCtx.fillStyle = '#00ff88'; 
         } else if (p.type === 'unstable') {
-            poincareCtx.fillStyle = '#ff5050'; // Red
+            poincareCtx.fillStyle = '#ff5050'; 
         } else {
              poincareCtx.fillStyle = '#ccc';
         }
@@ -2129,6 +2186,165 @@ function drawPoincarePlot(points) {
     poincareCtx.fillText(labelVert, 0, 0);
     poincareCtx.restore();
 }
+
+// Zoom/Pan State
+const poincareView = {
+    zoom: 1,
+    cx: 0,
+    cy: 0,
+    base: null // { cx, cy, w, h } (center and range)
+};
+
+// Event Listeners for Zoom/Pan
+let isPoincarePanning = false;
+let poincarePanStart = { x: 0, y: 0 };
+let poincareStartView = { cx: 0, cy: 0 };
+
+poincareCanvas.addEventListener('mousedown', (e) => {
+    isPoincarePanning = true;
+    poincarePanStart = { x: e.clientX, y: e.clientY };
+    poincareStartView = { cx: poincareView.cx, cy: poincareView.cy };
+});
+
+window.addEventListener('mouseup', () => {
+    isPoincarePanning = false;
+});
+
+poincareCanvas.addEventListener('mousemove', (e) => {
+    if (isPoincarePanning && poincareView.base) {
+        // Pixel delta
+        const dxPx = e.clientX - poincarePanStart.x;
+        const dyPx = e.clientY - poincarePanStart.y;
+        
+        // Convert to units
+        // plotW corresponds to (viewW)
+        const rect = poincareCanvas.getBoundingClientRect();
+        const margin = 30; // matched from draw
+        const plotW = rect.width - 2 * margin;
+        const plotH = rect.height - 2 * margin;
+        
+        const viewW = poincareView.base.w / poincareView.zoom;
+        const viewH = poincareView.base.h / poincareView.zoom;
+        
+        const dx = -dxPx * (viewW / plotW); // Drag left moves view right
+        const dy = dyPx * (viewH / plotH); // Drag up moves view down? 
+        // Logic: mapVy inverts Y. 
+        // mapVy(v) = top + (1 - normalized)*H
+        // dyPx > 0 (down) -> should move center UP (increase cy) to drag map down?
+        // Wait, standard map drag: push map down (dy>0) -> view center moves UP (y decreases).
+        // Let's rely on mapVy logic.
+        // If I move mouse DOWN, pixel Y increases. The point under mouse should move DOWN.
+        // If view center Y increases, the whole plot shifts DOWN? 
+        // val - minVy. If minVy increases (center increases), val - minVy decreases. Top offset decreases? No.
+        // Inverting Y axis is always tricky.
+        // Let's just try: dy (view units) = dyPx * (viewH/plotH).
+        // If I drag down (+dyPx), I want to see content above. So Center Y should increase.
+        
+        let newCx = poincareStartView.cx + dx;
+        let newCy = poincareStartView.cy + dy;
+        
+        // Clamp Center
+        // Ensure visible rect stays within base rect
+        const halfW = viewW / 2;
+        const halfH = viewH / 2;
+        
+        const baseMinX = poincareView.base.cx - poincareView.base.w/2;
+        const baseMaxX = poincareView.base.cx + poincareView.base.w/2;
+        const baseMinY = poincareView.base.cy - poincareView.base.h/2;
+        const baseMaxY = poincareView.base.cy + poincareView.base.h/2;
+        
+        // Clamp minX
+        if (newCx - halfW < baseMinX) newCx = baseMinX + halfW;
+        if (newCx + halfW > baseMaxX) newCx = baseMaxX - halfW;
+        
+        if (newCy - halfH < baseMinY) newCy = baseMinY + halfH;
+        if (newCy + halfH > baseMaxY) newCy = baseMaxY - halfH;
+        
+        poincareView.cx = newCx;
+        poincareView.cy = newCy;
+        
+        drawPoincarePlot(currentPoincarePoints);
+    }
+});
+
+poincareCanvas.addEventListener('wheel', (e) => {
+    if (!poincareView.base) return;
+    e.preventDefault();
+    
+    const zoomSensitivity = 0.001;
+    const delta = Math.exp(-e.deltaY * zoomSensitivity);
+    
+    let newZoom = poincareView.zoom * delta;
+    if (newZoom < 1) newZoom = 1; // Clamp to autoscale
+    
+    // Zoom to mouse
+    const rect = poincareCanvas.getBoundingClientRect();
+    const margin = 30;
+    const plotW = rect.width - 2 * margin;
+    const plotH = rect.height - 2 * margin;
+    
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    
+    // Only zoom if inside plot area roughly
+    if (mx < margin || mx > rect.width-margin || my < margin || my > rect.height-margin) {
+        // Just center zoom
+        poincareView.zoom = newZoom;
+        
+        // Re-clamp center if just un-zoomed
+        if (newZoom === 1) {
+            poincareView.cx = poincareView.base.cx;
+            poincareView.cy = poincareView.base.cy;
+        }
+        drawPoincarePlot(currentPoincarePoints);
+        return;
+    }
+    
+    // Current View Extents
+    const viewW = poincareView.base.w / poincareView.zoom;
+    const viewH = poincareView.base.h / poincareView.zoom;
+    const minX = poincareView.cx - viewW/2;
+    const minY = poincareView.cx - viewH/2; // Typo fix: cy
+    // WAIT, logic is generic x/y here.
+    // Let's use getScaleInfo logic
+    
+    const s = poincareCanvas.scaleInfo;
+    // Map mouse to units (current)
+    const mouseU_X = s.minY + ((mx - s.margin) / s.plotW) * s.rangeY;
+    const mouseU_Y = s.minVy + ((s.plotH - (my - s.margin)) / s.plotH) * s.rangeVy;
+    
+    poincareView.zoom = newZoom;
+    
+    // New View Extents
+    const newViewW = poincareView.base.w / newZoom;
+    const newViewH = poincareView.base.h / newZoom;
+    
+    // We want mouseU to be at same relative position
+    // (mouseU - newMin) / newW = (mouseU - oldMin) / oldW ? No.
+    // Simple point arithmetic:
+    // newCx = mouseU - (mouseU - oldCx) * (newView/oldView)?
+    // newCx = mouseU - (mouse - oldCx) / delta
+    
+    poincareView.cx = mouseU_X - (mouseU_X - poincareView.cx) / delta;
+    poincareView.cy = mouseU_Y - (mouseU_Y - poincareView.cy) / delta;
+    
+    // Clamp Center
+    const halfW = newViewW / 2;
+    const halfH = newViewH / 2;
+    const baseMinX = poincareView.base.cx - poincareView.base.w/2;
+    const baseMaxX = poincareView.base.cx + poincareView.base.w/2;
+    const baseMinY = poincareView.base.cy - poincareView.base.h/2;
+    const baseMaxY = poincareView.base.cy + poincareView.base.h/2;
+    
+    if (poincareView.cx - halfW < baseMinX) poincareView.cx = baseMinX + halfW;
+    if (poincareView.cx + halfW > baseMaxX) poincareView.cx = baseMaxX - halfW;
+    
+    if (poincareView.cy - halfH < baseMinY) poincareView.cy = baseMinY + halfH;
+    if (poincareView.cy + halfH > baseMaxY) poincareView.cy = baseMaxY - halfH;
+    
+    drawPoincarePlot(currentPoincarePoints);
+}, { passive: false });
+
 
 // Highlight on Hover
 poincareCanvas.addEventListener('mousemove', (e) => {
@@ -2176,80 +2392,107 @@ poincareCanvas.addEventListener('click', (e) => {
     
     const s = poincareCanvas.scaleInfo;
     
-    // 2. Inverse Map
-    // yVal (horizontal axis of plot) represents position (Y for vertical section, X for horizontal)
-    // vyVal (vertical axis of plot) represents velocity (Vy for vertical, Vx for horizontal)
-    const val1 = s.minY + ((mx - s.margin) / s.plotW) * s.rangeY;
-    let val2 = s.minVy + ((s.plotH - (my - s.margin)) / s.plotH) * s.rangeVy; 
-    
-    // 3. Determine Physics State
-    if (!systemInfo || !systemInfo.l1 || !systemInfo.l1.orbit) {
-        console.warn("L1 orbit info missing, cannot determine energy.");
-        return;
+    // Check if clicked near an existing point
+    let bestDist = 8; // pixels detection radius
+    let foundPoint = null;
+    if (typeof currentPoincarePoints !== 'undefined' && currentPoincarePoints) {
+        currentPoincarePoints.forEach(p => {
+             const cx = s.mapY(p.y);
+             const cy = s.mapVy(p.vy);
+             const dist = Math.sqrt((mx-cx)**2 + (my-cy)**2);
+             if (dist < bestDist) {
+                 bestDist = dist;
+                 foundPoint = p;
+             }
+        });
     }
-    
-    // Calculate Target C (Jacobi Constant) from L1
-    const l1_orb = systemInfo.l1.orbit;
-    const l1_x = systemInfo.l1.x;
-    const amp_norm = kmToNorm(l1_orb.amplitude_km);
-    const seed_x_ref = l1_x - amp_norm;
-    const seed_y_ref = 0;
-    const seed_vx_ref = 0;
-    const seed_vy_ref = l1_orb.vy0;
-    
-    const pot_seed = getPotential(seed_x_ref, seed_y_ref);
-    const v2_seed = seed_vx_ref**2 + seed_vy_ref**2;
-    const C_target = 2 * pot_seed - v2_seed;
-    
+
     let startState;
-    let term;
-    
-    if (currentPoincareSection.type === 'horizontal') {
-        // Horizontal Section: y=0
-        // val1 = x position
-        // val2 = vx velocity
-        const rx = val1;
-        const rvx = val2;
-        const ry = 0; 
-        
-        // Solve for vy
-        // C = 2*Pot(x,0) - (vx^2 + vy^2)
-        // vy^2 = 2*Pot - C - vx^2
-        const pot_click = getPotential(rx, ry);
-        term = 2 * pot_click - C_target - rvx**2;
-        
-        if (term < 0) { console.warn("Forbidden"); return; }
-        
-        // Direction of vy? 
-        // For U1 (Earth-L3), unstable manifolds often spiral out.
-        // We usually assume +vy or -vy depending on manifold branch.
-        // Reverted to positive as per user request.
-        const rvy = Math.sqrt(term); 
-        
-        // Negate x-velocity for U1/U4 (Horizontal) as requested
-        // Also negate y-velocity as requested
-        startState = { x: rx, y: ry, vx: rvx, vy: rvy };
-        
+
+    if (foundPoint && foundPoint.ref) {
+        const r = foundPoint.ref;
+        startState = { x: r.x, y: r.y, vx: r.vx, vy: r.vy };
+        // console.log("Using exact manifold intersection:", startState);
     } else {
-        // Vertical Section (Original Logic)
-        const ry = val1;
-        let rvy = val2;
-        const rx = currentPoincareSection.x;
+        // 2. Inverse Map
+        // yVal (horizontal axis of plot) represents position (Y for vertical section, X for horizontal)
+        // vyVal (vertical axis of plot) represents velocity (Vy for vertical, Vx for horizontal)
+        const val1 = s.minY + ((mx - s.margin) / s.plotW) * s.rangeY;
+        let val2 = s.minVy + ((s.plotH - (my - s.margin)) / s.plotH) * s.rangeVy; 
         
-        // Solve for vx
-        const pot_click = getPotential(rx, ry);
-        term = 2 * pot_click - C_target - rvy**2;
-        
-        if (term < 0) { console.warn("Forbidden"); return; }
-        
-        let rvx = Math.sqrt(term);
-        // U3/U2 logic
-        if (currentPoincareSection.id === 'u3') {
-             rvx = -rvx;
+        // 3. Determine Physics State
+        if (!systemInfo || !systemInfo.l1 || !systemInfo.l1.orbit) {
+            console.warn("L1 orbit info missing, cannot determine energy.");
+            return;
         }
         
-        startState = { x: rx, y: ry, vx: rvx, vy: rvy };
+        // Calculate Target C (Jacobi Constant) from L1
+        const l1_orb = systemInfo.l1.orbit;
+        const l1_x = systemInfo.l1.x;
+        const amp_norm = kmToNorm(l1_orb.amplitude_km);
+        const seed_x_ref = l1_x - amp_norm;
+        const seed_y_ref = 0;
+        const seed_vx_ref = 0;
+        const seed_vy_ref = l1_orb.vy0;
+        
+        const pot_seed = getPotential(seed_x_ref, seed_y_ref);
+        const v2_seed = seed_vx_ref**2 + seed_vy_ref**2;
+        const C_target = 2 * pot_seed - v2_seed;
+        
+        let term;
+        
+        if (currentPoincareSection.type === 'horizontal') {
+            // Horizontal Section: y=0
+            // val1 = x position
+            // val2 = vx velocity
+            const rx = val1;
+            let rvx = val2;
+            const ry = 0; 
+            
+            // Solve for vy
+            // C = 2*Pot(x,0) - (vx^2 + vy^2)
+            // vy^2 = 2*Pot - C - vx^2
+            const pot_click = getPotential(rx, ry);
+            term = 2 * pot_click - C_target - rvx**2;
+            
+            if (term < 0) { console.warn("Forbidden"); return; }
+            
+            // Direction of vy? 
+            // For U1 (Earth-L3), unstable manifolds often spiral out.
+            // We usually assume +vy or -vy depending on manifold branch.
+            // Reverted to positive as per user request.
+            let rvy = Math.sqrt(term); 
+            if (currentPoincareSection.id === 'u1') {
+                 rvy = -rvy;
+            }
+    
+            // Negate x-velocity for U1/U4 (Horizontal) as requested
+            // Also negate y-velocity as requested
+            startState = { x: rx, y: ry, vx: rvx, vy: rvy };
+            
+        } else {
+            // Vertical Section (Original Logic)
+            const ry = val1;
+            let rvy = val2;
+            const rx = currentPoincareSection.x;
+            
+            // Solve for vx
+            const pot_click = getPotential(rx, ry);
+            term = 2 * pot_click - C_target - rvy**2;
+            
+            if (term < 0) { console.warn("Forbidden"); return; }
+            
+            let rvx = Math.sqrt(term);
+            // U3/U2 logic
+            if (currentPoincareSection.id === 'u3') {
+                 rvx = -rvx;
+            }
+            
+            startState = { x: rx, y: ry, vx: rvx, vy: rvy };
+        }
     }
+    
+    if (!startState) return;
     
     // 4. Propagate
     const duration = 15.0; // Increased to 15.0 (3x longer)

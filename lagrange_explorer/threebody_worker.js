@@ -848,12 +848,12 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
     
     // We will store orbit points and STMs along the orbit for sampling
     const orbitSamples = [];
-    const sampleInterval = Math.floor(steps / 256); // 256 samples
+    const sampleInterval = Math.floor(steps / 32); // 32 samples
     const poincareIntersections = [];
     
     let t = 0;
     for(let i=0; i<=steps; i++) {
-        if (i % sampleInterval === 0 && orbitSamples.length < 256) {
+        if (i % sampleInterval === 0 && orbitSamples.length < 32) {
             // Store current state and STM phi(t, 0)
             const phi_t_0 = s.slice(4);
             const state_t = { x: s[0], y: s[1], vx: s[2], vy: s[3] };
@@ -874,11 +874,15 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
     const v_s = powerIteration(M, true);
     
     const manifolds = [];
+    const manifoldsMap = new Map(); // Temp map to ensure we don't have dupes if logic changes, but array is fine.
+    // Actually simpler: just use valid linear IDs.
+    let manifoldIdCounter = 0;
     manifoldSeeds = [];
     
     const epsilon = 1e-5; // Perturbation magnitude (normalized)
     const moon_x = 1 - MASS_RATIO;
     const earth_x = -MASS_RATIO;
+    const r_hill_norm = Math.pow(MASS_RATIO / (3 * (1 - MASS_RATIO)), 1/3); // Hill Radius
     
     // 4. Generate Manifolds from Samples
     orbitSamples.forEach((sample, idx) => {
@@ -896,6 +900,8 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
 // --- UNSTABLE MANIFOLDS (Forward) ---
         // Iterate both directions (+1, -1) along the eigenvector
         [1, -1].forEach(dir => {
+            const manifoldId = ++manifoldIdCounter;
+            
             const state_u = {
                 x: sample.state.x + epsilon * local_vu[0] * dir,
                 y: sample.state.y + epsilon * local_vu[1] * dir,
@@ -927,9 +933,13 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                 if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
                      const t_int = (moon_x - p1.x) / (p2.x - p1.x);
                      const y_int = p1.y + t_int * (p2.y - p1.y);
-                     const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                     const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
-                     poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'unstable', location: 'vertical_moon' });
+                     
+                     // Clip to Hill Sphere (U2/U3)
+                     if (Math.abs(y_int) <= r_hill_norm) {
+                         const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                         const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                         poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'unstable', location: 'vertical_moon', manifoldId });
+                     }
                 }
                 
                 // Horizontal (y = 0, Left of Earth)
@@ -938,14 +948,12 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                      const x_int = p1.x + t_int * (p2.x - p1.x);
                      const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
                      const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                     poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'unstable', location: 'horizontal_left' });
+                     poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'unstable', location: 'horizontal_left', manifoldId });
                 }
             }
             
-            // Only keep 32 paths for visual rendering (256/8 = 32)
-            if (idx % 8 === 0) {
-                manifolds.push({ type: 'unstable', path: res_u.path });
-            }
+            // Keep all 32 paths for visual rendering
+            manifolds.push({ type: 'unstable', path: res_u.path, id: manifoldId });
 
             // Only use Moon-bound trajectories for Ballistic Capture Seeding
             // (Keep this logic restricted to visual subset or all? 
@@ -953,7 +961,7 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
             // Let's stick to using the visual subset for consistency with current search density 
             // or just use all if high density search is desired. 
             // For now, let's restrict seeding to the subset to avoid explosion of seeds.)
-            if (is_moon_bound && idx % 8 === 0) {
+            if (is_moon_bound) {
                 let min_dist = Infinity;
                 let best_t = 0;
                 
@@ -993,6 +1001,7 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
         // --- STABLE MANIFOLDS (Backward) ---
         // Iterate both directions
         [1, -1].forEach(dir => {
+            const manifoldId = ++manifoldIdCounter; // New ID
             const state_s = {
                 x: sample.state.x + epsilon * local_vs[0] * dir,
                 y: sample.state.y + epsilon * local_vs[1] * dir,
@@ -1025,9 +1034,13 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                     if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
                          const t_int = (moon_x - p1.x) / (p2.x - p1.x);
                          const y_int = p1.y + t_int * (p2.y - p1.y);
-                         const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                         const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
-                         poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'stable', location: 'vertical_moon' });
+                         
+                         // Clip to Hill Sphere (U2/U3)
+                         if (Math.abs(y_int) <= r_hill_norm) {
+                             const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                             const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                             poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'stable', location: 'vertical_moon', manifoldId });
+                         }
                     }
                     
                     // Horizontal (y = 0, Left of Earth)
@@ -1036,14 +1049,12 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                          const x_int = p1.x + t_int * (p2.x - p1.x);
                          const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
                          const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                         poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'stable', location: 'horizontal_left' });
+                         poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'stable', location: 'horizontal_left', manifoldId });
                     }
                 }
 
-                // Only keep 32 paths for visual rendering (256 / 8 = 32)
-                if (idx % 8 === 0) {
-                    manifolds.push({ type: 'stable', path: res_s.path }); 
-                }
+                // Keep all 32 paths for visual rendering
+                manifolds.push({ type: 'stable', path: res_s.path, id: manifoldId });
             });
         });
 
@@ -1069,11 +1080,11 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
         const dt = period / steps;
         
         const orbitSamples = [];
-        const sampleInterval = Math.floor(steps / 256); // 256 samples
+        const sampleInterval = Math.floor(steps / 32); // 32 samples
         
         let t = 0;
         for(let i=0; i<=steps; i++) {
-            if (i % sampleInterval === 0 && orbitSamples.length < 256) {
+            if (i % sampleInterval === 0 && orbitSamples.length < 32) {
                 const phi_t_0 = s.slice(4);
                 const state_t = { x: s[0], y: s[1], vx: s[2], vy: s[3] };
                 orbitSamples.push({ state: state_t, phi: phi_t_0 });
@@ -1106,6 +1117,7 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
             
             // --- L2 STABLE MANIFOLDS (Backward) ---
             [1, -1].forEach(dir => {
+                const manifoldId = ++manifoldIdCounter; // New ID
                 const state_s = {
                     x: sample.state.x + epsilon * local_vs[0] * dir,
                     y: sample.state.y + epsilon * local_vs[1] * dir,
@@ -1132,9 +1144,13 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                     if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
                          const t_int = (moon_x - p1.x) / (p2.x - p1.x);
                          const y_int = p1.y + t_int * (p2.y - p1.y);
-                         const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                         const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
-                         poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'stable', location: 'vertical_moon' });
+                         
+                         // Clip to Hill Sphere (U2/U3)
+                         if (Math.abs(y_int) <= r_hill_norm) {
+                             const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                             const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                             poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'stable', location: 'vertical_moon', manifoldId });
+                         }
                     }
                     
                     // Horizontal Left
@@ -1143,18 +1159,20 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                          const x_int = p1.x + t_int * (p2.x - p1.x);
                          const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
                          const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                         poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'stable', location: 'horizontal_left' });
+                         poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'stable', location: 'horizontal_left', manifoldId });
                     }
                 }
 
-                // Keep 32 samples (256 / 8 = 32)
-                if (res_s.path.length > 10 && idx % 8 === 0) {
-                     manifolds.push({ type: 'stable', path: res_s.path });
+
+                // Keep 32 samples
+                if (res_s.path.length > 10) {
+                     manifolds.push({ type: 'stable', path: res_s.path, id: manifoldId });
                 }
             });
 
             // --- L2 UNSTABLE MANIFOLDS (Forward) ---
             [1, -1].forEach(dir => {
+                const manifoldId = ++manifoldIdCounter; // New ID
                 const state_u = {
                     x: sample.state.x + epsilon * local_vu[0] * dir,
                     y: sample.state.y + epsilon * local_vu[1] * dir,
@@ -1178,13 +1196,17 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                     const p2 = res_u.path[k+1];
                     
                     // Vertical Moon
-                    if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
-                         const t_int = (moon_x - p1.x) / (p2.x - p1.x);
-                         const y_int = p1.y + t_int * (p2.y - p1.y);
-                         const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                         const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
-                         poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'unstable', location: 'vertical_moon' });
-                    }
+                     if ((p1.x - moon_x) * (p2.x - moon_x) < 0) {
+                          const t_int = (moon_x - p1.x) / (p2.x - p1.x);
+                          const y_int = p1.y + t_int * (p2.y - p1.y);
+                          
+                          // Clip to Hill Sphere (U2/U3)
+                          if (Math.abs(y_int) <= r_hill_norm) {
+                              const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
+                              const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
+                              poincareIntersections.push({ x: moon_x, y: y_int, vx: vx_int, vy: vy_int, type: 'unstable', location: 'vertical_moon', manifoldId });
+                          }
+                     }
                     
                     // Horizontal Left
                     if (p1.y * p2.y < 0 && p1.x < earth_x) {
@@ -1192,13 +1214,14 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                          const x_int = p1.x + t_int * (p2.x - p1.x);
                          const vx_int = p1.vx + t_int * (p2.vx - p1.vx);
                          const vy_int = p1.vy + t_int * (p2.vy - p1.vy);
-                         poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'unstable', location: 'horizontal_left' });
+                         poincareIntersections.push({ x: x_int, y: 0, vx: vx_int, vy: vy_int, type: 'unstable', location: 'horizontal_left', manifoldId });
                     }
                 }
 
-                // Keep 32 samples (256 / 8 = 32)
-                if (res_u.path.length > 10 && idx % 8 === 0) {
-                    manifolds.push({ type: 'unstable', path: res_u.path });
+
+                // Keep 32 samples
+                if (res_u.path.length > 10) {
+                    manifolds.push({ type: 'unstable', path: res_u.path, id: manifoldId });
                 }
             });
         });
@@ -1208,6 +1231,7 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
         type: 'MANIFOLDS_GENERATED',
         payload: {
             manifolds: manifolds,
+            intersections: poincareIntersections,
             l1_orbit: l1_orbit,
             l2_orbit: l2_orbit
         }
