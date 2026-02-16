@@ -15,7 +15,7 @@ import {
     BezierCurve,
     BezierCurvePoints,
     BezierTimeWarpLUT,
-    calculateTimeWarp,
+    calculateBezierTimeWarp,
     calculateTimeWarpDerivative,
     getBezierState as getBezierStateCentral,
     getAnalyticalState,
@@ -210,7 +210,6 @@ export class BezierCurveRenderer implements BezierCurveRender {
 
 export interface TrajectoryRender {
     // Core Three.js objects for rendering
-    orbitLine: THREE.Line;
     bezierLine: THREE.Line;
     analyticalLine: THREE.Line;
     trailLine: THREE.Line;
@@ -222,17 +221,14 @@ export interface TrajectoryRender {
     debugIcon: THREE.Sprite;
     debugText: THREE.Sprite;
     container: THREE.Group;
-    lutPoints: THREE.Points;
 
     // Methods for updating the visual representation
-    updateOrbitLine(points: THREE.Vector3[]): void;
     updateBezierLine(points: THREE.Vector3[]): void;
     updateAnalyticalLine(points: THREE.Vector3[]): void;
     updateTrailLine(points: THREE.Vector3[]): void;
     updateBezierCurves(curves: BezierCurve[]): void;
     updateMarkers(periapsisPos: THREE.Vector3, apoapsisPos: THREE.Vector3, visible: boolean, showApoapsis?: boolean, periDist?: Length, apoDist?: Length): void;
     updateDebugMarker(position: THREE.Vector3 | null, visible: boolean, lines: string[]): void;
-    updateLUTMarkers(points: THREE.Vector3[]): void;
     setMarkersVisible(visible: boolean): void;
     setVisibility(show: boolean): void;
     cleanup(): void;
@@ -242,7 +238,6 @@ export interface TrajectoryRender {
 
 
 export class TrajectoryRenderer implements TrajectoryRender {
-    orbitLine: THREE.Line;
     bezierLine: THREE.Line;
     analyticalLine: THREE.Line;
     trailLine: THREE.Line;
@@ -254,7 +249,6 @@ export class TrajectoryRenderer implements TrajectoryRender {
     debugIcon: THREE.Sprite;
     debugText: THREE.Sprite;
     container: THREE.Group; // Unified container for visibility
-    lutPoints: THREE.Points;
 
     protected scene: THREE.Scene;
     protected color: number;
@@ -266,21 +260,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.container = new THREE.Group();
         scene.add(this.container);
 
-        // Initialize analytical orbit line (HIDDEN by default now, as we only want Bezier)
-        const orbitGeometry = new THREE.BufferGeometry();
-        this.orbitLine = new THREE.Line(
-            orbitGeometry,
-            new THREE.LineBasicMaterial({
-                color: 0xffffff,
-                opacity: 0.8,
-                transparent: true,
-                visible: false // Hide analytical line
-            })
-        );
-        this.orbitLine.visible = false;
-        this.container.add(this.orbitLine);
-
-        // Initialize bezier approximation line (Solid now, to be the main visual)
+        // Initialize bezier approximation line (hidden by default, trail is primary)
         const bezierGeometry = new THREE.BufferGeometry();
         this.bezierLine = new THREE.Line(
             bezierGeometry,
@@ -292,6 +272,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
                 depthWrite: true
             })
         );
+        this.bezierLine.visible = false; // Hidden by default, trail is primary
         this.container.add(this.bezierLine);
 
         // Initialize analytical trajectory line (blue, for comparison)
@@ -307,7 +288,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
                 linewidth: 2 // Note: linewidth may not work on all platforms, but worth trying
             })
         );
-        this.analyticalLine.visible = false; // Hidden by default, shown only for transfers
+        this.analyticalLine.visible = true; // Visible by default to show analytical trajectory
         this.analyticalLine.renderOrder = 1; // Render after bezierLine
         this.container.add(this.analyticalLine);
 
@@ -331,7 +312,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
                 }
             `,
             uniforms: {
-                color: { value: new THREE.Color(orbitColor) }
+                color: { value: new THREE.Color(0xffffff) } // White trail by default
             },
             transparent: true,
             depthTest: true,
@@ -364,23 +345,6 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.debugText.visible = false;
         this.container.add(this.debugIcon);
         this.container.add(this.debugText);
-
-        // Initialize LUT markers (Points for screen-space rendering)
-        const lutGeometry = new THREE.BufferGeometry();
-        const dotTexture = this.createDotTexture(0x0088ff); // Light blue for LUT
-        const lutMaterial = new THREE.PointsMaterial({
-            color: 0xffffff, // Use texture color
-            map: dotTexture,
-            size: 6, // 6 pixels constant size
-            sizeAttenuation: false,
-            transparent: true,
-            alphaTest: 0.5
-        });
-
-        this.lutPoints = new THREE.Points(lutGeometry, lutMaterial);
-        this.lutPoints.visible = false; // Hidden by default
-        this.lutPoints.frustumCulled = false; // Always render if visible
-        this.container.add(this.lutPoints);
     }
 
     protected createSprite(texture: THREE.Texture, scale: number): THREE.Sprite {
@@ -471,11 +435,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
         } catch (e) { return new THREE.Texture(); }
     }
 
-    updateOrbitLine(points: THREE.Vector3[]): void {
-        this.orbitLine.geometry.setFromPoints(points);
-        // Force invisible as requested ("just plot the bezier orbit")
-        this.orbitLine.visible = false;
-    }
+
 
     updateBezierLine(points: THREE.Vector3[]): void {
         this.bezierLine.geometry.setFromPoints(points);
@@ -581,10 +541,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.apoapsisText.visible = visible;
     }
 
-    updateLUTMarkers(points: THREE.Vector3[]): void {
-        this.lutPoints.geometry.setFromPoints(points);
-        this.lutPoints.geometry.computeBoundingSphere();
-    }
+
 
     getContainer(): THREE.Group {
         return this.container;
@@ -592,14 +549,11 @@ export class TrajectoryRenderer implements TrajectoryRender {
 
     setVisibility(show: boolean): void {
         this.container.visible = show;
-        this.orbitLine.visible = false;
         // analyticalLine visibility is controlled separately in updateAnalyticalLine
-        this.lutPoints.visible = show && config.visualization.showLUT;
     }
 
     cleanup(): void {
 
-        this.orbitLine.visible = false;
         this.bezierLine.visible = false;
         this.periapsisIcon.visible = false;
         this.periapsisText.visible = false;
@@ -612,7 +566,6 @@ export class TrajectoryRenderer implements TrajectoryRender {
         this.bezierRenderers = [];
 
         [
-            this.orbitLine,
             this.bezierLine,
             this.analyticalLine,
             this.periapsisIcon,
@@ -620,8 +573,7 @@ export class TrajectoryRenderer implements TrajectoryRender {
             this.apoapsisIcon,
             this.apoapsisText,
             this.debugIcon,
-            this.debugText,
-            this.lutPoints
+            this.debugText
         ].forEach(obj => {
             if (obj.parent === this.container) this.container.remove(obj);
             if (obj instanceof THREE.Mesh || obj instanceof THREE.Line || obj instanceof THREE.Points || obj instanceof THREE.Sprite) {
@@ -691,6 +643,8 @@ export class Trajectory {
     private _timeWarpFunction: ((t: number) => number) | null = null;
     private _markersVisible: boolean = true;
     protected _isClosedLoop: boolean = true;
+    private _initialized: boolean = false; // Track whether calculateFromState has been called
+    public showAnalyticalLine: boolean = false;
 
     constructor(scene: THREE.Scene, color: number = 0xff6666) {
         this._scene = scene;
@@ -744,10 +698,14 @@ export class Trajectory {
         }
     }
 
+
     /**
-     * Update trajectory state and debugging annotations
+     * Update trajectory state, debugging annotations, and visualization
+     * All rendering happens here in one place
      */
-    update(currentTime: number): void {
+    update(currentTime: number, currentPos?: THREE.Vector3, isSelected: boolean = false): void {
+        if (!this._renderer || this._bezierPoints.length === 0) return;
+
         // Tighten isActive logic: must be strictly within the time window if _endTime is provided
         const isFuture = currentTime < this._startTime;
         const isPast = this._endTime !== null && currentTime > this._endTime;
@@ -767,6 +725,54 @@ export class Trajectory {
             // Ensure hidden if not enabled or out of window
             this._renderer.updateDebugMarker(null, false, []);
         }
+
+        // Update orbit line and trail visualization if currentPos is provided
+        if (currentPos) {
+            // Calculate normalized time T from simulation time
+            const currentT = this.getBezierT(currentTime);
+
+            // Create a new array of points for rendering
+            const renderPoints: THREE.Vector3[] = [];
+
+            // Insert current position at the correct location based on t value
+            let currentInserted = false;
+
+            for (let i = 0; i < this._bezierPoints.length; i++) {
+                const point = this._bezierPoints[i];
+
+                // Insert current position before this static point if it comes before
+                if (!currentInserted && currentT < point.t) {
+                    renderPoints.push(currentPos);
+                    currentInserted = true;
+                }
+
+                renderPoints.push(point.position);
+            }
+
+            // If current position wasn't inserted yet (comes after all static points), append it
+            if (!currentInserted) {
+                renderPoints.push(currentPos);
+            }
+
+            // Close the loop for elliptical orbits (connect updated list back to start)
+            if (this.type === 'elliptical' && this._isClosedLoop && this._bezierPoints.length > 0) {
+                // Usually start point is at t=0, so it's already in the list.
+                // But we want a visually closed loop. 
+                // Three.js Line doesn't close automatically unless it's LineLoop.
+                // We can append the first point (which is t=0) to the end.
+                renderPoints.push(this._bezierPoints[0].position);
+            }
+
+            this._renderer.updateBezierLine(renderPoints);
+            
+            // Show bezierLine only if body is selected
+            this._renderer.bezierLine.visible = isSelected;
+
+            // Update trail (fading tail behind the body)
+            const trailPoints = this.getStaticTrailPoints(currentTime, 16);
+            trailPoints.push(currentPos); // Append current position at the end
+            this._renderer.updateTrailLine(trailPoints);
+        }
     }
 
     /**
@@ -782,6 +788,11 @@ export class Trajectory {
      * Calculate and update trajectory from position and velocity
      */
     calculateFromState(position: LengthVector3, velocity: VelocityVector3, centralBodyMass: Mass, startTime: Time = ZERO_TIME): void {
+        // Skip recalculation if already initialized
+        if (this._initialized) {
+            return;
+        }
+
         const startTimeSec = startTime.over(seconds).value;
         this._startTime = startTimeSec;
         this._centralBodyMass = centralBodyMass.over(kilograms).value;
@@ -871,26 +882,8 @@ export class Trajectory {
             // aValue already extracted above for period calculation, reuse it
             const referenceVecVec3 = referenceVec.getVector3();
 
-            // Generate ellipse points (requires numeric values and THREE.Vector3)
-            const ellipsePoints = generateEllipsePoints(aValue, e, hVecVec3, referenceVecVec3, 100);
-
-            // Find periapsis and apoapsis points
-            let periapsisPoint = new THREE.Vector3();
-            let apoapsisPoint = new THREE.Vector3();
-            let minDist = Infinity;
-            let maxDist = -Infinity;
-
-            ellipsePoints.forEach(point => {
-                const dist = point.length();
-                if (dist < minDist) {
-                    minDist = dist;
-                    periapsisPoint.copy(point);
-                }
-                if (dist > maxDist) {
-                    maxDist = dist;
-                    apoapsisPoint.copy(point);
-                }
-            });
+            const periapsisPoint = referenceVecVec3.clone().normalize().multiplyScalar(aValue * (1 - e));
+            const apoapsisPoint = referenceVecVec3.clone().normalize().multiplyScalar(-aValue * (1 + e));
 
             // For circular orbits, use initial position as periapsis and opposite point as apoapsis
             if (e < 1e-6) {
@@ -902,7 +895,6 @@ export class Trajectory {
             const bezierResult = generateBezierOrbitPoints(aValue, e, hVecVec3, referenceVecVec3);
 
             this.type = 'elliptical';
-            this._analyticalPoints = ellipsePoints;
             this._bezierPoints = bezierResult.points;
             this._bezierCurves = bezierResult.curves;
             // Convert to LengthVector3
@@ -928,13 +920,15 @@ export class Trajectory {
             this.periapsis = Measure.of(periapsisValue, kilometers);
             this.apoapsis = Measure.of(apoapsisValue, kilometers);
 
-            // Update visualization - render ONLY bezier approximation for main orbit line if possible? 
-            // No, renderer.updateOrbitLine takes Vector3[]. We'll pass the analytical points for the PREVIEW 
-            // but the actual class state lookups use Bezier.
+            // Update visualization - use bezier approximation for main orbit line
             const initialBezierPositions = bezierResult.points.map(p => p.position);
-            this._renderer.updateOrbitLine(ellipsePoints);
             this._renderer.updateBezierLine(initialBezierPositions);
             this._renderer.updateBezierCurves(bezierResult.curves);
+
+           if (this.showAnalyticalLine) {
+                const analyticalPoints = generateEllipsePoints(aValue, e, hVecVec3, referenceVecVec3);
+                this._renderer.updateAnalyticalLine(analyticalPoints);
+            }
             // Extract THREE.Vector3 for renderer
             this._renderer.updateMarkers(
                 this._periapsisPoint!.getVector3(),
@@ -1000,11 +994,11 @@ export class Trajectory {
             this.periapsis = Measure.of(periapsisValue, kilometers);
             this.apoapsis = INFINITE_LENGTH;
 
-            // Update visualization - render BOTH analytical orbit and bezier approximation
-            this._renderer.updateOrbitLine(hyperbolicPoints);
+            // Update visualization - use bezier approximation
             // Points are already Vector3[] in bezierResult (hyperbolic version)
             this._renderer.updateBezierLine(bezierResult.points);
             this._renderer.updateBezierCurves(bezierResult.curves);
+
             // Extract THREE.Vector3 for renderer
             const periapsisVec3 = this._periapsisPoint!.getVector3();
             this._renderer.updateMarkers(periapsisVec3, periapsisVec3, this._markersVisible, false, this.periapsis);
@@ -1054,100 +1048,11 @@ export class Trajectory {
         if (this.type === 'elliptical' && this._useBezierEstimation) {
             this.buildTimeWarpLUT(this._centralBodyMass);
         }
+
+        // Mark as initialized to prevent redundant recalculation
+        this._initialized = true;
     }
 
-    /**
-     * Update the orbit visualization with the current position inserted dynamically
-     * @param currentT Current normalized time (0-1)
-     * @param currentPos Current position vector
-     */
-    /**
-     * Update the orbit visualization with the current position inserted dynamically
-     * @param currentTime Current simulation time
-     * @param currentPos Current position vector
-     */
-    updateOrbitVisualization(currentTime: number, currentPos: THREE.Vector3): void {
-        if (!this._renderer || this._bezierPoints.length === 0) return;
-
-        // Calculate normalized time T from simulation time
-        const currentT = this.getBezierT(currentTime);
-
-        // High-density sampling parameters
-        // Base density is 128 points. 4x density means step size is (1/128)/4
-        const baseStep = 1.0 / 128.0;
-        const highDefStep = baseStep / 4.0;
-
-        // Collect dynamic points to insert (current + 3 before + 3 after)
-        const dynamicPoints: { position: THREE.Vector3, t: number }[] = [];
-
-        // Add current position
-        dynamicPoints.push({ position: currentPos, t: currentT });
-
-        // Add 3 points before and 3 after
-        for (let i = 1; i <= 3; i++) {
-            // Before
-            let tBefore = currentT - i * highDefStep;
-            // Wrap t to 0-1 for sorting
-            if (tBefore < 0) tBefore += 1.0;
-            const posBefore = this.getBezierPointFromCurves(tBefore);
-            if (posBefore) dynamicPoints.push({ position: posBefore, t: tBefore });
-
-            // After
-            let tAfter = currentT + i * highDefStep;
-            // Wrap t to 0-1
-            if (tAfter >= 1.0) tAfter -= 1.0;
-            const posAfter = this.getBezierPointFromCurves(tAfter);
-            if (posAfter) dynamicPoints.push({ position: posAfter, t: tAfter });
-        }
-
-        // Sort dynamic points by t to simplify insertion
-        dynamicPoints.sort((a, b) => a.t - b.t);
-
-        // Create a new array of points for rendering
-        const renderPoints: THREE.Vector3[] = [];
-
-        // Iterate through pre-calculated points and merge with dynamic points
-        let dynamicIdx = 0;
-
-        for (let i = 0; i < this._bezierPoints.length; i++) {
-            const point = this._bezierPoints[i];
-
-            // Insert any dynamic points that come before this static point
-            while (dynamicIdx < dynamicPoints.length) {
-                const dynPoint = dynamicPoints[dynamicIdx];
-                if (dynPoint.t < point.t) {
-                    renderPoints.push(dynPoint.position);
-                    dynamicIdx++;
-                } else {
-                    break;
-                }
-            }
-
-            renderPoints.push(point.position);
-        }
-
-        // Append any remaining dynamic points (those after the last static point)
-        while (dynamicIdx < dynamicPoints.length) {
-            renderPoints.push(dynamicPoints[dynamicIdx].position);
-            dynamicIdx++;
-        }
-
-        // Close the loop for elliptical orbits (connect updated list back to start)
-        if (this.type === 'elliptical' && this._isClosedLoop && this._bezierPoints.length > 0) {
-            // Usually start point is at t=0, so it's already in the list.
-            // But we want a visually closed loop. 
-            // Three.js Line doesn't close automatically unless it's LineLoop.
-            // We can append the first point (which is t=0) to the end.
-            renderPoints.push(this._bezierPoints[0].position);
-        }
-
-        this._renderer.updateBezierLine(renderPoints);
-
-        // Update trail (fading tail behind the body)
-        const trailPoints = this.getStaticTrailPoints(currentTime, 16);
-        trailPoints.push(currentPos); // Append current position at the end
-        this._renderer.updateTrailLine(trailPoints);
-    }
 
     /**
      * Clear the trajectory (remove from scene and reset)
@@ -1164,6 +1069,7 @@ export class Trajectory {
         this.periapsis = ZERO_LENGTH;
         this.apoapsis = ZERO_LENGTH;
         this._initialVelocityMagnitude = ZERO_VELOCITY;
+        this._initialized = false; // Reset initialization flag
     }
 
     /**
@@ -1288,8 +1194,6 @@ export class Trajectory {
             const pos = calculateEllipticalPositionFromBasis(M_std, semiMajorAxis, e, this._cachedOrbitBasis!.periapsisDir, this._cachedOrbitBasis!.perpDir);
             samplePositions.push(pos);
         });
-
-        this._renderer.updateLUTMarkers(samplePositions);
     }
 
     public getBezierPointFromCurves(t: number): THREE.Vector3 | null {
@@ -1328,7 +1232,7 @@ export class Trajectory {
     private timeBezierWarpFunction(t: number): number {
         if (this._timeWarpFunction) return this._timeWarpFunction(t);
         if (!this._timeWarpLUT) return t;
-        return calculateTimeWarp(t, this._timeWarpLUT, this._interpolationMode);
+        return calculateBezierTimeWarp(t, this._timeWarpLUT, this._interpolationMode);
     }
 
     /**

@@ -2,6 +2,7 @@ import { MoonOrbitSimulation } from './app';
 import { createSinePlotDemo, createVelocityComparisonPlot } from './plotDemo';
 import { checkVelocitySymmetry } from './velocitySymmetryTest';
 import { config } from './config';
+import { TransferCalculator } from './orbitUtils';
 
 
 // Display error on the page if initialization fails
@@ -73,7 +74,14 @@ function initializeSimulation() {
             return "No body found";
         };
 
+        // Expose Lambert solver test
+        (window as any).testLambertSolver = (numTests?: number) => {
+            TransferCalculator.testLambertSolver(numTests);
+            return "Lambert solver test completed. Check console for results.";
+        };
+
         console.log('Simulation controller exposed globally. Use window.simulationController.executeCommand() for testing.');
+        console.log('Lambert solver test available: window.testLambertSolver(numTests)');
 
         // Create orbit error plots (time warp and distance error)
         console.log('[Index] Creating orbit error plots...');

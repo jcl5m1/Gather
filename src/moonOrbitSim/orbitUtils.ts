@@ -272,13 +272,61 @@ export function calculateHyperbolicPosition(
 
 /**
  * Solve Kepler's Equation for Eccentric Anomaly: M = E - e*sin(E)
- * Iteratively solves for E given M and e.
+ * Uses Newton-Raphson iteration for robust convergence, especially for high eccentricity.
+ * 
+ * @param M Mean anomaly (radians)
+ * @param e Eccentricity (0 <= e < 1 for elliptical orbits)
+ * @returns Eccentric anomaly E (radians)
  */
 export function solveEccentricAnomaly(M: number, e: number): number {
-    let E = M; // Initial guess
-    for (let i = 0; i < 10; i++) {
-        E = M + e * Math.sin(E);
+    // Normalize M to [0, 2π)
+    const M_normalized = ((M % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    
+    // Initial guess using smart heuristic
+    // For low eccentricity: E ≈ M
+    // For high eccentricity near periapsis/apoapsis: use better approximation
+    let E: number;
+    if (e < 0.8) {
+        E = M_normalized;
+    } else {
+        // For high eccentricity, use a better initial guess
+        E = M_normalized + e * Math.sin(M_normalized) / (1 - Math.sin(M_normalized + e) + Math.sin(M_normalized));
     }
+    
+    // Newton-Raphson iteration: E_{n+1} = E_n - f(E_n) / f'(E_n)
+    // where f(E) = E - e*sin(E) - M
+    // and f'(E) = 1 - e*cos(E)
+    const tolerance = 1e-12;
+    const maxIterations = 50;
+    
+    for (let i = 0; i < maxIterations; i++) {
+        const sinE = Math.sin(E);
+        const cosE = Math.cos(E);
+        
+        // f(E) = E - e*sin(E) - M
+        const f = E - e * sinE - M_normalized;
+        
+        // f'(E) = 1 - e*cos(E)
+        const fPrime = 1 - e * cosE;
+        
+        // Check for singularity (shouldn't happen for e < 1)
+        if (Math.abs(fPrime) < 1e-14) {
+            console.warn(`solveEccentricAnomaly: Near-singular derivative at E=${E}, e=${e}, M=${M_normalized}`);
+            break;
+        }
+        
+        // Newton-Raphson step
+        const delta = f / fPrime;
+        E = E - delta;
+        
+        // Check convergence
+        if (Math.abs(delta) < tolerance) {
+            return E;
+        }
+    }
+    
+    // If we didn't converge, log a warning but return best estimate
+    console.warn(`solveEccentricAnomaly: Failed to converge after ${maxIterations} iterations (e=${e.toFixed(6)}, M=${M_normalized.toFixed(6)}, final E=${E.toFixed(6)})`);
     return E;
 }
 
@@ -889,7 +937,7 @@ export function getAnalyticalStateFromState(
 /**
  * Calculate time warp function value
  */
-export function calculateTimeWarp(
+export function calculateBezierTimeWarp(
     t: number,
     lut: BezierTimeWarpLUT,
     interpolationMode: 'linear' | 'cubic' = 'cubic'
@@ -1010,7 +1058,7 @@ export function getBezierState(
     const M_wrapped_apo = (M_wrapped_peri + 0.5) % 1.0;
 
     const interpMode = options.interpolationMode || 'cubic';
-    const warpedTime = calculateTimeWarp(M_wrapped_apo, lut, interpMode);
+    const warpedTime = calculateBezierTimeWarp(M_wrapped_apo, lut, interpMode);
 
     if (isNaN(warpedTime)) return { position: null, velocity: null };
 
@@ -1243,15 +1291,10 @@ export interface TransferResult {
     endPosition: THREE.Vector3;
     startVelocity: THREE.Vector3;
     endVelocity: THREE.Vector3;
-    startDelay: number; // Seconds to wait before starting transfer
-}
-
-/**
- * Result of a global optimization search including heatmap data for visualization
- */
-export interface GlobalOptimizationResult {
-    result: TransferResult | null;
-    heatmap: {
+    startTime: number; // Time of the transfer began
+    
+    // Optional heatmap data for visualization (populated when returnHeatmap=true)
+    heatmap?: {
         x: number[];
         y: number[];
         z: number[][];
@@ -1271,53 +1314,42 @@ export class TransferCalculator {
      * Now uses Lambert solver for generalized non-coplanar transfers.
      * Uses current physical state for propagation to ensure accuracy.
      */
-    static calculateHohmannTransfer(
+    static calculateTransfer(
         startBody: OrbitalBody, 
         endBody: OrbitalBody, 
         centralBodyMass: number,
         startTime: number = 0,
-        startDelay: number = 0,
-        timeOfFlight?: number // Optional TOF override
+        timeOfFlight: number
     ): TransferResult | null {
         
-        const evalTime = startTime + startDelay;
-
         // Setup physics constants
         const GValue = (G as any).over(gravitationalConstantUnit).value;
         const mu = GValue * centralBodyMass;
 
         // 1. Get positions at evaluation time based on CURRENT state prediction
         // This ensures we account for numerical drift or manual state changes
-        const rocketState = this.predictState(startBody, centralBodyMass, mu, startTime, evalTime);
-        const r1Vec = rocketState.pos;
-        const v1Vec = rocketState.vel;
+        const rocketState = startBody.getTrajectory().getBezierState(startTime, {calcVelocity:true}); 
+        const r1Vec = rocketState.position;
+        const v1Vec = rocketState.velocity;
         
-        // 2. Determine target position at arrival
-        const targetStateNow = this.predictState(endBody, centralBodyMass, mu, startTime, evalTime);
-        const r2Vec_now = targetStateNow.pos;
+        const targetStateArrival = endBody.getTrajectory().getBezierState(startTime+timeOfFlight,{calcVelocity:true})
+        const r2Vec_arrival = targetStateArrival.position;
+        const v2ArrivalVec = targetStateArrival.velocity;
         
-        if (!r1Vec || !r2Vec_now) return null;
-
-        if (!timeOfFlight) {
-            const r1 = r1Vec.length();
-            const r2 = r2Vec_now.length();
-            const a_trans_est = (r1 + r2) / 2;
-            timeOfFlight = Math.PI * Math.sqrt(Math.pow(a_trans_est, 3) / mu);
+        // print error
+        if (!r2Vec_arrival || !v2ArrivalVec || !r1Vec || !v1Vec) {
+            console.log("State calculation failed");
+            return null;
         }
 
-        const arrivalTime = evalTime + timeOfFlight;
-        const targetStateArrival = this.predictState(endBody, centralBodyMass, mu, startTime, arrivalTime);
-        const r2Vec_arrival = targetStateArrival.pos;
-        const v2ArrivalVec = targetStateArrival.vel;
-        
-        if (!r2Vec_arrival || !v2ArrivalVec) return null;
-
         // 3. Solve Lambert's Problem to find required velocities
-        const lambert = this.solveLambert(r1Vec, r2Vec_arrival, timeOfFlight, mu);
-        if (!lambert) return null;
+        const solutions = this.solveLambert(r1Vec, r2Vec_arrival, timeOfFlight, mu, v1Vec, v2ArrivalVec);
+        if (solutions.length === 0) return null;
+        
+        // Use the first solution (lowest delta-v)
+        const lambert = solutions[0];
 
-        // 4. Calculate Delta-V
-        // Current velocity of start body at evalTime was predicted above
+        // 4. Calculate Delta-V (already calculated in solveLambert, but recalculate for consistency)
         const deltaV1 = lambert.v1.distanceTo(v1Vec);
         const deltaV2 = lambert.v2.distanceTo(v2ArrivalVec);
 
@@ -1331,60 +1363,43 @@ export class TransferCalculator {
             endPosition: r2Vec_arrival.clone(),
             startVelocity: lambert.v1.clone(),
             endVelocity: lambert.v2.clone(),
-            startDelay: startDelay
+            startTime
         };
     }
 
-    /**
-     * Predict future state of a body using analytical propagation from its CURRENT state
-     */
-    private static predictState(
-        body: OrbitalBody, 
-        centralBodyMass: number, 
-        mu: number,
-        currentTime: number, 
-        futureTime: number
-    ): { pos: THREE.Vector3, vel: THREE.Vector3 } {
-        const trajectory = body.getTrajectory();
-        
-        // STRICT BEZIER ONLY POLICY
-        // We assume all trajectories are initialized with Bezier curves and TimeWarpLUTs
-        // including Hyperbolic and Elliptical.
-        
-        const state = trajectory.getBezierState(futureTime, { calcVelocity: true });
-        
-        if (state.position && state.velocity) {
-            return { pos: state.position, vel: state.velocity };
-        }
 
-        // If Bezier fails (should not happen if initialized correctly), 
-        // we return current state or zeroes to avoid crashes, 
-        // but we DO NOT fall back to analytical calculation.
-        console.warn(`[TransferCalculator] Bezier prediction failed for ${body.name} at t=${futureTime}`);
-        
-        return { 
-            pos: state.position || body.position.clone(), 
-            vel: state.velocity || body.velocity.clone() 
-        };
-    }
-
+    
     /**
-     * Search for the optimal transfer (varying both start delay and time of flight)
+     * Search for the optimal transfer (varying both start delay and time of flight).
+     * 
+     * If seed parameters are provided, performs only the refinement phase (hill-climbing).
+     * If seed parameters are omitted, performs a coarse grid search first to find a good seed,
+     * then refines it.
+     * 
+     * @param seedDelay Optional initial delay to refine around (seconds relative to startTime)
+     * @param seedTOF Optional initial time of flight to refine around (seconds)
+     * @param initialDelayRange Optional search range for delay refinement (seconds)
+     * @param initialTOFRange Optional search range for TOF refinement (seconds)
+     * @param returnHeatmap If true, populates the heatmap property with visualization data
      */
-    static calculateOptimalHohmannTransfer(
+    static calculateOptimalTransfer(
         startBody: OrbitalBody,
         endBody: OrbitalBody,
         centralBodyMass: number,
-        startTime: number
+        startTime: number,
+        seedDelay?: number,
+        seedTOF?: number,
+        initialDelayRange?: number,
+        initialTOFRange?: number,
+        returnHeatmap?: boolean
     ): TransferResult | null {
-        // Search range for delay: 4 orbits of start body to find better alignments
-        const startParams = startBody.getTrajectory().parameters;
-        const startPeriod = (startParams.period as any).over(seconds).value || 3600 * 24;
-        
         // Ensure bodies are different
         if (startBody === endBody) return null;
 
-        // Search range for TOF: 0.5x to 1.5x of estimated Hohmann TOF
+        // Calculate common parameters
+        const startParams = startBody.getTrajectory().parameters;
+        const startPeriod = (startParams.period as any).over(seconds).value || 3600 * 24;
+        
         const startPos = startBody.getPosition();
         const targetPos = endBody.getPosition();
         const r1 = startPos.length();
@@ -1394,73 +1409,89 @@ export class TransferCalculator {
         const mu = GValue * centralBodyMass;
         const estTOF = Math.PI * Math.sqrt(Math.pow((r1 + r2) / 2, 3) / mu);
 
-        let bestResult: TransferResult | null = null;
-        let minTotalDV = Infinity;
-
-        const delaySteps = 64; 
-        const tofSteps = 64;
-
-        // Search range for delay: exactly 1 period of start body
-        const searchRange = startPeriod; 
-        const yMinVal = estTOF * 0.5;
-        const yMaxVal = estTOF * 1.5;
-
-        const dx = searchRange / delaySteps;
-        const dy = (yMaxVal - yMinVal) / tofSteps;
-
-        for (let i = 0; i < delaySteps; i++) {
-            const delay = (i + 0.5) * dx;
-            
-            for (let j = 0; j < tofSteps; j++) {
-                const tof = yMinVal + (j + 0.5) * dy;
-                const result = this.calculateHohmannTransfer(startBody, endBody, centralBodyMass, startTime, delay, tof);
-                
-                if (result) {
-                    const totalDV = result.deltaV1 + result.deltaV2;
-                    if (totalDV < minTotalDV) {
-                        minTotalDV = totalDV;
-                        bestResult = result;
-                    }
-                }
-            }
-        }
-
-        // Refine if we found a broad result
-        if (bestResult) {
-            // Initial refinement range: half of grid spacing
-            return this.calculateOptimizedTransferFromSeed(
-                startBody, endBody, centralBodyMass, startTime,
-                bestResult.startDelay, bestResult.timeOfFlight,
-                searchRange / delaySteps, estTOF / tofSteps
-            );
-        }
-
-        return bestResult;
-    }
-
-    /**
-     * Refines a transfer calculation starting from a seed (delay, TOF).
-     * Uses a multi-pass hill-climbing approach to optimize both simultaneously.
-     */
-    static calculateOptimizedTransferFromSeed(
-        startBody: OrbitalBody,
-        endBody: OrbitalBody,
-        centralBodyMass: number,
-        startTime: number,
-        seedDelay: number,
-        seedTOF: number,
-        initialDelayRange: number,
-        initialTOFRange: number
-    ): TransferResult | null {
+        // Phase 1: Coarse grid search (only if no seed provided)
         let currentDelay = seedDelay;
         let currentTOF = seedTOF;
-        let bestResult = this.calculateHohmannTransfer(startBody, endBody, centralBodyMass, startTime, currentDelay, currentTOF);
+        let dRange = initialDelayRange ?? 0;
+        let tRange = initialTOFRange ?? 0;
+
+        // Heatmap data collection (if requested)
+        const heatmapX: number[] = [];
+        const heatmapY: number[] = [];
+        const heatmapZ: number[][] = [];
+        const heatmapTooltips: string[][] = [];
+        let zMin = Infinity;
+        let zMax = -Infinity;
+
+        if (currentDelay === undefined || currentTOF === undefined) {
+            const delaySteps = returnHeatmap ? 32 : 64; 
+            const tofSteps = returnHeatmap ? 32 : 64;
+
+            const searchRange = startPeriod; 
+            const yMinVal = estTOF * 0.5;
+            const yMaxVal = estTOF * 1.5;
+
+            const dx = searchRange / delaySteps;
+            const dy = (yMaxVal - yMinVal) / tofSteps;
+
+            let bestResult: TransferResult | null = null;
+            let minTotalDV = Infinity;
+
+            // Build heatmap grid if requested
+            if (returnHeatmap) {
+                for (let i = 0; i < delaySteps; i++) heatmapX.push((i + 0.5) * dx);
+                for (let j = 0; j < tofSteps; j++) heatmapY.push(yMinVal + (j + 0.5) * dy);
+            }
+
+            for (let j = 0; j < tofSteps; j++) {
+                const rowZ: number[] = [];
+                const rowTooltips: string[] = [];
+                const tof = yMinVal + (j + 0.5) * dy;
+
+                for (let i = 0; i < delaySteps; i++) {
+                    const delay = (i + 0.5) * dx;
+                    const result = this.calculateTransfer(startBody, endBody, centralBodyMass, startTime + delay, tof);
+                    
+                    if (result) {
+                        const totalDV = result.deltaV1 + result.deltaV2;
+                        if (totalDV < minTotalDV) {
+                            minTotalDV = totalDV;
+                            bestResult = result;
+                        }
+
+                        if (returnHeatmap) {
+                            const logDV = Math.log10(Math.max(totalDV, 0.001));
+                            rowZ.push(logDV);
+                            zMin = Math.min(zMin, logDV);
+                            zMax = Math.max(zMax, logDV);
+                            rowTooltips.push(`Delay: ${formatTime(Measure.of(delay, seconds), true)}<br>TOF: ${formatTime(Measure.of(tof, seconds), true)}<br>Total ΔV: ${totalDV.toFixed(4)} km/s`);
+                        }
+                    } else if (returnHeatmap) {
+                        rowZ.push(-3);
+                        rowTooltips.push(`Delay: ${formatTime(Measure.of(delay, seconds), true)}<br>TOF: ${formatTime(Measure.of(tof, seconds), true)}<br>ΔV: N/A`);
+                    }
+                }
+
+                if (returnHeatmap) {
+                    heatmapZ.push(rowZ);
+                    heatmapTooltips.push(rowTooltips);
+                }
+            }
+
+            if (!bestResult) return null;
+
+            // Use grid search result as seed
+            currentDelay = bestResult.startTime - startTime;
+            currentTOF = bestResult.timeOfFlight;
+            dRange = dx;
+            tRange = dy;
+        }
+
+        // Phase 2: Hill-climbing refinement
+        let bestResult = this.calculateTransfer(startBody, endBody, centralBodyMass, startTime + currentDelay, currentTOF);
         if (!bestResult) return null;
 
         let bestDV = bestResult.deltaV1 + bestResult.deltaV2;
-        
-        let dRange = initialDelayRange;
-        let tRange = initialTOFRange;
 
         const passes = 4;
         const stepsPerPass = 10;
@@ -1470,7 +1501,6 @@ export class TransferCalculator {
 
             for (let i = 0; i < stepsPerPass; i++) {
                 // Simultaneous search in 2D space around current best
-                // Sample a small grid around current point
                 const gridRes = 5;
                 for (let dj = -(gridRes-1)/2; dj <= (gridRes-1)/2; dj++) {
                     for (let tk = -(gridRes-1)/2; tk <= (gridRes-1)/2; tk++) {
@@ -1479,7 +1509,7 @@ export class TransferCalculator {
                         const testDelay = Math.max(0, currentDelay + (dj / (gridRes/2)) * dRange);
                         const testTOF = Math.max(0.1, currentTOF + (tk / (gridRes/2)) * tRange);
 
-                        const result = this.calculateHohmannTransfer(startBody, endBody, centralBodyMass, startTime, testDelay, testTOF);
+                        const result = this.calculateTransfer(startBody, endBody, centralBodyMass, startTime + testDelay, testTOF);
                         if (result) {
                             const dv = result.deltaV1 + result.deltaV2;
                             if (dv < bestDV) {
@@ -1494,181 +1524,413 @@ export class TransferCalculator {
                 }
             }
 
-            // Shrink search radius for next pass
-            dRange *= 0.4;
-            tRange *= 0.4;
-            
-            if (!passFoundBetter && pass > 0) break; // Convergence check
-        }
-
-        return bestResult;
+        // Shrink search radius for next pass
+        dRange *= 0.4;
+        tRange *= 0.4;
+        
+        if (!passFoundBetter && pass > 0) break; // Convergence check
     }
 
-    /**
-     * Simple Lambert Solver using universal variables.
-     */
-    public static solveLambert(r1Vec: THREE.Vector3, r2Vec: THREE.Vector3, dt: number, mu: number, prograde: boolean = true): { v1: THREE.Vector3, v2: THREE.Vector3 } | null {
-        const r1 = r1Vec.length();
-        const r2 = r2Vec.length();
-        const cosDeltaTheta = r1Vec.dot(r2Vec) / (r1 * r2);
-        
-        const normal = new THREE.Vector3().crossVectors(r1Vec, r2Vec);
-        let deltaTheta = Math.acos(THREE.MathUtils.clamp(cosDeltaTheta, -1, 1));
-        
-        if (!prograde) {
-            deltaTheta = 2 * Math.PI - deltaTheta;
-        }
-
-        const c = Math.sqrt(r1*r1 + r2*r2 - 2*r1*r2*cosDeltaTheta);
-        const s = (r1 + r2 + c) / 2;
-        
-        let low_a = s / 2;
-        let high_a = 1e12; 
-        let a = s / 2;
-        
-        const dt_min = Math.sqrt(Math.pow(s / 2, 3) / mu) * (Math.PI - (2 * Math.asin(Math.sqrt((s - c) / s)) - Math.sin(2 * Math.asin(Math.sqrt((s - c) / s)))));
-        const isLongWay = dt > dt_min;
-
-        const maxIter = 100;
-        for (let i = 0; i < maxIter; i++) {
-            const mid_a = (low_a + high_a) / 2;
-            let alpha_0 = 2 * Math.asin(Math.sqrt(s / (2 * mid_a)));
-            let beta = 2 * Math.asin(Math.sqrt((s - c) / (2 * mid_a)));
-            
-            let alpha = isLongWay ? 2 * Math.PI - alpha_0 : alpha_0;
-            
-            const dt_est = Math.sqrt(Math.pow(mid_a, 3) / mu) * ((alpha - Math.sin(alpha)) - (beta - Math.sin(beta)));
-            
-            // For both branches, dt_est increases as mid_a increases 
-            // once we properly handle the alpha branch.
-            // Actually, for isLongWay=false, as a increases, dt_est decreases.
-            // For isLongWay=true, as a increases, dt_est increases.
-            
-            if (isLongWay) {
-                if (dt_est < dt) low_a = mid_a;
-                else high_a = mid_a;
-            } else {
-                if (dt_est < dt) high_a = mid_a;
-                else low_a = mid_a;
-            }
-
-            if (Math.abs(dt_est - dt) / dt < 1e-8) {
-                break;
-            }
-        }
-
-        a = (low_a + high_a) / 2;
-        let alpha_0 = 2 * Math.asin(Math.sqrt(s / (2 * a)));
-        let beta = 2 * Math.asin(Math.sqrt((s - c) / (2 * a)));
-        let alpha = isLongWay ? 2 * Math.PI - alpha_0 : alpha_0;
-        
-        const deltaE = alpha - beta;
-        const f = 1 - (a / r1) * (1 - Math.cos(deltaE));
-        const g = dt - Math.sqrt(Math.pow(a, 3) / mu) * (deltaE - Math.sin(deltaE));
-        const g_dot = 1 - (a / r2) * (1 - Math.cos(deltaE));
-
-        const v1 = r2Vec.clone().sub(r1Vec.clone().multiplyScalar(f)).multiplyScalar(1 / g);
-        const v2 = v1.clone().multiplyScalar(g_dot).addScaledVector(r1Vec, (f * g_dot - 1) / g);
-
-        return { v1, v2 };
-    }
-
-    /**
-     * Performs a global optimization search for a transfer:
-     * 1. 2D grid search (8x8) to find a good seed
-     * 2. Refined hill-climbing optimization from that seed
-     * 
-     * This isolates the mathematical search from the plotting code.
-     */
-    static calculateGlobalOptimizedTransfer(
-        startBody: OrbitalBody,
-        targetBody: OrbitalBody,
-        centralBodyMass: number,
-        startTime: number
-    ): GlobalOptimizationResult {
-        const startParams = startBody.getTrajectory().parameters;
-        const startPeriod = (startParams.period as any).over(seconds).value || 3600 * 24;
-        
-        const startPos = startBody.getPosition();
-        const targetPos = targetBody.getPosition();
-        const r1 = startPos.length();
-        const r2 = targetPos.length();
-        
-        const GValue = (G as any).over(gravitationalConstantUnit).value;
-        const mu = GValue * centralBodyMass;
-        const estTOF = Math.PI * Math.sqrt(Math.pow((r1 + r2) / 2, 3) / mu);
-
-        const searchRange = startPeriod; 
-        const xMinVal = 0;
-        const xMaxVal = searchRange;
-        const yMinVal = estTOF * 0.5;
-        const yMaxVal = estTOF * 1.5;
-
-        const resX = 32;
-        const resY = 32;
-        const dx = (xMaxVal - xMinVal) / resX;
-        const dy = (yMaxVal - yMinVal) / resY;
-
-        const heatmapX: number[] = [];
-        const heatmapY: number[] = [];
-        const heatmapZ: number[][] = [];
-        const heatmapTooltips: string[][] = [];
-
-        for (let i = 0; i < resX; i++) heatmapX.push(xMinVal + (i + 0.5) * dx);
-        for (let j = 0; j < resY; j++) heatmapY.push(yMinVal + (j + 0.5) * dy);
-
-        let zMin = Infinity;
-        let zMax = -Infinity;
-        let seedDelay = heatmapX[0];
-        let seedTOF = heatmapY[0];
-        let seedDV = Infinity;
-
-        for (let j = 0; j < resY; j++) {
-            const rowZ: number[] = [];
-            const rowTooltips: string[] = [];
-            const tof = heatmapY[j];
-
-            for (let i = 0; i < resX; i++) {
-                const delay = heatmapX[i];
-                const result = this.calculateHohmannTransfer(startBody, targetBody, centralBodyMass, startTime, delay, tof);
-
-                if (result) {
-                    const totalDV = result.deltaV1 + result.deltaV2;
-                    const logDV = Math.log10(Math.max(totalDV, 0.001));
-                    rowZ.push(logDV);
-                    zMin = Math.min(zMin, logDV);
-                    zMax = Math.max(zMax, logDV);
-
-                    if (totalDV < seedDV) {
-                        seedDV = totalDV;
-                        seedDelay = delay;
-                        seedTOF = tof;
-                    }
-                    rowTooltips.push(`Delay: ${formatTime(Measure.of(delay, seconds), true)}<br>TOF: ${formatTime(Measure.of(tof, seconds), true)}<br>Total ΔV: ${totalDV.toFixed(4)} km/s`);
-                } else {
-                    rowZ.push(-3);
-                    rowTooltips.push(`Delay: ${formatTime(Measure.of(delay, seconds), true)}<br>TOF: ${formatTime(Measure.of(tof, seconds), true)}<br>ΔV: N/A`);
-                }
-            }
-            heatmapZ.push(rowZ);
-            heatmapTooltips.push(rowTooltips);
-        }
-
-        const optimizedResult = this.calculateOptimizedTransferFromSeed(
-            startBody, targetBody, centralBodyMass, startTime,
-            seedDelay, seedTOF, dx, dy
-        );
-
-        return {
-            result: optimizedResult,
-            heatmap: {
-                x: heatmapX,
-                y: heatmapY,
-                z: heatmapZ,
-                zMin: zMin === Infinity ? -3 : zMin,
-                zMax: zMax === -Infinity ? 0 : zMax,
-                tooltips: heatmapTooltips
-            }
+    // Populate heatmap data if requested
+    if (returnHeatmap && bestResult) {
+        bestResult.heatmap = {
+            x: heatmapX,
+            y: heatmapY,
+            z: heatmapZ,
+            zMin: zMin === Infinity ? -3 : zMin,
+            zMax: zMax === -Infinity ? 0 : zMax,
+            tooltips: heatmapTooltips
         };
     }
+
+    return bestResult;
+}
+
+
+/**
+ * Solve Lambert's problem and return all valid solutions sorted by total delta-v.
+ * Returns both prograde and retrograde solutions when applicable.
+ * 
+ * @param r1Vec Starting position vector
+ * @param r2Vec Ending position vector  
+ * @param dt Time of flight
+ * @param mu Gravitational parameter
+ * @param r1Vel Current velocity at r1 (for delta-v calculation)
+ * @param r2Vel Current velocity at r2 (for delta-v calculation)
+ * @returns Array of solutions sorted by total delta-v (lowest first), or empty array if no solutions
+ */
+public static solveLambert(
+    r1Vec: THREE.Vector3, 
+    r2Vec: THREE.Vector3, 
+    dt: number, 
+    mu: number, 
+    r1Vel?: THREE.Vector3,
+    r2Vel?: THREE.Vector3
+): Array<{ v1: THREE.Vector3, v2: THREE.Vector3, deltaV: number, type: 'prograde' | 'retrograde' }> {
+    
+    const solutions: Array<{ v1: THREE.Vector3, v2: THREE.Vector3, deltaV: number, type: 'prograde' | 'retrograde' }> = [];
+    
+    // Try both prograde and retrograde solutions
+    for (const prograde of [true, false]) {
+        const solution = this.solveLambertSingle(r1Vec, r2Vec, dt, mu, prograde);
+        
+        if (solution) {
+            // Calculate total delta-v if velocities provided
+            let deltaV = 0;
+            if (r1Vel && r2Vel) {
+                const dv1 = solution.v1.clone().sub(r1Vel).length();
+                const dv2 = solution.v2.clone().sub(r2Vel).length();
+                deltaV = dv1 + dv2;
+            }
+            
+            solutions.push({
+                v1: solution.v1,
+                v2: solution.v2,
+                deltaV: deltaV,
+                type: prograde ? 'prograde' : 'retrograde'
+            });
+        }
+    }
+    
+    // Sort by delta-v (lowest first)
+    solutions.sort((a, b) => a.deltaV - b.deltaV);
+    
+    return solutions;
+}
+
+/**
+ * Internal single-solution Lambert solver for a specific direction (prograde/retrograde)
+ */
+private static solveLambertSingle(
+    r1Vec: THREE.Vector3, 
+    r2Vec: THREE.Vector3, 
+    dt: number, 
+    mu: number, 
+    prograde: boolean
+): { v1: THREE.Vector3, v2: THREE.Vector3 } | null {
+    
+    const r1 = r1Vec.length();
+    const r2 = r2Vec.length();
+
+    // 1. Geometry & Angle Calculation
+    let cosTheta = r1Vec.dot(r2Vec) / (r1 * r2);
+    cosTheta = Math.max(-1, Math.min(1, cosTheta));
+    
+    let theta = Math.acos(cosTheta);
+    const cross = new THREE.Vector3().crossVectors(r1Vec, r2Vec);
+
+    // FIX: Handling the 180-degree (Opposition) Singularity
+    // If the transfer is exactly 180 degrees, the orbital plane is infinite.
+    // We nudge slightly or assume the XY plane to maintain numerical stability.
+    const isOpposition = Math.abs(theta - Math.PI) < 1e-11;
+    if (isOpposition) {
+        theta -= 1e-10; // Epsilon nudge to define a plane
+    }
+
+    if (prograde ? cross.z < 0 : cross.z > 0) {
+        theta = 2 * Math.PI - theta;
+    }
+
+    // 2. Geometric Constant A
+    const A = Math.sin(theta) * Math.sqrt(r1 * r2 / (1 - cosTheta));
+    if (Math.abs(A) < 1e-12) return null;
+
+    // 3. Robust Root Finding (z-parameter)
+    // z > 0: Elliptic, z < 0: Hyperbolic, z = 0: Parabolic
+    let z = 0.0;
+    let zLow = -100; // Deeply hyperbolic limit
+    let zHigh = 4 * Math.PI * Math.PI; // Single-rev elliptic limit
+
+    let dt_est = 0;
+    const maxIter = 150;
+    const tol = 1e-12;
+
+    for (let i = 0; i < maxIter; i++) {
+        const { c, s } = this.stumpff(z);
+        
+        // y is the core Lagrange helper
+        const sqrtC = Math.sqrt(c);
+        let y = r1 + r2 + A * (z * s - 1) / sqrtC;
+
+        // Physical constraint: y must be positive
+        if (A > 0 && y < 0) {
+            // If y is negative, we are in a non-physical region for the current z.
+            // We must adjust zLow to "pinch" the root into the physical domain.
+            zLow = z;
+            z = (zLow + zHigh) / 2;
+            continue;
+        }
+
+        const chi = Math.sqrt(y / c);
+        dt_est = (Math.pow(chi, 3) * s + A * Math.sqrt(y)) / Math.sqrt(mu);
+
+        if (Math.abs(dt - dt_est) < tol) break;
+
+        // Bisection is used here for absolute "never-fail" convergence.
+        // Newton-Raphson is faster but can oscillate near e=1; bisection is safer for random tests.
+        if (dt_est < dt) {
+            zLow = z;
+        } else {
+            zHigh = z;
+        }
+        z = (zLow + zHigh) / 2;
+    }
+
+    // 4. Final Velocity Extraction
+    const { c, s } = this.stumpff(z);
+    const y = r1 + r2 + A * (z * s - 1) / Math.sqrt(c);
+    
+    const f = 1 - y / r1;
+    const g = A * Math.sqrt(y / mu);
+    const gDot = 1 - y / r2;
+
+    // Avoid division by zero in g
+    if (Math.abs(g) < 1e-12) return null;
+
+    const v1 = r2Vec.clone().sub(r1Vec.clone().multiplyScalar(f)).divideScalar(g);
+    const v2 = r2Vec.clone().multiplyScalar(gDot).sub(r1Vec).divideScalar(g);
+
+    return { v1, v2 };
+}
+
+
+private static stumpff(z: number): { c: number, s: number } {
+    const eps = 1e-8;
+    if (z > eps) {
+        const sz = Math.sqrt(z);
+        return {
+            c: (1 - Math.cos(sz)) / z,
+            s: (sz - Math.sin(sz)) / Math.pow(sz, 3)
+        };
+    } else if (z < -eps) {
+        const sz = Math.sqrt(-z);
+        return {
+            c: (Math.cosh(sz) - 1) / -z,
+            s: (Math.sinh(sz) - sz) / Math.pow(sz, 3)
+        };
+    } else {
+        // Taylor series expansion for high precision near parabolic limit (z=0)
+        return {
+            c: 1/2 - z/24 + (z*z)/720 - (z*z*z)/40320,
+            s: 1/6 - z/120 + (z*z)/5040 - (z*z*z)/362880
+        };
+    }
+}
+
+
+public static testLambertSolver(numTests: number = 10, centralBodyMass: number = 5.972e24): void {
+    const GValue = 6.67430e-20; // Ensure units match (km^3 / kg*s^2)
+    const mu = GValue * centralBodyMass;
+
+    let r1Errors: number[] = [];
+    let r2Errors: number[] = [];
+    let failedTests = 0;
+
+    for (let testNum = 0; testNum < numTests; testNum++) {
+        try {
+            // 1. Generate TWO random elliptical orbits
+            // Orbit 1 (departure)
+            const rp1 = 6371 + 400 + Math.random() * 5000; 
+            const ra1 = rp1 + Math.random() * 5000;
+            const e1 = (ra1 - rp1) / (ra1 + rp1);
+            
+            const orbit1State = generateStateFromOrbitalElements(
+                rp1, ra1, e1, centralBodyMass, 
+                Math.random() * Math.PI, // random true anomaly
+                Math.random() * 0.5,      // low inclination for stability
+                0, 0
+            );
+            
+            // Orbit 2 (arrival)
+            const rp2 = 6371 + 400 + Math.random() * 8000; 
+            const ra2 = rp2 + Math.random() * 8000;
+            const e2 = (ra2 - rp2) / (ra2 + rp2);
+            
+            const orbit2State = generateStateFromOrbitalElements(
+                rp2, ra2, e2, centralBodyMass, 
+                Math.random() * Math.PI, // random true anomaly
+                Math.random() * 0.5,      // low inclination for stability
+                0, 0
+            );
+
+            // 2. Choose a transfer time (30 mins to 3 hours)
+            const dt = 1800 + Math.random() * 9000; 
+            
+            // 3. Get the orbital elements for both orbits
+            const elements1 = calculateOrbitalElementsFromState(orbit1State.position, orbit1State.velocity, centralBodyMass);
+            const elements2 = calculateOrbitalElementsFromState(orbit2State.position, orbit2State.velocity, centralBodyMass);
+            
+            // Validate orbital elements
+            if (!isFinite(elements1.semiMajorAxis) || !isFinite(elements1.eccentricity) || 
+                !isFinite(elements2.semiMajorAxis) || !isFinite(elements2.eccentricity)) {
+                console.warn(`Test ${testNum + 1}: Invalid orbital elements generated, skipping`);
+                failedTests++;
+                continue;
+            }
+            
+            // 4. Propagate both orbits forward by dt to get r1 and r2 at transfer endpoints
+            const r1 = calculateEllipticalPosition(
+                dt, elements1.semiMajorAxis, elements1.eccentricity, 
+                elements1.period, 0, orbit1State.position, orbit1State.velocity, centralBodyMass
+            );
+            
+            const r2 = calculateEllipticalPosition(
+                dt, elements2.semiMajorAxis, elements2.eccentricity, 
+                elements2.period, 0, orbit2State.position, orbit2State.velocity, centralBodyMass
+            );
+
+            // Validate positions
+            if (!r1 || !r2 || !isFinite(r1.x) || !isFinite(r2.x)) {
+                console.warn(`Test ${testNum + 1}: Invalid propagated positions, skipping`);
+                failedTests++;
+                continue;
+            }
+
+
+            // 5. Solve Lambert's Problem between r1 and r2
+            const solutions = this.solveLambert(r1, r2, dt, mu);
+
+            if (solutions.length === 0) {
+                console.warn(`Test ${testNum + 1}: Lambert solver failed to converge, skipping`);
+                failedTests++;
+                continue;
+            }
+            
+            // Use the first (best) solution
+            const lambert = solutions[0];
+
+            // Validate Lambert velocities
+            if (!isFinite(lambert.v1.x) || !isFinite(lambert.v2.x)) {
+                console.warn(`Test ${testNum + 1}: Lambert solver returned invalid velocities, skipping`);
+                failedTests++;
+                continue;
+            }
+
+            // 6. Propagate using Lambert velocities to verify accuracy
+            // Start from r1 with Lambert v1, propagate forward by dt
+            const lambertElements1 = calculateOrbitalElementsFromState(r1, lambert.v1, centralBodyMass);
+            
+            // Check for hyperbolic/parabolic orbits (e >= 1)
+            if (lambertElements1.eccentricity >= 0.99) {
+                console.warn(`Test ${testNum + 1}: Lambert solution is near-parabolic (e=${lambertElements1.eccentricity.toFixed(4)}), skipping`);
+                failedTests++;
+                continue;
+            }
+            
+            const propagatedR2FromLambert = calculateEllipticalPosition(
+                dt, lambertElements1.semiMajorAxis, lambertElements1.eccentricity, 
+                lambertElements1.period, 0, r1, lambert.v1, centralBodyMass
+            );
+            
+            // Start from r2 with Lambert v2, propagate backward by -dt
+            const lambertElements2 = calculateOrbitalElementsFromState(r2, lambert.v2, centralBodyMass);
+            
+            if (lambertElements2.eccentricity >= 0.99) {
+                console.warn(`Test ${testNum + 1}: Lambert solution is near-parabolic (e=${lambertElements2.eccentricity.toFixed(4)}), skipping`);
+                failedTests++;
+                continue;
+            }
+            
+            const propagatedR1FromLambert = calculateEllipticalPosition(
+                -dt, lambertElements2.semiMajorAxis, lambertElements2.eccentricity, 
+                lambertElements2.period, 0, r2, lambert.v2, centralBodyMass
+            );
+            
+            // Validate propagated results
+            if (!propagatedR1FromLambert || !propagatedR2FromLambert || 
+                !isFinite(propagatedR1FromLambert.x) || !isFinite(propagatedR2FromLambert.x)) {
+                console.warn(`Test ${testNum + 1}: Propagation failed, skipping`);
+                failedTests++;
+                continue;
+            }
+            
+            // Compute errors
+            const r1Error = propagatedR1FromLambert.distanceTo(r1);
+            const r2Error = propagatedR2FromLambert.distanceTo(r2);
+            
+            if (!isFinite(r1Error) || !isFinite(r2Error)) {
+                console.warn(`Test ${testNum + 1}: Error calculation resulted in NaN, skipping`);
+                failedTests++;
+                continue;
+            }
+            
+            r1Errors.push(r1Error);
+            r2Errors.push(r2Error);
+
+            console.log(`Test ${testNum + 1}: r1 Error = ${r1Error.toFixed(8)} km, r2 Error = ${r2Error.toFixed(8)} km`);
+            
+            // Debug output when errors exceed 1km
+            if (r1Error > 1.0 || r2Error > 1.0) {
+                console.log(`\n========== DEBUG: Test ${testNum + 1} - Error > 1km ==========`);
+                console.log(`\nOriginal Orbit 1 (Departure):`);
+                console.log(`  Periapsis: ${rp1.toFixed(3)} km`);
+                console.log(`  Apoapsis: ${ra1.toFixed(3)} km`);
+                console.log(`  Eccentricity: ${e1.toFixed(6)}`);
+                console.log(`  Semi-major axis: ${elements1.semiMajorAxis.toFixed(3)} km`);
+                console.log(`  Period: ${elements1.period.toFixed(3)} s`);
+                console.log(`  Initial position: (${orbit1State.position.x.toFixed(3)}, ${orbit1State.position.y.toFixed(3)}, ${orbit1State.position.z.toFixed(3)}) km`);
+                console.log(`  Initial velocity: (${orbit1State.velocity.x.toFixed(6)}, ${orbit1State.velocity.y.toFixed(6)}, ${orbit1State.velocity.z.toFixed(6)}) km/s`);
+                
+                console.log(`\nOriginal Orbit 2 (Arrival):`);
+                console.log(`  Periapsis: ${rp2.toFixed(3)} km`);
+                console.log(`  Apoapsis: ${ra2.toFixed(3)} km`);
+                console.log(`  Eccentricity: ${e2.toFixed(6)}`);
+                console.log(`  Semi-major axis: ${elements2.semiMajorAxis.toFixed(3)} km`);
+                console.log(`  Period: ${elements2.period.toFixed(3)} s`);
+                console.log(`  Initial position: (${orbit2State.position.x.toFixed(3)}, ${orbit2State.position.y.toFixed(3)}, ${orbit2State.position.z.toFixed(3)}) km`);
+                console.log(`  Initial velocity: (${orbit2State.velocity.x.toFixed(6)}, ${orbit2State.velocity.y.toFixed(6)}, ${orbit2State.velocity.z.toFixed(6)}) km/s`);
+                
+                console.log(`\nTransfer Parameters:`);
+                console.log(`  Time of flight (dt): ${dt.toFixed(3)} s`);
+                console.log(`  r1 (departure): (${r1.x.toFixed(3)}, ${r1.y.toFixed(3)}, ${r1.z.toFixed(3)}) km`);
+                console.log(`  r2 (arrival): (${r2.x.toFixed(3)}, ${r2.y.toFixed(3)}, ${r2.z.toFixed(3)}) km`);
+                console.log(`  |r1|: ${r1.length().toFixed(3)} km`);
+                console.log(`  |r2|: ${r2.length().toFixed(3)} km`);
+                
+                console.log(`\nLambert Solution:`);
+                console.log(`  Type: ${lambert.type}`);
+                console.log(`  v1 (departure): (${lambert.v1.x.toFixed(6)}, ${lambert.v1.y.toFixed(6)}, ${lambert.v1.z.toFixed(6)}) km/s`);
+                console.log(`  v2 (arrival): (${lambert.v2.x.toFixed(6)}, ${lambert.v2.y.toFixed(6)}, ${lambert.v2.z.toFixed(6)}) km/s`);
+                console.log(`  |v1|: ${lambert.v1.length().toFixed(6)} km/s`);
+                console.log(`  |v2|: ${lambert.v2.length().toFixed(6)} km/s`);
+                
+                console.log(`\nLambert Transfer Orbit (from r1, v1):`);
+                console.log(`  Semi-major axis: ${lambertElements1.semiMajorAxis.toFixed(3)} km`);
+                console.log(`  Eccentricity: ${lambertElements1.eccentricity.toFixed(6)}`);
+                console.log(`  Period: ${lambertElements1.period.toFixed(3)} s`);
+                
+                console.log(`\nLambert Transfer Orbit (from r2, v2):`);
+                console.log(`  Semi-major axis: ${lambertElements2.semiMajorAxis.toFixed(3)} km`);
+                console.log(`  Eccentricity: ${lambertElements2.eccentricity.toFixed(6)}`);
+                console.log(`  Period: ${lambertElements2.period.toFixed(3)} s`);
+                
+                console.log(`\nPropagation Results:`);
+                console.log(`  Propagated r2 (from r1+v1+dt): (${propagatedR2FromLambert.x.toFixed(3)}, ${propagatedR2FromLambert.y.toFixed(3)}, ${propagatedR2FromLambert.z.toFixed(3)}) km`);
+                console.log(`  Expected r2: (${r2.x.toFixed(3)}, ${r2.y.toFixed(3)}, ${r2.z.toFixed(3)}) km`);
+                console.log(`  r2 Error: ${r2Error.toFixed(8)} km`);
+                console.log(`  Propagated r1 (from r2+v2-dt): (${propagatedR1FromLambert.x.toFixed(3)}, ${propagatedR1FromLambert.y.toFixed(3)}, ${propagatedR1FromLambert.z.toFixed(3)}) km`);
+                console.log(`  Expected r1: (${r1.x.toFixed(3)}, ${r1.y.toFixed(3)}, ${r1.z.toFixed(3)}) km`);
+                console.log(`  r1 Error: ${r1Error.toFixed(8)} km`);
+                console.log(`========================================\n`);
+            }
+        } catch (error) {
+            console.error(`Test ${testNum + 1}: Exception occurred:`, error);
+            failedTests++;
+        }
+    }
+
+    if (r1Errors.length > 0) {
+        const meanR1 = r1Errors.reduce((a, b) => a + b, 0) / r1Errors.length;
+        const meanR2 = r2Errors.reduce((a, b) => a + b, 0) / r2Errors.length;
+        console.log(`\nSuccessful tests: ${r1Errors.length}/${numTests}`);
+        console.log(`Failed tests: ${failedTests}`);
+        console.log(`Average r1 Error: ${meanR1.toFixed(10)} km`);
+        console.log(`Average r2 Error: ${meanR2.toFixed(10)} km`);
+    } else {
+        console.log(`\nAll ${numTests} tests failed!`);
+    }
+}
+
+
+
 }

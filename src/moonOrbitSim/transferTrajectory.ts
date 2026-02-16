@@ -3,7 +3,7 @@ import { Trajectory, TrajectoryRender, TrajectoryRenderer } from './trajectory';
 import { config } from './config';
 import { Length, Time, Mass, Velocity, Measure, kilometers, seconds, formatVelocity, formatTime, formatDistanceWithAstronomicalUnits } from './units';
 import { LengthVector3, VelocityVector3 } from './unitsVector3';
-import { G, calculateInitialE, getAnalyticalState, calculateOrbitBasis, calculateEllipticalPositionFromBasis, BezierCurve } from './orbitUtils';
+import { G, calculateInitialE, getAnalyticalState, calculateOrbitBasis, calculateEllipticalPositionFromBasis, BezierCurve, TransferResult } from './orbitUtils';
 import { gravitationalConstantUnit } from './units';
 
 export interface TransferTrajectoryRender extends TrajectoryRender {
@@ -16,7 +16,9 @@ export class TransferTrajectoryRenderer extends TrajectoryRenderer implements Tr
     private departStopLoc: THREE.Sprite;
     private departStartText: THREE.Sprite;
     private departStopText: THREE.Sprite;
-    
+    private burnMarkers: THREE.Sprite[] = [];
+    private burnArcs: THREE.Line[] = [];
+   
     constructor(scene: THREE.Scene, orbitColor: number = 0xffff00) {
         super(scene, orbitColor);
 
@@ -39,7 +41,7 @@ export class TransferTrajectoryRenderer extends TrajectoryRenderer implements Tr
         
         this.departStartText.visible = false;
         this.departStopText.visible = false;
-        
+
         this.container.add(this.departStartText, this.departStopText);
     }
 
@@ -87,6 +89,101 @@ export class TransferTrajectoryRenderer extends TrajectoryRenderer implements Tr
             this.departStopLoc.visible = false;
             this.departStopText.visible = false;
         }
+        
+        // Update burn markers visibility
+        for (const marker of this.burnMarkers) {
+            marker.visible = visible;
+        }
+        
+        // Update burn arcs visibility
+        for (const arc of this.burnArcs) {
+            arc.visible = visible;
+        }
+    }
+    
+    /**
+     * Add a burn marker at a specific position with a specific color
+     */
+    addMarker(position: THREE.Vector3, color: number): void {
+        // Create dot texture for the marker
+        const dotTexture = this.createDotTexture(color);
+        
+        // Create sprite with the dot texture
+        const material = new THREE.SpriteMaterial({
+            map: dotTexture,
+            sizeAttenuation: false, // Screen space
+            depthTest: false, // Always on top
+            depthWrite: false // Don't write to depth buffer
+        });
+        const marker = new THREE.Sprite(material);
+        marker.scale.set(0.02, 0.02, 1); // Scale for visibility
+        marker.renderOrder = 999; // Ensure it renders on top
+        marker.position.copy(position);
+        marker.visible = false; // Will be controlled by updateTransferMarkers
+        this.container.add(marker);
+        this.burnMarkers.push(marker);
+    }
+    
+    /**
+     * Clear all burn markers
+     */
+    clearMarkers(): void {
+        for (const marker of this.burnMarkers) {
+            if (marker.parent === this.container) this.container.remove(marker);
+            if (marker.material instanceof THREE.Material) {
+                if (marker.material.map) marker.material.map.dispose();
+                marker.material.dispose();
+            }
+        }
+        this.burnMarkers = [];
+    }
+
+    /**
+     * Add a burn arc (Bezier curve) between two positions with velocity-based control points
+     */
+    addArc(startPos: THREE.Vector3, endPos: THREE.Vector3, startVel: THREE.Vector3, endVel: THREE.Vector3, color: number, curvatureScale: number = 10): void {
+        // Create control points based on velocities
+        const controlPoint1 = startPos.clone().add(startVel.clone().multiplyScalar(curvatureScale));
+        const controlPoint2 = endPos.clone().add(endVel.clone().multiplyScalar(-curvatureScale));
+        
+        // Create cubic Bezier curve
+        const curve = new THREE.CubicBezierCurve3(
+            startPos,
+            controlPoint1,
+            controlPoint2,
+            endPos
+        );
+        
+        // Generate points along the curve
+        const points = curve.getPoints(50);
+        
+        // Create line geometry
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineBasicMaterial({ 
+            color: color,
+            linewidth: 2,
+            opacity: 0.8,
+            transparent: true
+        });
+        
+        const line = new THREE.Line(geometry, material);
+        line.visible = false; // Will be controlled by updateTransferMarkers
+        this.container.add(line);
+        this.burnArcs.push(line);
+    }
+
+    /**
+     * Clear all burn arcs
+     */
+    clearBurnArcs(): void {
+        for (const arc of this.burnArcs) {
+            if (arc.parent === this.container) this.container.remove(arc);
+            if (arc.geometry) arc.geometry.dispose();
+            if (arc.material instanceof THREE.Material) {
+                arc.material.dispose();
+            }
+        }
+        this.burnArcs = [];
     }
 
     override cleanup(): void {
@@ -104,6 +201,8 @@ export class TransferTrajectoryRenderer extends TrajectoryRenderer implements Tr
                 }
             }
         });
+        this.clearMarkers();
+        this.clearBurnArcs();
         super.cleanup();
     }
 }
@@ -117,6 +216,8 @@ export class TransferTrajectory extends Trajectory {
     private _endMarker: THREE.Mesh | null = null;
     private _startTrajectory: Trajectory | null = null;
     private _targetTrajectory: Trajectory | null = null;
+    
+    private _transferResult: TransferResult | null = null;
     
     // Herringbone target line
     private _herringboneLine: THREE.LineSegments;
@@ -136,6 +237,10 @@ export class TransferTrajectory extends Trajectory {
     public timeOfFlight: Time = Measure.of(0, seconds);
     public startDelay: Time = Measure.of(0, seconds);
 
+    // Burn time properties (duration of burns based on fixed acceleration)
+    private _departureBurnTime: number = 0; // seconds
+    private _arrivalBurnTime: number = 0; // seconds
+
     // Associated optimization plot
     private _plot: any | null = null;
     private _plotStartTime: number = 0;
@@ -144,6 +249,7 @@ export class TransferTrajectory extends Trajectory {
         super(scene, color);
         // Debug markers enabled by default for transfers
         this._debugMarkerEnabled = true; 
+        this._isClosedLoop = false;
 
         // Create herringbone line (visibility controlled by render() method)
         const lineGeometry = new THREE.BufferGeometry();
@@ -198,6 +304,23 @@ export class TransferTrajectory extends Trajectory {
     }
 
     /**
+     * Store the complete transfer result from the Lambert solver
+     */
+    setTransferResult(result: TransferResult): void {
+        this._transferResult = result;
+        // Also set exact positions from the result
+        this.setExactPositions(result.startPosition, result.endPosition);
+    }
+
+    /**
+     * Store the burn times for departure and arrival maneuvers
+     */
+    setBurnTimes(departureBurnTime: number, arrivalBurnTime: number): void {
+        this._departureBurnTime = departureBurnTime;
+        this._arrivalBurnTime = arrivalBurnTime;
+    }
+
+    /**
      * Get the associated optimization plot
      */
     public getOptimizationPlot(): any | null {
@@ -212,26 +335,18 @@ export class TransferTrajectory extends Trajectory {
         this._plotStartTime = startTime;
     }
     
-    createMarkers(startPos: THREE.Vector3, endPos: THREE.Vector3, radius: number): void {
-        this.clearMarkers();
-        
-        // Create Mid Label Only
-        this._midLabel = this.createLabelSprite();
-        const midPos = new THREE.Vector3().addVectors(startPos, endPos).multiplyScalar(0.5);
-        if (this._analyticalPoints.length > 0) {
-            const midIdx = Math.floor(this._analyticalPoints.length / 2);
-            midPos.copy(this._analyticalPoints[midIdx]);
-        }
-        this._midLabel.position.copy(midPos).add(new THREE.Vector3(0, radius * 3, 0));
-        this._renderer.getContainer().add(this._midLabel);
-    }
     
     /**
     * Update annotations and rendering based on current simulation time
     * All visibility control and rendering happens here
+    * 
+    * For TransferTrajectory, we override to handle visibility through a custom options parameter
+    * while still supporting the base class signature
     */
-    update(currentTime: number, options?: { visible: boolean, camera?: THREE.Camera, targetPosition?: THREE.Vector3, startPosition?: THREE.Vector3 }): void {
-        super.update(currentTime);
+    override update(currentTime: number, currentPos?: THREE.Vector3, isSelected: boolean = false, options?: { visible: boolean, camera?: THREE.Camera, targetPosition?: THREE.Vector3, startPosition?: THREE.Vector3 }): void {
+        // Don't call super.update with currentPos since we handle rendering ourselves
+        // Only call it for debug marker updates
+        super.update(currentTime, currentPos, isSelected);
         
         // Update plot animation if visible
         if (this._plot) {
@@ -248,144 +363,97 @@ export class TransferTrajectory extends Trajectory {
              }
         }
 
-        // === RENDERING CONTROL FLAGS ===
-        const ENABLE_TRAJECTORY_LINE = false;      // Yellow Bezier path
-        const ENABLE_ANALYTICAL_LINE = true;       // Cyan analytical orbit  
-        const ENABLE_LUT_MARKERS = false;          // Raycasting points
-        const ENABLE_START_END_MARKERS = false;    // T+/T- markers at start/end
-        const ENABLE_MID_LABEL = false;            // TOF/ΔV label
-        const ENABLE_HERRINGBONE_LINE = false;     // Chevron pattern line to target
-        
         // Master visibility control from parent
-        const isVisible = options?.visible ?? false;
+        const isVisible = true;
         
-        console.log('[TransferTrajectory.update]', {
-            isVisible,
-            ENABLE_ANALYTICAL_LINE,
-            hasRenderer: !!this._renderer,
-            hasOptions: !!options
-        });
-        
-        // Force container invisible (master switch)
+        // Set container visibility
         if (this._renderer) {
-            const containerVisible = isVisible && (
-                ENABLE_TRAJECTORY_LINE || 
-                ENABLE_ANALYTICAL_LINE || 
-                ENABLE_LUT_MARKERS || 
-                ENABLE_START_END_MARKERS || 
-                ENABLE_MID_LABEL
-            );
-            this._renderer.getContainer().visible = containerVisible;
-            console.log('[TransferTrajectory.update] Container visible:', containerVisible);
+            this._renderer.getContainer().visible = isVisible;
         }
 
-        // Early exit if not visible or all rendering disabled
-        if (!isVisible || (!ENABLE_TRAJECTORY_LINE && !ENABLE_ANALYTICAL_LINE && 
-            !ENABLE_LUT_MARKERS && !ENABLE_START_END_MARKERS && !ENABLE_MID_LABEL && !ENABLE_HERRINGBONE_LINE)) {
-            // Hide herringbone if not enabled
-            if (!ENABLE_HERRINGBONE_LINE) {
-                this._herringboneLine.visible = false;
+        // Early exit if not visible
+        if (!isVisible) {
+            return;
+        }
+
+        // Render points along the trajractory        
+        // Create a new array of points for rendering
+        const renderPoints: THREE.Vector3[] = [];
+
+        //for 128 points from start to end in time, don't use bezierT conversion
+        for (let i = 0; i < 128; i++) {
+            const t = this._transferStartTime + (this._transferEndTime - this._transferStartTime) * i / 127;
+            const point = this.getBezierPosition(t);
+            if (point) {
+                renderPoints.push(point);
             }
-            console.log('[TransferTrajectory.update] Early exit');
-            return;
-        }
+        } 
 
-        // === 1. TRAJECTORY LINES ===
-        if (ENABLE_TRAJECTORY_LINE || ENABLE_ANALYTICAL_LINE || ENABLE_LUT_MARKERS) {
-            console.log('[TransferTrajectory.update] Calling renderTrajectoryLines');
-            this.renderTrajectoryLines(currentTime, {
-                bezier: ENABLE_TRAJECTORY_LINE,
-                analytical: ENABLE_ANALYTICAL_LINE,
-                lut: ENABLE_LUT_MARKERS
-            });
-        }
-
-        // === 2. START/END MARKERS ===
-        if (ENABLE_START_END_MARKERS) {
-            this.renderStartEndMarkers(currentTime);
-        }
-
-        // === 3. MID LABEL ===
-        if (ENABLE_MID_LABEL) {
-            this.renderMidLabel();
-        }
-
-        // === 4. HERRINGBONE LINE ===
-        // if (ENABLE_HERRINGBONE_LINE && options?.camera && options?.targetPosition && options?.startPosition) {
-        //     this.updateHerringboneLine(options.startPosition, options.targetPosition, options.camera);
-        // } else if (!ENABLE_HERRINGBONE_LINE) {
-        //     this._herringboneLine.visible = false;
-        // }
-    }
-
-    /**
-     * Render trajectory lines (Bezier, Analytical, LUT)
-     */
-    private renderTrajectoryLines(currentTime: number, options: { bezier: boolean, analytical: boolean, lut: boolean }): void {
-        if (!this._transferStartTime || !this._transferEndTime) {
-            console.log('[renderTrajectoryLines] Missing transfer times');
-            return;
-        }
-
-        // Get normalized T values
-        const startNormalizedTime = this.getBezierT(this._transferStartTime);
-        const endNormalizedTime = this.getBezierT(this._transferEndTime);
-
-        // Filter points for visualization
-        let segmentedPoints: { position: THREE.Vector3, t: number, simulationTime?: number }[] = [];
-
-        if (startNormalizedTime <= endNormalizedTime) {
-            segmentedPoints = this._bezierPoints
-                .filter(p => p.t >= startNormalizedTime && p.t <= endNormalizedTime)
-                .sort((a, b) => a.t - b.t);
-        } else {
-            const segmentA = this._bezierPoints
-                .filter(p => p.t >= startNormalizedTime)
-                .sort((a, b) => a.t - b.t);
-            const segmentB = this._bezierPoints
-                .filter(p => p.t <= endNormalizedTime)
-                .sort((a, b) => a.t - b.t);
-            segmentedPoints = [...segmentA, ...segmentB];
-        }
-
-        // Add exact start/end positions
+        // Render using bezier line (yellow)
+        this._renderer.updateBezierLine(renderPoints);
+        this._renderer.bezierLine.visible = true;
+        
+        // Render start/end markers at exact positions
         const startPos = this.getBezierPosition(this._transferStartTime);
-        if (startPos) {
-            segmentedPoints.unshift({
-                position: startPos, 
-                t: startNormalizedTime,
-                simulationTime: this._transferStartTime
-            });
-        }
-
         const endPos = this.getBezierPosition(this._transferEndTime);
-        if (endPos) {
-            segmentedPoints.push({
-                position: endPos,
-                t: endNormalizedTime, 
-                simulationTime: this._transferEndTime
-            });
+        
+        // Calculate time deltas for labels
+        const startDelta = this._transferStartTime - currentTime;
+        const endDelta = this._transferEndTime - currentTime;
+        const startPrefix = startDelta >= 0 ? '+' : '-';
+        const endPrefix = endDelta >= 0 ? '+' : '-';
+        
+        // Build label text
+        const startTextLines: string[] = [];
+        const endTextLines: string[] = [];
+        
+        if (startPos && this._startTrajectory) {
+            // Use exact Lambert solver position if available, otherwise fall back to Bezier approximation
+            let startDistKm: number;
+            if (this._exactStartPosition) {
+                // Calculate distance between exact Lambert position and source trajectory's exact analytical position
+                const sourceAnalyticalState = this._startTrajectory.getBezierState(this._transferStartTime, { calcVelocity: false });
+                if (sourceAnalyticalState.position) {
+                    startDistKm = this._exactStartPosition.distanceTo(sourceAnalyticalState.position);
+                } else {
+                    // Fallback if analytical position is not available
+                    startDistKm = startPos.distanceTo(this._startTrajectory.getBezierPosition(this._transferStartTime) || startPos);
+                }
+            } else {
+                // Fallback to Bezier approximation (less accurate)
+                startDistKm = startPos.distanceTo(this._startTrajectory.getBezierPosition(this._transferStartTime) || startPos);
+            }
+            startTextLines.push(`T${startPrefix}${formatTime(Measure.of(Math.abs(startDelta), seconds), true)}`);
+            startTextLines.push(`Start: ${formatDistanceWithAstronomicalUnits(Measure.of(startDistKm, kilometers), true)}`);
+            startTextLines.push(`Time: ${this._transferStartTime.toFixed(1)}s`);
+            startTextLines.push(`Burn Time: ${formatTime(Measure.of(this._departureBurnTime, seconds), true)}`);
         }
-
-        // Render Bezier line
-        if (options.bezier) {
-            this._renderer.updateBezierLine(segmentedPoints.map(p => p.position));
-            this._renderer.bezierLine.visible = true;
-        } else {
-            this._renderer.bezierLine.visible = false;
+        
+        if (endPos && this._targetTrajectory) {
+            // Use exact Lambert solver position if available, otherwise fall back to Bezier approximation
+            let endDistKm: number;
+            if (this._exactEndPosition) {
+                // Calculate distance between exact Lambert position and target trajectory's exact analytical position
+                const targetAnalyticalState = this._targetTrajectory.getBezierState(this._transferEndTime, { calcVelocity: false });
+                if (targetAnalyticalState.position) {
+                    endDistKm = this._exactEndPosition.distanceTo(targetAnalyticalState.position);
+                } else {
+                    // Fallback if analytical position is not available
+                    endDistKm = endPos.distanceTo(this._targetTrajectory.getBezierPosition(this._transferEndTime) || endPos);
+                }
+            } else {
+                // Fallback to Bezier approximation (less accurate)
+                endDistKm = endPos.distanceTo(this._targetTrajectory.getBezierPosition(this._transferEndTime) || endPos);
+            }
+            endTextLines.push(`T${endPrefix}${formatTime(Measure.of(Math.abs(endDelta), seconds), true)}`);
+            endTextLines.push(`End: ${formatDistanceWithAstronomicalUnits(Measure.of(endDistKm, kilometers), true)}`);
+            endTextLines.push(`Time: ${this._transferEndTime.toFixed(1)}s`);
+            endTextLines.push(`Burn Time: ${formatTime(Measure.of(this._arrivalBurnTime, seconds), true)}`);
         }
-
-        // Render Analytical line (full orbit)
-        if (options.analytical) {
-            console.log('[renderTrajectoryLines] Generating analytical points');
-            const analyticalPoints = this.generateAnalyticalPoints();
-            console.log('[renderTrajectoryLines] Generated', analyticalPoints.length, 'analytical points');
-            this._renderer.updateAnalyticalLine(analyticalPoints);
-        }
-
-        // Render LUT markers
-        if (options.lut && this._renderer.updateLUTMarkers) {
-            this._renderer.updateLUTMarkers(segmentedPoints.map(p => p.position));
+        
+        // Update markers through renderer
+        if (this._renderer instanceof TransferTrajectoryRenderer) {
+            this._renderer.updateTransferMarkers(startPos, endPos, isVisible, startTextLines, endTextLines);
         }
     }
 
@@ -452,216 +520,7 @@ export class TransferTrajectory extends Trajectory {
     /**
      * Render start/end markers with T+/T- labels
      */
-    private renderStartEndMarkers(currentTime: number): void {
-        const startPos = this.getBezierPosition(this._transferStartTime);
-        const endPos = this.getBezierPosition(this._transferEndTime);
 
-        const startTextLines: string[] = [];
-        const endTextLines: string[] = [];
-
-        // Time to Start
-        const timeToStart = currentTime - this._transferStartTime;
-        const startPrefix = timeToStart < 0 ? 'T-' : 'T+';
-        const startDuration = Measure.of(Math.abs(timeToStart), seconds);
-        startTextLines.push(`${startPrefix}${formatTime(startDuration, true)}`);
-        startTextLines.push(`Start: ${this._transferStartTime.toFixed(2)} s`);
-
-        // Distance at Start
-        if (this._startTrajectory) {
-            const startBodyPos = this._startTrajectory.getBezierPosition(this._transferStartTime);
-            if (startBodyPos) {
-                const exactPos = this._exactStartPosition || startPos;
-                if (exactPos) {
-                    const dist = exactPos.distanceTo(startBodyPos);
-                    startTextLines.push(`Dist: ${formatDistanceWithAstronomicalUnits(Measure.of(dist, kilometers), true)}`);
-                    
-                    if (this._exactStartPosition && startPos) {
-                        const bezierError = this._exactStartPosition.distanceTo(startPos);
-                        startTextLines.push(`Bezier Err: ${bezierError.toFixed(2)} km`);
-                    }
-                }
-            }
-        }
-
-        // Time to End
-        const timeToEnd = currentTime - this._transferEndTime;
-        const endPrefix = timeToEnd < 0 ? 'T-' : 'T+';
-        const endDuration = Measure.of(Math.abs(timeToEnd), seconds);
-        endTextLines.push(`${endPrefix}${formatTime(endDuration, true)}`);
-        endTextLines.push(`End: ${this._transferEndTime.toFixed(2)} s`);
-
-        // Distance at End
-        if (this._targetTrajectory) {
-            const targetBodyPos = this._targetTrajectory.getBezierPosition(this._transferEndTime);
-            if (targetBodyPos) {
-                const exactPos = this._exactEndPosition || endPos;
-                if (exactPos) {
-                    const dist = exactPos.distanceTo(targetBodyPos);
-                    endTextLines.push(`Dist: ${formatDistanceWithAstronomicalUnits(Measure.of(dist, kilometers), true)}`);
-                    
-                    if (this._exactEndPosition && endPos) {
-                        const bezierError = this._exactEndPosition.distanceTo(endPos);
-                        endTextLines.push(`Bezier Err: ${bezierError.toFixed(2)} km`);
-                    }
-                }
-            }
-        }
-
-        (this._renderer as TransferTrajectoryRender).updateTransferMarkers(startPos, endPos, true, startTextLines, endTextLines);
-    }
-
-    /**
-     * Render mid label with TOF and ΔV
-     */
-    private renderMidLabel(): void {
-        const midText = [
-            `TOF: ${formatTime(this.timeOfFlight, true)}`,
-            `Total ΔV: ${formatVelocity(this.totalDeltaV, true)}`
-        ];
-        
-        if (this.startDelay.value > 0) {
-            midText.push(`Start Delay: ${formatTime(this.startDelay, true)}`);
-        }
-
-        this.updateLabelTexture(this._midLabel, midText, 0xffff00);
-    }
-
-    /**
-     * Update herringbone line to point from start to target
-     * Generates a billboarded herringbone/chevron pattern
-     */
-    updateHerringboneLine(
-        start: THREE.Vector3,
-        end: THREE.Vector3 | null,
-        camera?: THREE.Camera
-    ): void {
-        if (!end || !camera) {
-            this._herringboneLine.visible = false;
-            return;
-        }
-
-        // Constants
-        const CHEVRON_PIXEL_SIZE = 10.0; // Size of chevron wings in pixels
-
-        // 1. Transform World Points to Camera Space for Clipping
-        const startView = start.clone().applyMatrix4(camera.matrixWorldInverse);
-        const endView = end.clone().applyMatrix4(camera.matrixWorldInverse);
-
-        // Near plane clip distance
-        const near = (camera as any).near || 0.1;
-        const CLIP_Z = -near;
-
-        if (startView.z > CLIP_Z && endView.z > CLIP_Z) {
-            this._herringboneLine.visible = false;
-            return;
-        }
-
-        let sClipped = start.clone();
-        let eClipped = end.clone();
-        let wStart = -startView.z;
-        let wEnd = -endView.z;
-
-        const clipLine = (
-            p1: THREE.Vector3,
-            p2: THREE.Vector3,
-            w1: number,
-            w2: number
-        ) => {
-            if (p1.z > CLIP_Z) {
-                const diff = p2.z - p1.z;
-                const t = diff !== 0 ? (CLIP_Z - p1.z) / diff : 0;
-                const pNew = new THREE.Vector3().lerpVectors(p1, p2, t);
-                return { pos: pNew, w: -pNew.z, t: t };
-            }
-            return { pos: p1, w: w1, t: 0 };
-        };
-
-        let tStart = 0;
-        let tEnd = 1;
-
-        if (startView.z > CLIP_Z) {
-            const res = clipLine(startView, endView, wStart, wEnd);
-            startView.copy(res.pos);
-            wStart = res.w;
-            tStart = res.t;
-        }
-        if (endView.z > CLIP_Z) {
-            const res = clipLine(endView, startView, wEnd, wStart);
-            endView.copy(res.pos);
-            wEnd = res.w;
-            tEnd = 1.0 - res.t;
-        }
-
-        // Reconstruct clipped world points based on interpolation
-        sClipped.lerpVectors(start, end, tStart);
-        eClipped.lerpVectors(start, end, tEnd);
-
-        // 2. Calculate chevron sizing and spacing
-        const height = window.innerHeight;
-        const distToFirstChevron = sClipped.distanceTo(camera.position);
-        const fov = (camera instanceof THREE.PerspectiveCamera) ? camera.fov : 50;
-        const tan = Math.tan((fov * Math.PI / 180) / 2);
-        const worldSizeAtFirstChevron = (CHEVRON_PIXEL_SIZE / height) * 2 * distToFirstChevron * tan;
-        
-        const CHEVRON_WING_LENGTH = worldSizeAtFirstChevron;
-        const CHEVRON_WIDTH_OFFSET = worldSizeAtFirstChevron * 0.6;
-        const CHEVRON_3D_SPACING = worldSizeAtFirstChevron * 3.0;
-
-        // 3. Generate chevrons at equidistant 3D positions
-        const points: THREE.Vector3[] = [];
-        
-        const lineDir = new THREE.Vector3().subVectors(eClipped, sClipped);
-        const totalDistance = lineDir.length();
-        lineDir.normalize();
-        
-        const numChevrons = Math.floor(totalDistance / CHEVRON_3D_SPACING);
-        
-        // Safety cap
-        if (numChevrons > 2000) {
-            this._herringboneLine.visible = false;
-            return;
-        }
-
-        for (let i = 0; i <= numChevrons; i++) {
-            const distance3D = i * CHEVRON_3D_SPACING;
-            const centerPos = sClipped.clone().add(lineDir.clone().multiplyScalar(distance3D));
-
-            // Billboarding
-            const viewVec = new THREE.Vector3()
-                .subVectors(centerPos, camera.position)
-                .normalize();
-            const right = new THREE.Vector3()
-                .crossVectors(lineDir, viewVec)
-                .normalize();
-            if (right.lengthSq() < 0.001) {
-                right.crossVectors(lineDir, new THREE.Vector3(0, 1, 0)).normalize();
-            }
-
-            const tip = centerPos
-                .clone()
-                .add(lineDir.clone().multiplyScalar(CHEVRON_WING_LENGTH * 0.5));
-            const base = centerPos
-                .clone()
-                .sub(lineDir.clone().multiplyScalar(CHEVRON_WING_LENGTH * 0.5));
-
-            const left = base
-                .clone()
-                .add(right.clone().multiplyScalar(CHEVRON_WIDTH_OFFSET));
-            const rightPos = base
-                .clone()
-                .sub(right.clone().multiplyScalar(CHEVRON_WIDTH_OFFSET));
-
-            points.push(left, tip);
-            points.push(rightPos, tip);
-        }
-
-        this._herringboneLine.geometry.setFromPoints(points);
-        if (this._herringboneLine.geometry.attributes.position) {
-            this._herringboneLine.geometry.attributes.position.needsUpdate = true;
-        }
-        this._herringboneLine.geometry.computeBoundingSphere();
-        this._herringboneLine.visible = true;
-    }
 
     protected override getDebugLines(currentTime: number): string[] {
         const lines = super.getDebugLines(currentTime);
@@ -683,49 +542,24 @@ export class TransferTrajectory extends Trajectory {
         return lines;
     }
 
-    private createLabelSprite(): THREE.Sprite {
-        const material = new THREE.SpriteMaterial({
-            map: new THREE.Texture(), 
-            sizeAttenuation: false,
-            depthTest: false,
-            depthWrite: false
-        });
-        const sprite = new THREE.Sprite(material);
-        sprite.scale.set(0.24, 0.12, 1); 
-        sprite.renderOrder = 1000;
-        return sprite;
+
+
+    /**
+     * Add a burn marker at a specific position with a specific color
+     */
+    addMarker(position: THREE.Vector3, color: number): void {
+        if (this._renderer instanceof TransferTrajectoryRenderer) {
+            this._renderer.addMarker(position, color);
+        }
     }
 
-    private updateLabelTexture(sprite: THREE.Sprite | null, lines: string[], color: number): void {
-        if (!sprite) return;
-        
-        const canvas = document.createElement('canvas');
-        canvas.width = 320;
-        canvas.height = 160;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-            ctx.font = 'bold 24px monospace';
-            ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            // Shadow for readability
-            ctx.shadowColor = 'black';
-            ctx.shadowBlur = 4;
-            ctx.lineWidth = 2;
-
-            const lineHeight = 30;
-            const startY = (canvas.height - (lines.length - 1) * lineHeight) / 2;
-
-            lines.forEach((line, index) => {
-                ctx.fillText(line, 160, startY + index * lineHeight);
-            });
+    /**
+     * Add a burn arc (Bezier curve) between two positions with velocity-based control points
+     */
+    addArc(startPos: THREE.Vector3, endPos: THREE.Vector3, startVel: THREE.Vector3, endVel: THREE.Vector3, color: number, curvatureScale: number = 10): void {
+        if (this._renderer instanceof TransferTrajectoryRenderer) {
+            this._renderer.addArc(startPos, endPos, startVel, endVel, color, curvatureScale);
         }
-        
-        const texture = new THREE.Texture(canvas);
-        texture.needsUpdate = true;
-        
-        if (sprite.material.map) sprite.material.map.dispose();
-        sprite.material.map = texture;
     }
 
     clearMarkers(): void {
@@ -742,12 +576,10 @@ export class TransferTrajectory extends Trajectory {
             if (this._endMarker.material instanceof THREE.Material) this._endMarker.material.dispose();
             this._endMarker = null;
         }
-
-        if (this._midLabel) {
-            if (this._midLabel.parent) this._midLabel.parent.remove(this._midLabel);
-            if (this._midLabel.material.map) this._midLabel.material.map.dispose();
-            this._midLabel.material.dispose();
-            this._midLabel = null;
+        
+        // Clear burn markers through renderer
+        if (this._renderer instanceof TransferTrajectoryRenderer) {
+            this._renderer.clearMarkers();
         }
     }
     
@@ -787,36 +619,19 @@ export class TransferTrajectory extends Trajectory {
 
     calculateFromState(position: LengthVector3, velocity: VelocityVector3, centralBodyMass: Mass, startTime: Time): void {
         // 1. Calculate Standard Orbit using superclass (Math-Free Architecture)
+        // This generates the FULL orbit Bezier approximation with time warp LUT optimization
         super.calculateFromState(position, velocity, centralBodyMass, startTime);
         
-        // 2. Ensure Bezier estimation is enabled for smooth rendering
+        // 2. Ensure Bezier estimation is enabled for smooth rendering of the full orbit
         this.useBezierEstimation = true;
-        this._isClosedLoop = false; // Disable closed loop to prevent tails
 
-        // 3. Update the visual clipping for the renderer
-        // Moved to update() loop
-        // this.updateTransferClip();
+        this._isClosedLoop = false;
+        // Note: The parent class already builds the time warp LUT for elliptical orbits
+        // when useBezierEstimation is true (see Trajectory.calculateFromState line 1002-1004)
+        // This LUT optimizes the Bezier approximation for accurate time-based sampling
     }
 
-    /**
-     * Override base class updateOrbitVisualization to disable automatic rendering
-     * All rendering is disabled for debugging - will be re-enabled piece by piece
-     */
-    override updateOrbitVisualization(currentTime: number, currentPos: THREE.Vector3): void {
-        // DISABLED: Base class rendering
-        // This was causing the yellow ellipse to appear
-        // super.updateOrbitVisualization(currentTime, currentPos);
-    }
 
-    /**
-     * Get the hit points for raycasting
-     */
-    getLUTPoints(): THREE.Points | null {
-        if (this._renderer && this._renderer.lutPoints) {
-            return this._renderer.lutPoints;
-        }
-        return null;
-    }
 
     /**
      * Get data for a specific point index (from raycast intersection)

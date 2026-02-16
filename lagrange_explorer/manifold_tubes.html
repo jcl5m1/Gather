@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lagrange Manifold Tubes - 3D Visualization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 100%);
+            color: #e0e0e0;
+            overflow: hidden;
+            height: 100vh;
+        }
+        
+        #canvas-container {
+            width: 100%;
+            height: 100vh;
+            position: relative;
+        }
+        
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(20, 20, 30, 0.92);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 24px;
+            width: 320px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+        }
+        
+        .ui-panel h1 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .ui-panel .subtitle {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 20px;
+            line-height: 1.4;
+        }
+        
+        .control-group {
+            margin-bottom: 20px;
+        }
+        
+        .control-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #b0b0b0;
+        }
+        
+        .control-group .value-display {
+            float: right;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.1);
+            outline: none;
+            -webkit-appearance: none;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+            transition: transform 0.2s;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+        
+        input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+        }
+        
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(20, 20, 30, 0.92);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 20px;
+            width: 280px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+        }
+        
+        .info-panel h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #667eea;
+        }
+        
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        
+        .info-item .label {
+            color: #888;
+        }
+        
+        .info-item .value {
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+        
+        .legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(20, 20, 30, 0.92);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 100;
+        }
+        
+        .legend h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #b0b0b0;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
+        
+        .legend-color {
+            width: 24px;
+            height: 3px;
+            margin-right: 8px;
+            border-radius: 2px;
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 18px;
+            color: #667eea;
+            z-index: 200;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .loading::after {
+            content: '...';
+            animation: pulse 1.5s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    
+    <div class="ui-panel">
+        <h1>Manifold Tubes</h1>
+        <p class="subtitle">Pre-computed stable/unstable manifolds from L1 and L2 Lagrange points in the rotating frame</p>
+        
+        <div class="control-group">
+            <label>
+                Mass Ratio (μ)
+                <span class="value-display" id="muValue">0.0121</span>
+            </label>
+            <input type="range" id="muSlider" min="0.000003" max="0.5" step="0.000001" value="0.0121">
+        </div>
+        
+        <div class="control-group">
+            <label>
+                Tube Opacity
+                <span class="value-display" id="opacityValue">0.7</span>
+            </label>
+            <input type="range" id="opacitySlider" min="0.1" max="1.0" step="0.05" value="0.7">
+        </div>
+        
+        <div class="control-group">
+            <label>
+                Tube Thickness
+                <span class="value-display" id="thicknessValue">0.01</span>
+            </label>
+            <input type="range" id="thicknessSlider" min="0.005" max="0.05" step="0.005" value="0.01">
+        </div>
+    </div>
+    
+    <div class="info-panel">
+        <h2>System Info</h2>
+        <div class="info-item">
+            <span class="label">Lagrange Points:</span>
+            <span class="value">L1, L2</span>
+        </div>
+        <div class="info-item">
+            <span class="label">Manifold Families:</span>
+            <span class="value" id="manifoldCount">0</span>
+        </div>
+        <div class="info-item">
+            <span class="label">Frame:</span>
+            <span class="value">Rotating</span>
+        </div>
+        <div class="info-item">
+            <span class="label">Dimension:</span>
+            <span class="value">6D (pos + vel)</span>
+        </div>
+    </div>
+    
+    <div class="legend">
+        <h3>Legend</h3>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #ff6b6b;"></div>
+            <span>L1 Unstable Manifold</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #4ecdc4;"></div>
+            <span>L1 Stable Manifold</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #ffd93d;"></div>
+            <span>L2 Unstable Manifold</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #95e1d3;"></div>
+            <span>L2 Stable Manifold</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background: #ffffff;"></div>
+            <span>Lagrange Points</span>
+        </div>
+    </div>
+    
+    <div class="loading" id="loading">Computing manifolds</div>
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+    
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        
+        // Scene setup
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a0f);
+        scene.fog = new THREE.Fog(0x0a0a0f, 5, 20);
+        
+        // Camera
+        const camera = new THREE.PerspectiveCamera(
+            60,
+            window.innerWidth / window.innerHeight,
+            0.01,
+            100
+        );
+        camera.position.set(2, 1.5, 2);
+        
+        // Renderer
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+        
+        // Controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.minDistance = 0.5;
+        controls.maxDistance = 10;
+        
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        directionalLight.position.set(5, 5, 5);
+        directionalLight.castShadow = true;
+        scene.add(directionalLight);
+        
+        const pointLight1 = new THREE.PointLight(0x667eea, 0.8, 10);
+        pointLight1.position.set(-2, 2, 2);
+        scene.add(pointLight1);
+        
+        const pointLight2 = new THREE.PointLight(0x764ba2, 0.6, 10);
+        pointLight2.position.set(2, -1, -2);
+        scene.add(pointLight2);
+        
+        // Physics parameters
+        let mu = 0.0121; // Earth-Moon system
+        let tubeOpacity = 0.7;
+        let tubeThickness = 0.01;
+        
+        // Bodies and manifolds rotate together in the rotating frame
+        const bodiesGroup = new THREE.Group();
+        scene.add(bodiesGroup);
+        
+        const manifoldGroup = new THREE.Group();
+        bodiesGroup.add(manifoldGroup); // Manifolds are part of the rotating frame
+        
+        // CR3BP derivatives
+        function derivatives(state, mu) {
+            const { x, y, z, vx, vy, vz } = state;
+            const x1 = -mu;
+            const x2 = 1 - mu;
+            
+            const r1_sq = (x - x1) ** 2 + y ** 2 + z ** 2;
+            const r2_sq = (x - x2) ** 2 + y ** 2 + z ** 2;
+            const r1_cubed = Math.pow(r1_sq, 1.5);
+            const r2_cubed = Math.pow(r2_sq, 1.5);
+            
+            const ax = 2 * vy + x - (1 - mu) * (x - x1) / r1_cubed - mu * (x - x2) / r2_cubed;
+            const ay = -2 * vx + y - (1 - mu) * y / r1_cubed - mu * y / r2_cubed;
+            const az = -(1 - mu) * z / r1_cubed - mu * z / r2_cubed;
+            
+            return { dx: vx, dy: vy, dz: vz, dvx: ax, dvy: ay, dvz: az };
+        }
+        
+        // RK4 integration
+        function integrate(state, dt, mu) {
+            const k1 = derivatives(state, mu);
+            
+            const s2 = {
+                x: state.x + k1.dx * dt / 2,
+                y: state.y + k1.dy * dt / 2,
+                z: state.z + k1.dz * dt / 2,
+                vx: state.vx + k1.dvx * dt / 2,
+                vy: state.vy + k1.dvy * dt / 2,
+                vz: state.vz + k1.dvz * dt / 2
+            };
+            const k2 = derivatives(s2, mu);
+            
+            const s3 = {
+                x: state.x + k2.dx * dt / 2,
+                y: state.y + k2.dy * dt / 2,
+                z: state.z + k2.dz * dt / 2,
+                vx: state.vx + k2.dvx * dt / 2,
+                vy: state.vy + k2.dvy * dt / 2,
+                vz: state.vz + k2.dvz * dt / 2
+            };
+            const k3 = derivatives(s3, mu);
+            
+            const s4 = {
+                x: state.x + k3.dx * dt,
+                y: state.y + k3.dy * dt,
+                z: state.z + k3.dz * dt,
+                vx: state.vx + k3.dvx * dt,
+                vy: state.vy + k3.dvy * dt,
+                vz: state.vz + k3.dvz * dt
+            };
+            const k4 = derivatives(s4, mu);
+            
+            return {
+                x: state.x + (dt / 6) * (k1.dx + 2 * k2.dx + 2 * k3.dx + k4.dx),
+                y: state.y + (dt / 6) * (k1.dy + 2 * k2.dy + 2 * k3.dy + k4.dy),
+                z: state.z + (dt / 6) * (k1.dz + 2 * k2.dz + 2 * k3.dz + k4.dz),
+                vx: state.vx + (dt / 6) * (k1.dvx + 2 * k2.dvx + 2 * k3.dvx + k4.dvx),
+                vy: state.vy + (dt / 6) * (k1.dvy + 2 * k2.dvy + 2 * k3.dvy + k4.dvy),
+                vz: state.vz + (dt / 6) * (k1.dvz + 2 * k2.dvz + 2 * k3.dvz + k4.dvz)
+            };
+        }
+        
+        // Find L1 and L2 points
+        function findLagrangePoints(mu) {
+            // L1 is between the two bodies
+            const solveL1 = (mu) => {
+                let x = (1 - mu) - Math.pow(mu / 3, 1 / 3);
+                for (let i = 0; i < 15; i++) {
+                    const r1 = x + mu;
+                    const r2 = x - (1 - mu);
+                    const f = x - (1 - mu) / (r1 * r1) + mu / (r2 * r2);
+                    const df = 1 + 2 * (1 - mu) / (r1 * r1 * r1) + 2 * mu / (r2 * r2 * r2);
+                    x -= f / df;
+                }
+                return x;
+            };
+            
+            // L2 is beyond the secondary body
+            const solveL2 = (mu) => {
+                let x = (1 - mu) + Math.pow(mu / 3, 1 / 3);
+                for (let i = 0; i < 15; i++) {
+                    const r1 = x + mu;
+                    const r2 = x - (1 - mu);
+                    const f = x - (1 - mu) / (r1 * r1) - mu / (r2 * r2);
+                    const df = 1 + 2 * (1 - mu) / (r1 * r1 * r1) + 2 * mu / (r2 * r2 * r2);
+                    x -= f / df;
+                }
+                return x;
+            };
+            
+            return {
+                L1: { x: solveL1(mu), y: 0, z: 0 },
+                L2: { x: solveL2(mu), y: 0, z: 0 }
+            };
+        }
+        
+        // Compute manifold trajectory
+        function computeManifold(initialState, duration, dt, mu, direction = 1) {
+            const points = [];
+            let state = { ...initialState };
+            
+            const steps = Math.floor(duration / dt);
+            // Realistic Earth-Moon radii (matching the visual bodies)
+            const earthRadius = 0.0166;
+            const moonRadius = 0.0045;
+            const x1 = -mu; // Earth position
+            const x2 = 1 - mu; // Moon position
+            
+            for (let i = 0; i < steps; i++) {
+                points.push(new THREE.Vector3(state.x, state.z, state.y));
+                state = integrate(state, dt * direction, mu);
+                
+                // Check distance to bodies (terminate if collision)
+                const distToEarth = Math.sqrt((state.x - x1) ** 2 + state.y ** 2 + state.z ** 2);
+                const distToMoon = Math.sqrt((state.x - x2) ** 2 + state.y ** 2 + state.z ** 2);
+                
+                // Terminate if actually colliding with body
+                if (distToEarth < earthRadius || distToMoon < moonRadius) {
+                    break;
+                }
+                
+                // Stop if trajectory escapes too far (relaxed boundary for longer manifolds)
+                if (Math.abs(state.x) > 5 || Math.abs(state.y) > 5 || Math.abs(state.z) > 5) {
+                    break;
+                }
+            }
+            
+            return points;
+        }
+        
+        // Create Catmull-Rom spline tube
+        function createTube(points, color, opacity, thickness) {
+            if (points.length < 2) return null;
+            
+            const curve = new THREE.CatmullRomCurve3(points);
+            const tubeGeometry = new THREE.TubeGeometry(curve, points.length * 2, thickness, 8, false);
+            const tubeMaterial = new THREE.MeshPhongMaterial({
+                color: color,
+                transparent: true,
+                opacity: opacity,
+                side: THREE.DoubleSide,
+                shininess: 60,
+                emissive: color,
+                emissiveIntensity: 0.2
+            });
+            
+            return new THREE.Mesh(tubeGeometry, tubeMaterial);
+        }
+        
+        // Generate manifold family
+        function generateManifolds(mu) {
+            manifoldGroup.clear();
+            
+            const lagrangePoints = findLagrangePoints(mu);
+            
+            // Parameters for manifold generation
+            const numManifolds = 8; // Number of manifolds per type
+            const perturbation = 0.001; // Small perturbation in velocity
+            const duration = 15.0; // Integration time (increased for longer manifolds)
+            const dt = 0.01; // Time step
+            
+            let totalManifolds = 0;
+            
+            // L1 Unstable Manifolds (forward in time, perturb outward)
+            // Use much larger perturbation for L1 to help escape the strong gradient near secondary
+            const l1Perturbation = perturbation * 10.0;
+            for (let i = 0; i < numManifolds; i++) {
+                const angle = (i / numManifolds) * Math.PI * 2;
+                const state = {
+                    x: lagrangePoints.L1.x,
+                    y: lagrangePoints.L1.y,
+                    z: lagrangePoints.L1.z,
+                    vx: l1Perturbation * Math.cos(angle),
+                    vy: l1Perturbation * Math.sin(angle),
+                    vz: l1Perturbation * Math.sin(angle * 2) * 0.5
+                };
+                
+                const points = computeManifold(state, duration, dt, mu, 1);
+                const tube = createTube(points, 0xff6b6b, tubeOpacity, tubeThickness);
+                if (tube) {
+                    manifoldGroup.add(tube);
+                    totalManifolds++;
+                }
+            }
+            
+            // L1 Stable Manifolds (backward in time)
+            for (let i = 0; i < numManifolds; i++) {
+                const angle = (i / numManifolds) * Math.PI * 2;
+                const state = {
+                    x: lagrangePoints.L1.x,
+                    y: lagrangePoints.L1.y,
+                    z: lagrangePoints.L1.z,
+                    vx: l1Perturbation * Math.cos(angle),
+                    vy: l1Perturbation * Math.sin(angle),
+                    vz: l1Perturbation * Math.sin(angle * 2) * 0.5
+                };
+                
+                const points = computeManifold(state, duration, dt, mu, -1);
+                const tube = createTube(points, 0x4ecdc4, tubeOpacity, tubeThickness);
+                if (tube) {
+                    manifoldGroup.add(tube);
+                    totalManifolds++;
+                }
+            }
+            
+            // L2 Unstable Manifolds (forward in time)
+            for (let i = 0; i < numManifolds; i++) {
+                const angle = (i / numManifolds) * Math.PI * 2;
+                const state = {
+                    x: lagrangePoints.L2.x,
+                    y: lagrangePoints.L2.y,
+                    z: lagrangePoints.L2.z,
+                    vx: perturbation * Math.cos(angle),
+                    vy: perturbation * Math.sin(angle),
+                    vz: perturbation * Math.sin(angle * 2) * 0.5
+                };
+                
+                const points = computeManifold(state, duration, dt, mu, 1);
+                const tube = createTube(points, 0xffd93d, tubeOpacity, tubeThickness);
+                if (tube) {
+                    manifoldGroup.add(tube);
+                    totalManifolds++;
+                }
+            }
+            
+            // L2 Stable Manifolds (backward in time)
+            for (let i = 0; i < numManifolds; i++) {
+                const angle = (i / numManifolds) * Math.PI * 2;
+                const state = {
+                    x: lagrangePoints.L2.x,
+                    y: lagrangePoints.L2.y,
+                    z: lagrangePoints.L2.z,
+                    vx: perturbation * Math.cos(angle),
+                    vy: perturbation * Math.sin(angle),
+                    vz: perturbation * Math.sin(angle * 2) * 0.5
+                };
+                
+                const points = computeManifold(state, duration, dt, mu, -1);
+                const tube = createTube(points, 0x95e1d3, tubeOpacity, tubeThickness);
+                if (tube) {
+                    manifoldGroup.add(tube);
+                    totalManifolds++;
+                }
+            }
+            
+            document.getElementById('manifoldCount').textContent = totalManifolds;
+        }
+        
+        // Create celestial bodies
+        function createBodies(mu) {
+            // Clear only the body meshes, but preserve manifoldGroup
+            // Store reference to manifoldGroup before clearing
+            const wasManifoldChild = manifoldGroup.parent === bodiesGroup;
+            
+            bodiesGroup.clear();
+            
+            // Re-add manifoldGroup if it was a child
+            if (wasManifoldChild) {
+                bodiesGroup.add(manifoldGroup);
+            }
+            
+            const lagrangePoints = findLagrangePoints(mu);
+            
+            // Earth-Moon system parameters
+            // Earth radius: 6371 km, Moon radius: 1737 km
+            // Earth-Moon distance: 384,400 km
+            // In normalized units where Earth-Moon distance = 1.0:
+            // Earth radius = 6371 / 384400 = 0.0166
+            // Moon radius = 1737 / 384400 = 0.0045
+            const earthRadius = 0.0166;  // Realistic scale
+            const moonRadius = 0.0045;   // Realistic scale
+            
+            // Earth (primary body) - positioned at barycenter
+            const earthGeometry = new THREE.SphereGeometry(earthRadius, 32, 32);
+            const earthMaterial = new THREE.MeshPhongMaterial({
+                color: 0x2233ff,
+                emissive: 0x1122aa,
+                emissiveIntensity: 0.3,
+                shininess: 100
+            });
+            const earth = new THREE.Mesh(earthGeometry, earthMaterial);
+            earth.position.set(-mu, 0, 0);
+            bodiesGroup.add(earth);
+            
+            // Moon (secondary body) - gray color
+            const moonGeometry = new THREE.SphereGeometry(moonRadius, 32, 32);
+            const moonMaterial = new THREE.MeshPhongMaterial({
+                color: 0xaaaaaa,
+                emissive: 0x444444,
+                emissiveIntensity: 0.2,
+                shininess: 50
+            });
+            const moon = new THREE.Mesh(moonGeometry, moonMaterial);
+            moon.position.set(1 - mu, 0, 0);
+            bodiesGroup.add(moon);
+            
+            // L1 point - small dot
+            const lagrangePointGeometry = new THREE.SphereGeometry(0.005, 8, 8);
+            const lagrangePointMaterial = new THREE.MeshBasicMaterial({
+                color: 0xffff00,
+                transparent: true,
+                opacity: 0.9
+            });
+            const l1 = new THREE.Mesh(lagrangePointGeometry, lagrangePointMaterial);
+            l1.position.set(lagrangePoints.L1.x, 0, 0);
+            bodiesGroup.add(l1);
+            
+            // L2 point - small dot
+            const l2 = new THREE.Mesh(lagrangePointGeometry.clone(), lagrangePointMaterial.clone());
+            l2.position.set(lagrangePoints.L2.x, 0, 0);
+            bodiesGroup.add(l2);
+            
+            // Add labels (using sprites)
+            const createLabel = (text, position) => {
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.width = 128;
+                canvas.height = 64;
+                context.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                context.font = 'Bold 32px Arial';
+                context.textAlign = 'center';
+                context.fillText(text, 64, 40);
+                
+                const texture = new THREE.CanvasTexture(canvas);
+                const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+                const sprite = new THREE.Sprite(spriteMaterial);
+                sprite.position.copy(position);
+                sprite.position.y += 0.1;
+                sprite.scale.set(0.2, 0.1, 1);
+                
+                return sprite;
+            };
+            
+            bodiesGroup.add(createLabel('L1', new THREE.Vector3(lagrangePoints.L1.x, 0, 0)));
+            bodiesGroup.add(createLabel('L2', new THREE.Vector3(lagrangePoints.L2.x, 0, 0)));
+        }
+        
+        // Add coordinate grid
+        function createGrid() {
+            const gridHelper = new THREE.GridHelper(4, 20, 0x444444, 0x222222);
+            gridHelper.position.y = -0.5;
+            scene.add(gridHelper);
+            
+            // Axes helper
+            const axesHelper = new THREE.AxesHelper(1);
+            scene.add(axesHelper);
+        }
+        
+        // UI Controls
+        document.getElementById('muSlider').addEventListener('input', (e) => {
+            mu = parseFloat(e.target.value);
+            document.getElementById('muValue').textContent = mu.toFixed(6);
+            updateScene();
+        });
+        
+        document.getElementById('opacitySlider').addEventListener('input', (e) => {
+            tubeOpacity = parseFloat(e.target.value);
+            document.getElementById('opacityValue').textContent = tubeOpacity.toFixed(2);
+            updateTubeProperties();
+        });
+        
+        document.getElementById('thicknessSlider').addEventListener('input', (e) => {
+            tubeThickness = parseFloat(e.target.value);
+            document.getElementById('thicknessValue').textContent = tubeThickness.toFixed(3);
+            updateScene();
+        });
+        
+        function updateTubeProperties() {
+            manifoldGroup.children.forEach(tube => {
+                if (tube.material) {
+                    tube.material.opacity = tubeOpacity;
+                }
+            });
+        }
+        
+        function updateScene() {
+            document.getElementById('loading').style.display = 'block';
+            
+            setTimeout(() => {
+                createBodies(mu);
+                generateManifolds(mu);
+                document.getElementById('loading').style.display = 'none';
+            }, 50);
+        }
+        
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            
+            // Subtle rotation of bodies
+            bodiesGroup.rotation.y += 0.001;
+            
+            renderer.render(scene, camera);
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Keyboard controls for camera focus
+        window.addEventListener('keydown', (event) => {
+            const earthPos = new THREE.Vector3(-mu, 0, 0);
+            const moonPos = new THREE.Vector3(1 - mu, 0, 0);
+            
+            if (event.key === '[') {
+                // Focus on Earth
+                controls.target.copy(earthPos);
+                controls.update();
+            } else if (event.key === ']') {
+                // Focus on Moon
+                controls.target.copy(moonPos);
+                controls.update();
+            }
+        });
+        
+        // Initialize
+        createGrid();
+        updateScene();
+        animate();
+        
+        // Hide loading after initial render
+        setTimeout(() => {
+            document.getElementById('loading').style.display = 'none';
+        }, 1000);
+    </script>
+</body>
+</html>

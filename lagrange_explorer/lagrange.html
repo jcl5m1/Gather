@@ -1,0 +1,1525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Lagrange Point & Jacobi Constant Simulator</title>
+    <style>
+        body { 
+            background: #0f0f0f; 
+            color: #e0e0e0; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            margin: 0;
+            overflow: hidden;
+        }
+        canvas { 
+            border: 1px solid #333; 
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            cursor: crosshair; 
+        }
+        .ui-panel { 
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 15px; 
+            background: rgba(34, 34, 34, 0.9); 
+            border-radius: 8px; 
+            width: 280px;
+            pointer-events: auto;
+            z-index: 10;
+        }
+        .stats {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 15px;
+            background: rgba(34, 34, 34, 0.9);
+            border-radius: 8px;
+            font-family: monospace;
+        }
+        label { font-size: 13px; font-weight: bold; display: block; margin-bottom: 5px; }
+        input[type="range"] { width: 100%; margin-bottom: 15px; }
+        button { 
+            width: 100%; 
+            padding: 8px; 
+            background: #444; 
+            color: white; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer;
+        }
+        button:hover { background: #666; }
+        .hint { font-size: 11px; color: #aaa; margin-top: 10px; line-height: 1.4; }
+    </style>
+</head>
+<body>
+
+    <div class="ui-panel">
+        <label>Mass Ratio (μ): <span id="muVal">0.0121</span></label>
+        <input type="range" id="mu" min="0.000003" max="0.5" step="0.000001" value="0.0121">
+        
+        <label>Eccentricity: <span id="eccVal">0.00</span></label>
+        <input type="range" id="ecc" min="0.0" max="0.5" step="0.01" value="0.0">
+        
+        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 10px;">
+            <button id="btnL1">L1</button>
+            <button id="btnL2">L2</button>
+            <button id="btnL3">L3</button>
+            <button id="btnL4">L4</button>
+            <button id="btnL5">L5</button>
+        </div>
+        <button id="manifoldBtn" style="margin-top: 10px; background: #553333;">Manifold Mode: OFF</button>
+        <button id="autoOptBtn" style="margin-top: 5px; background: #553333;">Auto-Optimize: OFF</button>
+        <button id="sunBtn" style="margin-top: 5px; background: #553333;">Sun Perturbation: OFF</button>
+        
+            • <b>μ = 0.0121</b> is Earth-Moon.<br>
+            • <b>μ = 0.001</b> is Sun-Jupiter.
+        </div>
+    </div>
+
+    <div class="stats">
+        Jacobi Constant (C): <span id="jacobiVal">0.00</span><br>
+        Speed: <span id="velVal">0.00</span><br>
+        Velocity: (<span id="vxVal">0.00</span>, <span id="vyVal">0.00</span>)<br>
+        Potential (Ω): <span id="potVal">0.00</span>
+    </div>
+
+    <canvas id="simCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+const muInput = document.getElementById('mu');
+
+const WORKER_SOURCE = `
+    let mu = 0.0121;
+    let orbitalPeriod = 1.0;
+    let eccentricity = 0.0;
+    let sunEnabled = false;
+    const SUN_DIST = 389; 
+    const SUN_MASS = 328900; 
+    const SUN_OMEGA = -0.9252;
+
+    self.onmessage = function(e) {
+        if (e.data.type === 'optimize') {
+            const data = e.data;
+            mu = data.mu;
+            orbitalPeriod = data.orbitalPeriod;
+            eccentricity = data.eccentricity;
+            sunEnabled = data.sunEnabled;
+            // Solve
+            const res = solveGeneralPeriodic(data.state.x, data.state.y, data.state.vx, data.state.vy, data.state.t);
+            self.postMessage({ result: res });
+        }
+    };
+
+    function getOrbitalRadius(t) {
+        // For elliptical orbit: r = a(1-e²)/(1+e*cos(θ))
+        // Mean motion: n = 2π/T where T = orbitalPeriod * 2π (normalized)
+        const n = 1.0 / orbitalPeriod;
+        const meanAnomaly = n * t;
+        // Solve Kepler's equation for eccentric anomaly (simplified for small e)
+        let E = meanAnomaly;
+        for (let i = 0; i < 5; i++) {
+            E = meanAnomaly + eccentricity * Math.sin(E);
+        }
+        const trueAnomaly = 2 * Math.atan2(Math.sqrt(1 + eccentricity) * Math.sin(E/2), 
+                                            Math.sqrt(1 - eccentricity) * Math.cos(E/2));
+        const r = (1 - eccentricity * eccentricity) / (1 + eccentricity * Math.cos(trueAnomaly));
+        return { r, theta: trueAnomaly };
+    }
+
+    function derivatives(s) {
+        // Get instantaneous separation based on elliptical orbit
+        const orbit = getOrbitalRadius(s.t || 0);
+        const separation = orbit.r;
+        const omega = 1.0 / orbitalPeriod; // Angular velocity
+        
+        // Positions of primaries in rotating frame (scaled by separation)
+        const x1 = -mu * separation;
+        const x2 = (1 - mu) * separation;
+        
+        const r1_sq = (s.x - x1)**2 + s.y**2;
+        const r2_sq = (s.x - x2)**2 + s.y**2;
+        const r1_cubed = Math.pow(r1_sq, 1.5);
+        const r2_cubed = Math.pow(r2_sq, 1.5);
+        
+        // CR3BP equations with variable omega
+        let ax = 2*omega*s.vy + omega*omega*s.x - (1-mu)*(s.x - x1)/r1_cubed - mu*(s.x - x2)/r2_cubed;
+        let ay = -2*omega*s.vx + omega*omega*s.y - (1-mu)*s.y/r1_cubed - mu*s.y/r2_cubed;
+        
+        if (sunEnabled && typeof s.t !== 'undefined') {
+            const theta = SUN_OMEGA * s.t;
+            const xs = SUN_DIST * Math.cos(theta);
+            const ys = SUN_DIST * Math.sin(theta);
+            const rs_sq = (s.x - xs)**2 + (s.y - ys)**2;
+            const rs_cubed = Math.pow(rs_sq, 1.5);
+            ax -= SUN_MASS * (s.x - xs) / rs_cubed;
+            ay -= SUN_MASS * (s.y - ys) / rs_cubed;
+            const d_org_cubed = Math.pow(SUN_DIST, 3);
+            ax -= SUN_MASS * xs / d_org_cubed;
+            ay -= SUN_MASS * ys / d_org_cubed;
+        }
+        return { dx: s.vx, dy: s.vy, dvx: ax, dvy: ay };
+    }
+
+    function integrate(x, y, vx, vy, time, startTime) {
+        let s = { x, y, vx, vy, t: startTime }; 
+        let dt = 0.002; 
+        let t = 0;
+        while(t < time) {
+            let step = Math.min(dt, time - t);
+            let k1 = derivatives(s);
+            let s2 = { x: s.x + k1.dx*step/2, y: s.y + k1.dy*step/2, vx: s.vx + k1.dvx*step/2, vy: s.vy + k1.dvy*step/2, t: s.t + step/2 };
+            let k2 = derivatives(s2);
+            let s3 = { x: s.x + k2.dx*step/2, y: s.y + k2.dy*step/2, vx: s.vx + k2.dvx*step/2, vy: s.vy + k2.dvy*step/2, t: s.t + step/2 };
+            let k3 = derivatives(s3);
+            let s4 = { x: s.x + k3.dx*step, y: s.y + k3.dy*step, vx: s.vx + k3.dvx*step, vy: s.vy + k3.dvy*step, t: s.t + step };
+            let k4 = derivatives(s4);
+            s.x += (step/6)*(k1.dx+2*k2.dx+2*k3.dx+k4.dx);
+            s.y += (step/6)*(k1.dy+2*k2.dy+2*k3.dy+k4.dy);
+            s.vx += (step/6)*(k1.dvx+2*k2.dvx+2*k3.dvx+k4.dvx);
+            s.vy += (step/6)*(k1.dvy+2*k2.dvy+2*k3.dvy+k4.dvy);
+            s.t += step;
+            t += step;
+        }
+        return s;
+    }
+
+    function getProjectedPath(startX, startY, vx, vy, duration, startTime, dt = 0.01) {
+        let s = { x: startX, y: startY, vx: vx, vy: vy, t: startTime };
+        let path = [];
+        for (let t = 0; t < duration; t += dt) {
+            let k1 = derivatives(s);
+            let s2 = { x: s.x + k1.dx*dt/2, y: s.y + k1.dy*dt/2, vx: s.vx + k1.dvx*dt/2, vy: s.vy + k1.dvy*dt/2, t: s.t + dt/2 };
+            let k2 = derivatives(s2);
+            let s3 = { x: s.x + k2.dx*dt/2, y: s.y + k2.dy*dt/2, vx: s.vx + k2.dvx*dt/2, vy: s.vy + k2.dvy*dt/2, t: s.t + dt/2 };
+            let k3 = derivatives(s3);
+            let s4 = { x: s.x + k3.dx*dt, y: s.y + k3.dy*dt, vx: s.vx + k3.dvx*dt, vy: s.vy + k3.dvy*dt, t: s.t + dt };
+            let k4 = derivatives(s4);
+            s.x += (dt/6)*(k1.dx + 2*k2.dx + 2*k3.dx + k4.dx);
+            s.y += (dt/6)*(k1.dy + 2*k2.dy + 2*k3.dy + k4.dy);
+            s.vx += (dt/6)*(k1.dvx + 2*k2.dvx + 2*k3.dvx + k4.dvx);
+            s.vy += (dt/6)*(k1.dvy + 2*k2.dvy + 2*k3.dvy + k4.dvy);
+            s.t += dt;
+            path.push({x: s.x, y: s.y, vx: s.vx, vy: s.vy});
+        }
+        return path;
+    }
+
+    function findReturnState(x, y, vx, vy, startTime) {
+        let s = { x, y, vx, vy, t: startTime };
+        let minErr = { t: 6.0, val: 1e9, x: x, y: y, found: false };
+        let dt = 0.02;
+        let maxT = 18; 
+        let hasLeft = false;
+        for(let t=0; t<maxT; t+=dt) {
+            let k1 = derivatives(s);
+            let s2 = { x: s.x + k1.dx*dt/2, y: s.y + k1.dy*dt/2, vx: s.vx + k1.dvx*dt/2, vy: s.vy + k1.dvy*dt/2, t: s.t + dt/2 };
+            let k2 = derivatives(s2);
+            let s3 = { x: s.x + k2.dx*dt/2, y: s.y + k2.dy*dt/2, vx: s.vx + k2.dvx*dt/2, vy: s.vy + k2.dvy*dt/2, t: s.t + dt/2 };
+            let k3 = derivatives(s3);
+            let s4 = { x: s.x + k3.dx*dt, y: s.y + k3.dy*dt, vx: s.vx + k3.dvx*dt, vy: s.vy + k3.dvy*dt, t: s.t + dt };
+            let k4 = derivatives(s4);
+            s.x += (dt/6)*(k1.dx+2*k2.dx+2*k3.dx+k4.dx);
+            s.y += (dt/6)*(k1.dy+2*k2.dy+2*k3.dy+k4.dy);
+            s.vx += (dt/6)*(k1.dvx+2*k2.dvx+2*k3.dvx+k4.dvx);
+            s.vy += (dt/6)*(k1.dvy+2*k2.dvy+2*k3.dvy+k4.dvy);
+            s.t += dt;
+            let dist = Math.hypot(s.x - x, s.y - y);
+            let err = Math.hypot(s.x - x, s.y - y, s.vx - vx, s.vy - vy);
+            if (dist > 0.1) hasLeft = true; 
+            if (hasLeft && t > 1.0) {
+                if (err < minErr.val) { minErr = { t: t + dt, val: err, x: s.x, y: s.y, found: true }; }
+            }
+        }
+        return minErr; 
+    }
+    
+    function invert4x4(m) {
+        let size = 4;
+        let aug = [];
+        for(let i=0; i<size; i++) {
+            aug[i] = [...m[i]];
+            for(let j=0; j<size; j++) aug[i].push(i===j? 1:0);
+        }
+        for(let i=0; i<size; i++) {
+            let pivot = aug[i][i];
+            if (Math.abs(pivot) < 1e-9) return null;
+            for(let j=0; j<2*size; j++) aug[i][j] /= pivot;
+            for(let k=0; k<size; k++) {
+                if (k !== i) {
+                    let factor = aug[k][i];
+                    for(let j=0; j<2*size; j++) aug[k][j] -= factor * aug[i][j];
+                }
+            }
+        }
+        let res = [];
+        for(let i=0; i<size; i++) res.push(aug[i].slice(size, 2*size));
+        return res;
+    }
+
+    function solveGeneralPeriodic(x0, y0, vx0, vy0, startTime) {
+        let T = findReturnState(x0, y0, vx0, vy0, startTime).t;
+        let state = [x0, y0, vx0, vy0, T]; 
+        let debugPoints = [];
+        const T_init = T; 
+        const maxIter = 50;
+        const eps = 1e-5;
+        
+        for(let i=0; i<maxIter; i++) {
+            if (state[4] > T_init * 1.05) state[4] = T_init * 1.05;
+            if (state[4] < T_init * 0.95) state[4] = T_init * 0.95;
+            
+            let S = integrate(state[0], state[1], state[2], state[3], state[4], startTime);
+            debugPoints.push({x: S.x, y: S.y});
+            
+            let R = [ S.x - state[0], S.y - state[1], S.vx - state[2], S.vy - state[3] ];
+            let err = Math.hypot(R[0], R[1], R[2], R[3]);
+            
+            if (err < 1e-9) break; 
+            
+            let J = [];
+            for(let j=0; j<5; j++) {
+                let orig = state[j];
+                state[j] += eps;
+                let Sp = integrate(state[0], state[1], state[2], state[3], state[4], startTime);
+                let Rp = [ Sp.x - state[0], Sp.y - state[1], Sp.vx - state[2], Sp.vy - state[3] ];
+                let col = [ (Rp[0] - R[0]) / eps, (Rp[1] - R[1]) / eps, (Rp[2] - R[2]) / eps, (Rp[3] - R[3]) / eps ];
+                J.push(col);
+                state[j] = orig; 
+            }
+            
+            let G = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
+            for(let r=0; r<4; r++) { for(let c=0; c<4; c++) { let sum = 0; for(let k=0; k<5; k++) sum += J[k][r] * J[k][c]; G[r][c] = sum; } }
+            
+            let G_inv = invert4x4(G);
+            if (!G_inv) break;
+            
+            let lambda = [0,0,0,0];
+            for(let r=0; r<4; r++) { for(let c=0; c<4; c++) lambda[r] += G_inv[r][c] * (-R[c]); }
+            
+            let dq = [0,0,0,0,0];
+            for(let k=0; k<5; k++) { for(let r=0; r<4; r++) dq[k] += J[k][r] * lambda[r]; }
+            
+            let alpha = 1.0;
+            let improved = false;
+            while(alpha > 1e-10) {
+                let trialState = [ state[0] + dq[0] * alpha, state[1] + dq[1] * alpha, state[2] + dq[2] * alpha, state[3] + dq[3] * alpha, state[4] + dq[4] * alpha ];
+                if (trialState[4] > T_init * 1.05) trialState[4] = T_init * 1.05;
+                if (trialState[4] < T_init * 0.95) trialState[4] = T_init * 0.95;
+                let S_new = integrate(trialState[0], trialState[1], trialState[2], trialState[3], trialState[4], startTime);
+                let err_new = Math.hypot( S_new.x - trialState[0], S_new.y - trialState[1], S_new.vx - trialState[2], S_new.vy - trialState[3] );
+                if (err_new < err) { state = trialState; improved = true; break; } else { alpha *= 0.5; }
+            }
+            if (!improved) break;
+        }
+
+        let S_end = integrate(state[0], state[1], state[2], state[3], state[4], startTime);
+        let finalErr = Math.hypot( S_end.x - state[0], S_end.y - state[1], S_end.vx - state[2], S_end.vy - state[3] );
+
+        if (finalErr > 1e-5) return null;
+
+        let finalPath = getProjectedPath(state[0], state[1], state[2], state[3], state[4], startTime, 0.002);
+        return {
+            startState: { x: state[0], y: state[1], vx: state[2], vy: state[3] },
+            path: finalPath,
+            debugPoints: debugPoints
+        };
+    }
+`;
+
+const blob = new Blob([WORKER_SOURCE], { type: 'application/javascript' });
+const worker = new Worker(URL.createObjectURL(blob));
+
+worker.onmessage = (e) => {
+    isOptimizing = false;
+    if (e.data.result && isDragging) {
+        // Only apply if we haven't moved too far from the start state of this result
+        // Check distance in WORLD coordinates
+        const resStart = e.data.result.startState;
+        const dist = Math.hypot(resStart.x - sat.x, resStart.y - sat.y);
+        
+        // 0.05 is relatively small in this scale
+        if (dist < 0.05) {
+            optimizedData = e.data.result;
+            optAnchor = { ...lastMouse }; 
+        }
+    }
+};
+
+// Setup Canvas Size
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// Simulation State
+let mu = 0.0121; 
+let orbitalPeriod = 1.0; // Multiplier for orbital period
+let eccentricity = 0.0; // Orbital eccentricity (0 = circular)
+let sat = { x: 0, y: 0, vx: 0, vy: 0, t: 0, path: [] };
+let manifoldSats = [];
+let manifoldActive = false;
+let autoOptimize = false;
+let sunEnabled = false;
+let isDragging = false;
+let isOptimizing = false;
+let dragStart = { x: 0, y: 0 };
+let optimizedData = null; // { path, startState }
+let optAnchor = null; // { x, y } screen coords to detect movement
+let frameCount = 0; // For throttling heatmap updates
+
+// Sun Parameters (Earth-Moon System)
+const SUN_DIST = 389; // Distance in EM units
+const SUN_MASS = 328900; // Mass relative to EM system
+const SUN_OMEGA = -0.9252; // Angular velocity in rotating frame
+
+// Auto-calculate stable orbit on load
+// We need to define the functions before calling them if we are not careful with hoisting, but function declarations are hoisted. 
+// However, I'll put the call after the function definitions to be safe and clean, or I will use a window.onload type logic, or just put the call at the end of the script.
+// Actually, I'll initialize with calculateStableOrbit() inside the setup area, assuming functions are hoisted.
+
+// Debug Logger
+setInterval(() => {
+    if(!isDragging) {
+        const pot = getEffectivePotential(sat.x, sat.y, sat.t);
+        const v2 = sat.vx**2 + sat.vy**2;
+        const C = 2 * pot - v2;
+        // console.log(`t: ${Date.now()} | x: ${sat.x.toFixed(6)} y: ${sat.y.toFixed(6)} | C: ${C.toFixed(6)}`);
+    }
+}, 1000);
+
+// Optimization / Initialization Logic
+// Optimization / Initialization Logic
+function initOrbit(label) {
+    const points = findLagrangePoints(0); // Initialize at t=0
+    const pt = points.find(p => p.label === label);
+    
+    if (!pt) return;
+
+    if (label === 'L4' || label === 'L5') {
+        // Stable equilibrium (Trojan points)
+        // Initialize exactly at the point (stationary in rotating frame)
+        sat = { x: pt.x, y: pt.y, vx: 0, vy: 0, t: 0, path: [] };
+    } else {
+        // Collinear points (L1, L2, L3) - Search for Lyapunov Orbit
+        // Initialize slightly offset from the point
+        let xStart;
+        // Determine search direction/offset based on point geometry and potential hill shapes
+        if (label === 'L1') xStart = pt.x - 0.02;
+        if (label === 'L2') xStart = pt.x + 0.02; // Outside
+        if (label === 'L3') xStart = pt.x - 0.02; // Far left
+
+        solveLyapunov(xStart, (label === 'L3' ? -1 : 1)); // L3 orbits often need inverted initial Vy guess
+    }
+    
+    // Refresh manifold if active
+    if (manifoldActive) spawnManifold();
+}
+
+function solveLyapunov(xStart, vySign = 1) {
+    // Search for Vy that creates a perpendicular crossing at the next y=0 event
+    let vy1 = 0.01 * vySign;
+    let err1 = getCrossingVxError(xStart, vy1);
+    let vy2 = 0.20 * vySign;
+    let err2 = getCrossingVxError(xStart, vy2);
+    
+    let bestVy = vy2;
+    
+    for(let i=0; i<20; i++) {
+        if(isNaN(err1) || isNaN(err2)) break;
+        if(Math.abs(err2) < 1e-8) { bestVy = vy2; break; }
+        
+        let dVy = (vy2 - vy1) / (err2 - err1) * (-err2);
+        
+        vy1 = vy2;
+        err1 = err2;
+        vy2 += dVy;
+        err2 = getCrossingVxError(xStart, vy2);
+        bestVy = vy2;
+    }
+    
+    sat = { x: xStart, y: 0, vx: 0, vy: bestVy, t: 0, path: [] };
+}
+
+// Simulates until y=0 crossing and returns the x-velocity at that point (error metric)
+function getCrossingVxError(x0, vy0) {
+    // State
+        let s = { x: x0, y: 0, vx: 0, vy: vy0, t: 0 };
+    let dt = 0.005;
+    let maxSteps = 4000;
+    
+    let lastY = 0;
+    
+    for(let i=0; i<maxSteps; i++) {
+        // Run physics step (RK4 duplicate to avoid side effects on main 'sat')
+        let k1 = derivatives(s);
+        let s2 = { x: s.x + k1.dx*dt/2, y: s.y + k1.dy*dt/2, vx: s.vx + k1.dvx*dt/2, vy: s.vy + k1.dvy*dt/2, t: s.t + dt/2 };
+        let k2 = derivatives(s2);
+        let s3 = { x: s.x + k2.dx*dt/2, y: s.y + k2.dy*dt/2, vx: s.vx + k2.dvx*dt/2, vy: s.vy + k2.dvy*dt/2, t: s.t + dt/2 };
+        let k3 = derivatives(s3);
+        let s4 = { x: s.x + k3.dx*dt, y: s.y + k3.dy*dt, vx: s.vx + k3.dvx*dt, vy: s.vy + k3.dvy*dt, t: s.t + dt };
+        let k4 = derivatives(s4);
+        
+        let nx = s.x + (dt/6)*(k1.dx+2*k2.dx+2*k3.dx+k4.dx);
+        let ny = s.y + (dt/6)*(k1.dy+2*k2.dy+2*k3.dy+k4.dy);
+        let nvx = s.vx + (dt/6)*(k1.dvx+2*k2.dvx+2*k3.dvx+k4.dvx);
+        let nvy = s.vy + (dt/6)*(k1.dvy+2*k2.dvy+2*k3.dvy+k4.dvy);
+        
+        // Detect crossing (ignoring the very first step where we start at 0)
+        if (i > 10 && lastY * ny < 0) {
+            // Linear interpolation for exact time of crossing
+            let f = -lastY / (ny - lastY);
+            let targetVx = s.vx + (nvx - s.vx) * f;
+            return targetVx; // We want this to be 0 for a periodic orbit
+        }
+        
+        // Update
+        s.x = nx; s.y = ny; s.vx = nvx; s.vy = nvy; s.t += dt;
+        lastY = ny; // Note: using ny as lastY for next step
+        
+        // Escaped
+        if (Math.abs(s.x) > 2.0 || Math.abs(s.y) > 2.0) return NaN;
+    }
+    return NaN; // Didn't return
+}
+
+// Helper: Solve L1 Collinear Point accurately
+function solveL1(currMu) {
+    const f = (x) => {
+        const r1 = x + currMu;
+        const r2 = x - (1 - currMu);
+        // Collinear Lagrange condition derivatives set to 0
+        // For L1 (between -mu and 1-mu):
+        // x - (1-mu)/(x+mu)^2 + mu/(x-(1-mu))^2 = 0 ? Careful with signs
+        // Standard form: x - (1-mu)/(r1^2) * sign - mu/(r2^2) * sign
+        // At L1: x > -mu && x < 1-mu
+        // r1 > 0, r2 < 0.
+        // Eq: x - (1-mu)/(r1^2) + mu/(r2^2) = 0   (Force balance)
+        // With signed distances in potential derivative:
+        // dO/dx = x - (1-mu)(x+mu)/r1^3 - mu(x-(1-mu))/r2^3
+        const term1 = (1 - currMu) * (x + currMu) / Math.pow(Math.abs(x + currMu), 3);
+        const term2 = currMu * (x - (1 - currMu)) / Math.pow(Math.abs(x - (1 - currMu)), 3);
+        return x - term1 - term2;
+    };
+    
+    // Initial guess: Hill sphere approx
+    // L1 approx distance from M2 is (mu/3)^(1/3)
+    let x = (1 - currMu) - Math.pow(currMu/3, 1/3);
+    
+    for(let i=0; i<15; i++) {
+        let val = f(x);
+        // Simple finite difference derivative
+        let df = (f(x + 1e-6) - val) / 1e-6;
+        x -= val / df;
+    }
+    return x;
+}
+
+// Orbital Radius Calculation (for elliptical orbits)
+function getOrbitalRadius(t) {
+    // For elliptical orbit: r = a(1-e²)/(1+e*cos(θ))
+    // Mean motion: n = 2π/T where T = orbitalPeriod * 2π (normalized)
+    const n = 1.0 / orbitalPeriod;
+    const meanAnomaly = n * t;
+    // Solve Kepler's equation for eccentric anomaly
+    let E = meanAnomaly;
+    for (let i = 0; i < 5; i++) {
+        E = meanAnomaly + eccentricity * Math.sin(E);
+    }
+    const trueAnomaly = 2 * Math.atan2(Math.sqrt(1 + eccentricity) * Math.sin(E/2), 
+                                        Math.sqrt(1 - eccentricity) * Math.cos(E/2));
+    const r = (1 - eccentricity * eccentricity) / (1 + eccentricity * Math.cos(trueAnomaly));
+    return { r, theta: trueAnomaly };
+}
+
+// Potential Function (time-dependent for elliptical orbits)
+function getEffectivePotential(x, y, t = 0) {
+    const orbit = getOrbitalRadius(t);
+    const separation = orbit.r;
+    const omega = 1.0 / orbitalPeriod;
+    
+    // Positions of primaries in rotating frame
+    const x1 = -mu * separation;
+    const x2 = (1 - mu) * separation;
+    
+    const r1 = Math.sqrt((x - x1)**2 + y**2);
+    const r2 = Math.sqrt((x - x2)**2 + y**2);
+    return 0.5 * omega * omega * (x**2 + y**2) + (1 - mu) / r1 + mu / r2;
+}
+
+// Physics: CR3BP Equations of Motion
+function derivatives(s) {
+    const orbit = getOrbitalRadius(s.t || 0);
+    const separation = orbit.r;
+    const omega = 1.0 / orbitalPeriod;
+    
+    // Positions of primaries in rotating frame (scaled by separation)
+    const x1 = -mu * separation;
+    const x2 = (1 - mu) * separation;
+    
+    const r1_sq = (s.x - x1)**2 + s.y**2;
+    const r2_sq = (s.x - x2)**2 + s.y**2;
+    const r1_cubed = Math.pow(r1_sq, 1.5);
+    const r2_cubed = Math.pow(r2_sq, 1.5);
+    
+    let ax = 2*omega*s.vy + omega*omega*s.x - (1-mu)*(s.x - x1)/r1_cubed - mu*(s.x - x2)/r2_cubed;
+    let ay = -2*omega*s.vx + omega*omega*s.y - (1-mu)*s.y/r1_cubed - mu*s.y/r2_cubed;
+    
+    // Sun Perturbation
+    if (sunEnabled && typeof s.t !== 'undefined') {
+        const theta = SUN_OMEGA * s.t;
+        const xs = SUN_DIST * Math.cos(theta);
+        const ys = SUN_DIST * Math.sin(theta);
+        
+        const rs_sq = (s.x - xs)**2 + (s.y - ys)**2;
+        const rs_cubed = Math.pow(rs_sq, 1.5);
+        
+        // Direct acceleration
+        ax -= SUN_MASS * (s.x - xs) / rs_cubed;
+        ay -= SUN_MASS * (s.y - ys) / rs_cubed;
+        
+        // Indirect acceleration (Effect on Origin/Barycenter)
+        const d_org_cubed = Math.pow(SUN_DIST, 3);
+        ax -= SUN_MASS * xs / d_org_cubed;
+        ay -= SUN_MASS * ys / d_org_cubed;
+    }
+
+    return { dx: s.vx, dy: s.vy, dvx: ax, dvy: ay };
+}
+
+function updateState(s, dt) {
+    if (typeof s.t === 'undefined') s.t = 0;
+
+    const k1 = derivatives(s);
+    const s2 = { x: s.x + k1.dx*dt/2, y: s.y + k1.dy*dt/2, vx: s.vx + k1.dvx*dt/2, vy: s.vy + k1.dvy*dt/2, t: s.t + dt/2 };
+    const k2 = derivatives(s2);
+    const s3 = { x: s.x + k2.dx*dt/2, y: s.y + k2.dy*dt/2, vx: s.vx + k2.dvx*dt/2, vy: s.vy + k2.dvy*dt/2, t: s.t + dt/2 };
+    const k3 = derivatives(s3);
+    const s4 = { x: s.x + k3.dx*dt, y: s.y + k3.dy*dt, vx: s.vx + k3.dvx*dt, vy: s.vy + k3.dvy*dt, t: s.t + dt };
+    const k4 = derivatives(s4);
+
+    s.x += (dt/6) * (k1.dx + 2*k2.dx + 2*k3.dx + k4.dx);
+    s.y += (dt/6) * (k1.dy + 2*k2.dy + 2*k3.dy + k4.dy);
+    s.vx += (dt/6) * (k1.dvx + 2*k2.dvx + 2*k3.dvx + k4.dvx);
+    s.vy += (dt/6) * (k1.dvy + 2*k2.dvy + 2*k3.dvy + k4.dvy);
+    s.t += dt;
+
+    s.path.push({x: s.x, y: s.y});
+    if (s.path.length > 800) s.path.shift();
+}
+
+function spawnManifold() {
+    manifoldSats = [];
+    const count = 100;
+    for(let i=0; i<count; i++) {
+        // Perturb velocity slightly to show sensitivity
+        const angle = (i / count) * Math.PI * 2;
+        const dv = 0.0005; // Slightly tighter cluster for higher count
+        manifoldSats.push({
+            x: sat.x,
+            y: sat.y,
+            vx: sat.vx + Math.cos(angle) * dv,
+            vy: sat.vy + Math.sin(angle) * dv,
+            t: sat.t,
+            path: [],
+            // Cycle through colors
+            color: `hsl(${i * (360/count)}, 80%, 70%)`
+        });
+    }
+}
+
+// Preview Simulation
+function getProjectedPath(startX, startY, vx, vy, duration, dt = 0.01) {
+    let startTime = sat.t;
+    let s = { x: startX, y: startY, vx: vx, vy: vy, t: startTime };
+    let path = [];
+    // dt parameter controls precision
+    for (let t = 0; t < duration; t += dt) {
+        let k1 = derivatives(s);
+        let s2 = { x: s.x + k1.dx*dt/2, y: s.y + k1.dy*dt/2, vx: s.vx + k1.dvx*dt/2, vy: s.vy + k1.dvy*dt/2, t: s.t + dt/2 };
+        let k2 = derivatives(s2);
+        let s3 = { x: s.x + k2.dx*dt/2, y: s.y + k2.dy*dt/2, vx: s.vx + k2.dvx*dt/2, vy: s.vy + k2.dvy*dt/2, t: s.t + dt/2 };
+        let k3 = derivatives(s3);
+        let s4 = { x: s.x + k3.dx*dt, y: s.y + k3.dy*dt, vx: s.vx + k3.dvx*dt, vy: s.vy + k3.dvy*dt, t: s.t + dt };
+        let k4 = derivatives(s4);
+        
+        s.x += (dt/6)*(k1.dx + 2*k2.dx + 2*k3.dx + k4.dx);
+        s.y += (dt/6)*(k1.dy + 2*k2.dy + 2*k3.dy + k4.dy);
+        s.vx += (dt/6)*(k1.dvx + 2*k2.dvx + 2*k3.dvx + k4.dvx);
+        s.vy += (dt/6)*(k1.dvy + 2*k2.dvy + 2*k3.dvy + k4.dvy);
+        s.t += dt;
+        
+        path.push({x: s.x, y: s.y, vx: s.vx, vy: s.vy});
+    }
+    return path;
+}
+
+function drawPath(path, color, width, fade = false) {
+    if (path.length < 2) return;
+    
+    ctx.lineWidth = width;
+    ctx.strokeStyle = color;
+
+    if (!fade) {
+        ctx.beginPath();
+        path.forEach((p, i) => {
+            const c = worldToCanvas(p.x, p.y);
+            if (i === 0) ctx.moveTo(c.x, c.y); else ctx.lineTo(c.x, c.y);
+        });
+        ctx.stroke();
+    } else {
+        // Gradient Fade optimization
+        const segments = 20; 
+        const chunk = Math.max(1, Math.floor(path.length / segments));
+
+        for (let i = 0; i < segments; i++) {
+            const start = i * chunk;
+            if (start >= path.length - 1) break;
+            const end = Math.min((i + 1) * chunk + 1, path.length);
+            
+            // Alpha based on position in path (0=tail, 1=head)
+            const midIndex = (start + end) / 2;
+            ctx.globalAlpha = Math.max(0, midIndex / path.length);
+            
+            ctx.beginPath();
+            const pStart = worldToCanvas(path[start].x, path[start].y);
+            ctx.moveTo(pStart.x, pStart.y);
+            
+            for (let j = start + 1; j < end; j++) {
+                 const p = worldToCanvas(path[j].x, path[j].y);
+                 ctx.lineTo(p.x, p.y);
+            }
+            ctx.stroke();
+        }
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+// Coordinate Mapping
+// Coordinate Mapping
+let camera = { x: 0, y: 0, zoom: 250 };
+const worldToCanvas = (x, y) => ({
+    x: canvas.width/2 + (x - camera.x) * camera.zoom,
+    y: canvas.height/2 - (y - camera.y) * camera.zoom
+});
+
+const canvasToWorld = (cx, cy) => ({
+    x: (cx - canvas.width/2) / camera.zoom + camera.x,
+    y: (canvas.height/2 - cy) / camera.zoom + camera.y
+});
+
+// Real-time Newton-Raphson for all Lagrange points (time-dependent for elliptical orbits)
+function findLagrangePoints(t = 0) {
+    const orbit = getOrbitalRadius(t);
+    const separation = orbit.r;
+    const omega = 1.0 / orbitalPeriod;
+    
+    // Positions of primaries
+    const x1 = -mu * separation;
+    const x2 = (1 - mu) * separation;
+    
+    // Gradient of effective potential
+    const gradPotential = (x, y) => {
+        const r1_sq = (x - x1)**2 + y**2;
+        const r2_sq = (x - x2)**2 + y**2;
+        const r1 = Math.sqrt(r1_sq);
+        const r2 = Math.sqrt(r2_sq);
+        const r1_cubed = r1_sq * r1;
+        const r2_cubed = r2_sq * r2;
+        
+        const dPhi_dx = omega*omega*x - (1 - mu)*(x - x1)/r1_cubed - mu*(x - x2)/r2_cubed;
+        const dPhi_dy = omega*omega*y - (1 - mu)*y/r1_cubed - mu*y/r2_cubed;
+        
+        return { dx: dPhi_dx, dy: dPhi_dy };
+    };
+    
+    // 1D solver for collinear points (L1, L2, L3) along x-axis where y=0
+    // Finds x where dΦ/dx = 0, with bounds to keep search in correct region
+    const solve1D_collinear = (x_guess, x_min, x_max) => {
+        let x = x_guess;
+        for(let iter = 0; iter < 20; iter++) {
+            const grad = gradPotential(x, 0);
+            
+            // Compute second derivative d²Φ/dx²
+            const eps = 1e-6;
+            const grad_xp = gradPotential(x + eps, 0);
+            const d2Phi_dx2 = (grad_xp.dx - grad.dx) / eps;
+            
+            if (Math.abs(d2Phi_dx2) < 1e-10) break;
+            
+            const dx = -grad.dx / d2Phi_dx2;
+            x += dx;
+            
+            // Enforce bounds to keep search in correct region
+            if (x < x_min) x = x_min;
+            if (x > x_max) x = x_max;
+            
+            if (Math.abs(dx) < 1e-8) break;
+        }
+        return x;
+    };
+    
+    // 1D solver for triangular points (L4, L5) along perpendicular line at centerX
+    // Finds y where dΦ/dy = 0 (with x fixed at centerX)
+    const solve1D_triangular = (y_guess) => {
+        const centerX = 0.5 * (x1 + x2);
+        let y = y_guess;
+        for(let iter = 0; iter < 20; iter++) {
+            const grad = gradPotential(centerX, y);
+            
+            // Compute second derivative d²Φ/dy²
+            const eps = 1e-6;
+            const grad_yp = gradPotential(centerX, y + eps);
+            const d2Phi_dy2 = (grad_yp.dy - grad.dy) / eps;
+            
+            if (Math.abs(d2Phi_dy2) < 1e-10) break;
+            
+            const dy = -grad.dy / d2Phi_dy2;
+            y += dy;
+            
+            if (Math.abs(dy) < 1e-8) break;
+        }
+        return y;
+    };
+
+
+    // Initial guesses for collinear points (along x-axis, y=0)
+    const L1_guess_x = x2 - separation * Math.pow(mu/3, 1/3);
+    const L2_guess_x = x2 + separation * Math.pow(mu/3, 1/3);
+    const L3_guess_x = x1 - separation * mu/12;
+    
+    // Initial guesses for triangular points (along perpendicular at centerX)
+    const centerX = 0.5 * (x1 + x2);
+    const guessRadius = separation * Math.pow(1.0 / (omega * omega), 1/3);
+    const guessY = Math.sqrt(3)/2 * guessRadius;
+    
+    // Use 1D solvers constrained to specific regions
+    // L1: between the two bodies
+    const L1_x = solve1D_collinear(L1_guess_x, x1, x2);
+    // L2: beyond the secondary body (outer side)
+    const L2_x = solve1D_collinear(L2_guess_x, x2, x2 + 10 * separation);
+    // L3: beyond the primary body
+    const L3_x = solve1D_collinear(L3_guess_x, x1 - 10 * separation, x1);
+    const L4_y = solve1D_triangular(guessY);
+    const L5_y = solve1D_triangular(-guessY);
+    
+    return [
+        { x: L1_x, y: 0, label: 'L1' },
+        { x: L2_x, y: 0, label: 'L2' },
+        { x: L3_x, y: 0, label: 'L3' },
+        { x: centerX, y: L4_y, label: 'L4' },
+        { x: centerX, y: L5_y, label: 'L5' }
+    ];
+}
+
+// Optimized Background Potential Map
+const bgCanvas = document.createElement('canvas');
+const bgCtx = bgCanvas.getContext('2d');
+function renderHeatmap() {
+    bgCanvas.width = canvas.width;
+    bgCanvas.height = canvas.height;
+    
+    // Find Lagrange points for reference
+    const lPoints = findLagrangePoints(sat.t);
+    const L4 = lPoints.find(p => p.label === 'L4');
+    const L5 = lPoints.find(p => p.label === 'L5');
+    
+    // Reference potential at L4/L5 (stable equilibrium points)
+    const potL4 = getEffectivePotential(L4.x, L4.y, sat.t);
+    const potL5 = getEffectivePotential(L5.x, L5.y, sat.t);
+    const refPot = (potL4 + potL5) / 2;
+    
+    // Get L1 and L2 potentials for scaling
+    const L1 = lPoints.find(p => p.label === 'L1');
+    const L2 = lPoints.find(p => p.label === 'L2');
+    const potL1 = getEffectivePotential(L1.x, L1.y, sat.t);
+    const potL2 = getEffectivePotential(L2.x, L2.y, sat.t);
+    
+    // Use the minimum of L1 and L2 potentials as the reference for 0.1 intensity
+    const potRef = Math.min(potL1, potL2);
+    
+    // Linear mapping: L4/L5 avg (lower pot) -> 1.0, min(L1,L2) (higher pot) -> 0.1
+    // Since refPot < potRef, we map: intensity = (potRef - pot) / (potRef - refPot) * 0.9 + 0.1
+    // Simplified: intensity = a * pot + b
+    const a = -0.9 / (potRef - refPot);
+    const b = 0.1 + 0.9 * potRef / (potRef - refPot);
+    
+    // Render the heatmap
+    const step = 5;
+    for (let x = 0; x < canvas.width; x += step) {
+        for (let y = 0; y < canvas.height; y += step) {
+            const world = canvasToWorld(x, y);
+            const pot = getEffectivePotential(world.x, world.y, sat.t);
+            
+            // Apply linear mapping
+            let intensity = a * pot + b;
+            
+            // Clip to [0, infinity) and normalize to [0, 1]
+            if (intensity < 0) intensity = 0;
+            let normalized = Math.min(intensity, 1.0);
+            
+            // Color mapping: black (0) → dark blue (0.5) → light blue (1)
+            let red, green, blue;
+            if (normalized < 0.5) {
+                // Black to dark blue
+                const t = normalized * 2; // Map [0, 0.5] to [0, 1]
+                red = 0;
+                green = 0;
+                blue = Math.floor(139 * t); // 0 → 139 (dark blue)
+            } else {
+                // Dark blue to light blue
+                const t = (normalized - 0.5) * 2; // Map [0.5, 1] to [0, 1]
+                red = Math.floor(135 * t);           // 0 → 135
+                green = Math.floor(206 * t);           // 0 → 206
+                blue = Math.floor(139 + 116 * t);     // 139 → 255
+            }
+            
+            bgCtx.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+            bgCtx.fillRect(x, y, step, step);
+        }
+    }
+}
+
+function draw() {
+    ctx.drawImage(bgCanvas, 0, 0);
+
+    // Get current orbital state
+    const orbit = getOrbitalRadius(sat.t);
+    const separation = orbit.r;
+    const x1 = -mu * separation;
+    const x2 = (1 - mu) * separation;
+
+    // Draw Lagrange Points (dynamically computed)
+    const lPoints = findLagrangePoints(sat.t);
+    lPoints.forEach(p => {
+        const c = worldToCanvas(p.x, p.y || 0);
+        ctx.fillStyle = "white";
+        ctx.beginPath(); ctx.arc(c.x, c.y, 3, 0, Math.PI*2); ctx.fill();
+        ctx.font = "12px monospace";
+        ctx.fillText(p.label, c.x + 8, c.y + 4);
+    });
+
+    // Draw Primaries (at time-dependent positions)
+    const p1 = worldToCanvas(x1, 0);
+    const p2 = worldToCanvas(x2, 0);
+    ctx.fillStyle = "#FFD700"; ctx.beginPath(); ctx.arc(p1.x, p1.y, 12, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = "#00BFFF"; ctx.beginPath(); ctx.arc(p2.x, p2.y, 6, 0, Math.PI*2); ctx.fill();
+
+    // Draw Sun
+    if (sunEnabled) {
+        const theta = SUN_OMEGA * sat.t;
+        const xs = SUN_DIST * Math.cos(theta);
+        const ys = SUN_DIST * Math.sin(theta);
+        const pSun = worldToCanvas(xs, ys);
+        
+        ctx.fillStyle = "#FFAA00"; 
+        ctx.beginPath(); 
+        ctx.arc(pSun.x, pSun.y, 50, 0, Math.PI*2); 
+        ctx.fill();
+        
+        // Draw Sun Label
+        ctx.fillStyle = "white";
+        ctx.font = "14px monospace";
+        ctx.fillText("Sun", pSun.x + 55, pSun.y + 5);
+        
+        // Draw line to Sun (optional/faint)
+        /*
+        ctx.strokeStyle = "rgba(255, 200, 0, 0.1)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const origin = worldToCanvas(0, 0);
+        ctx.moveTo(origin.x, origin.y);
+        ctx.lineTo(pSun.x, pSun.y);
+        ctx.stroke();
+        */
+    }
+
+    // Draw Path
+    drawPath(sat.path, "rgba(255, 255, 255, 0.4)", 1.5, true);
+
+    // Draw Satellite
+    const sPos = worldToCanvas(sat.x, sat.y);
+    ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(sPos.x, sPos.y, 4, 0, Math.PI*2); ctx.fill();
+
+    // Draw Velocity Vector if dragging
+    if (isDragging) {
+        ctx.strokeStyle = "#00ff00";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sPos.x, sPos.y);
+        const vScale = camera.zoom / 250;
+        ctx.lineTo(sPos.x + sat.vx * 100 * vScale, sPos.y - sat.vy * 100 * vScale);
+        ctx.stroke();
+
+        // Preview Trajectories (15s duration)
+        const dur = 15;
+        
+        if (optimizedData) {
+            // Draw Optimized Green Line (Full Period)
+            drawPath(optimizedData.path, "#00FF00", 3, false);
+            // Draw Optimized Velocity Vector (Cyan)
+            const optStart = worldToCanvas(optimizedData.startState.x, optimizedData.startState.y);
+            ctx.beginPath();
+            ctx.strokeStyle = "#00FFFF"; 
+            ctx.lineWidth = 3;
+            ctx.moveTo(optStart.x, optStart.y);
+            // Match the visual scale of the drag vector (x100)
+            ctx.lineTo(optStart.x + optimizedData.startState.vx * 100 * vScale, optStart.y - optimizedData.startState.vy * 100 * vScale);
+            ctx.stroke();
+            
+            // Draw connect line from initial position to optimized start position
+            ctx.beginPath();
+            ctx.strokeStyle = "#FFFF00";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            
+            const pStart = worldToCanvas(sat.x, sat.y);
+            const pEnd = worldToCanvas(optimizedData.startState.x, optimizedData.startState.y);
+            
+            ctx.moveTo(pStart.x, pStart.y);
+            ctx.lineTo(pEnd.x, pEnd.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        } else {
+            // Standard Previews
+            const previewPath = getProjectedPath(sat.x, sat.y, sat.vx, sat.vy, dur);
+            drawPath(previewPath, "rgba(255, 255, 255, 0.8)", 1.5);
+            
+
+
+            // Visualize Period Guess
+            const bestPt = findReturnState(sat.x, sat.y, sat.vx, sat.vy);
+            
+            // Green Dot (Smallest Optimization Error)
+            if (bestPt.found) {
+                const gPos = worldToCanvas(bestPt.x, bestPt.y);
+                ctx.fillStyle = "#00FF00";
+                ctx.beginPath(); ctx.arc(gPos.x, gPos.y, 5, 0, Math.PI*2); ctx.fill();
+            }
+
+            drawPath(getProjectedPath(sat.x, sat.y, sat.vx*1.02, sat.vy*1.02, dur), "rgba(200, 200, 255, 0.4)", 1);
+            drawPath(getProjectedPath(sat.x, sat.y, sat.vx*0.98, sat.vy*0.98, dur), "rgba(200, 200, 255, 0.4)", 1);
+        }
+    }
+
+    // Draw Manifold
+    if (manifoldActive) {
+        manifoldSats.forEach(s => {
+            drawPath(s.path, s.color, 1, true);
+            const mPos = worldToCanvas(s.x, s.y);
+            ctx.fillStyle = s.color;
+            ctx.beginPath(); ctx.arc(mPos.x, mPos.y, 2, 0, Math.PI*2); ctx.fill();
+        });
+    }
+
+    if (!isDragging) {
+        // Run multiple sub-steps for stability (dt=0.002 matches solver)
+        for(let i=0; i<8; i++) {
+            updateState(sat, 0.002);
+            if (manifoldActive) {
+                manifoldSats.forEach(s => updateState(s, 0.002));
+            }
+        }
+        
+        // Update Stats (Main Sat)
+        const pot = getEffectivePotential(sat.x, sat.y, sat.t);
+        const v2 = sat.vx**2 + sat.vy**2;
+        document.getElementById('jacobiVal').innerText = (2 * pot - v2).toFixed(4);
+        document.getElementById('velVal').innerText = Math.sqrt(v2).toFixed(4);
+        document.getElementById('vxVal').innerText = sat.vx.toFixed(4);
+        document.getElementById('vyVal').innerText = sat.vy.toFixed(4);
+        
+        // Dynamically update heatmap if potential field is time-varying
+        // Throttle to every 5 frames for performance
+        if ((eccentricity > 0.001 || Math.abs(orbitalPeriod - 1.0) > 0.01) && frameCount % 5 === 0) {
+            renderHeatmap();
+        }
+        frameCount++;
+    }
+    requestAnimationFrame(draw);
+}
+
+// Interaction
+canvas.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    optimizedData = null;
+    const world = canvasToWorld(e.clientX, e.clientY);
+    sat.x = world.x; sat.y = world.y;
+    sat.vx = 0; sat.vy = 0;
+    sat.path = [];
+    dragStart = { x: e.clientX, y: e.clientY };
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    // Show Potential at Cursor
+    const world = canvasToWorld(e.clientX, e.clientY);
+    const cursorPot = getEffectivePotential(world.x, world.y, sat.t);
+    const potEl = document.getElementById('potVal');
+    if (potEl) potEl.innerText = cursorPot.toFixed(4);
+
+    if (isDragging) {
+        // Check for discard threshold
+        if (optimizedData && optAnchor) {
+            const dist = Math.hypot(e.clientX - optAnchor.x, e.clientY - optAnchor.y);
+            if (dist > 30) {
+                optimizedData = null;
+                optAnchor = null;
+            }
+        }
+        
+        // If not optimized/locked, update velocity normally
+        if (!optimizedData) {
+            const zoomScale = camera.zoom / 250;
+            sat.vx = (e.clientX - dragStart.x) / (100 * zoomScale);
+            sat.vy = -(e.clientY - dragStart.y) / (100 * zoomScale);
+
+            // Update Stats Display in Real-time
+            const v2 = sat.vx**2 + sat.vy**2;
+            const pot = getEffectivePotential(sat.x, sat.y, sat.t);
+            document.getElementById('jacobiVal').innerText = (2 * pot - v2).toFixed(4);
+            document.getElementById('velVal').innerText = Math.sqrt(v2).toFixed(4);
+            document.getElementById('vxVal').innerText = sat.vx.toFixed(4);
+            document.getElementById('vyVal').innerText = sat.vy.toFixed(4);
+            
+            if (autoOptimize) runOptimization();
+        }
+    }
+});
+
+window.addEventListener('mouseup', () => {
+    isDragging = false;
+    
+    // Commit Optimization
+    if (optimizedData) {
+        sat.x = optimizedData.startState.x;
+        sat.y = optimizedData.startState.y;
+        sat.vx = optimizedData.startState.vx;
+        sat.vy = optimizedData.startState.vy;
+        sat.path = []; // Reset visual path
+        optimizedData = null;
+        optAnchor = null;
+    }
+
+    if (manifoldActive) spawnManifold();
+});
+
+// Track mouse for anchor
+let lastMouse = { x:0, y:0 };
+window.addEventListener('mousemove', e => { lastMouse = {x: e.clientX, y: e.clientY}; });
+
+// Optimizer
+// Optimizer
+function runOptimization() {
+    if (isOptimizing) return; 
+    isOptimizing = true;
+    
+    worker.postMessage({ 
+        type: 'optimize', 
+        state: { x: sat.x, y: sat.y, vx: sat.vx, vy: sat.vy, t: sat.t },
+        mu: mu,
+        orbitalPeriod: orbitalPeriod,
+        eccentricity: eccentricity,
+        sunEnabled: sunEnabled
+    });
+}
+
+window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && isDragging) {
+        runOptimization();
+    }
+});
+
+// 1. Find Return State (Closest Approach)
+function findReturnState(x, y, vx, vy) {
+    let s = { x, y, vx, vy, t: sat.t };
+    
+    // Find point with minimum Total State Error (matching optimizer cost function)
+    let minErr = { t: 6.0, val: 1e9, x: x, y: y, found: false };
+
+    // Coarse search
+    let dt = 0.02;
+    let maxT = 18; 
+    let hasLeft = false;
+    
+    for(let t=0; t<maxT; t+=dt) {
+        // FK4 step
+        let k1 = derivatives(s);
+        let s2 = { x: s.x + k1.dx*dt/2, y: s.y + k1.dy*dt/2, vx: s.vx + k1.dvx*dt/2, vy: s.vy + k1.dvy*dt/2, t: s.t + dt/2 };
+        let k2 = derivatives(s2);
+        let s3 = { x: s.x + k2.dx*dt/2, y: s.y + k2.dy*dt/2, vx: s.vx + k2.dvx*dt/2, vy: s.vy + k2.dvy*dt/2, t: s.t + dt/2 };
+        let k3 = derivatives(s3);
+        let s4 = { x: s.x + k3.dx*dt, y: s.y + k3.dy*dt, vx: s.vx + k3.dvx*dt, vy: s.vy + k3.dvy*dt, t: s.t + dt };
+        let k4 = derivatives(s4);
+        
+        s.x += (dt/6)*(k1.dx+2*k2.dx+2*k3.dx+k4.dx);
+        s.y += (dt/6)*(k1.dy+2*k2.dy+2*k3.dy+k4.dy);
+        s.vx += (dt/6)*(k1.dvx+2*k2.dvx+2*k3.dvx+k4.dvx);
+        s.vy += (dt/6)*(k1.dvy+2*k2.dvy+2*k3.dvy+k4.dvy);
+        s.t += dt;
+        
+        let dist = Math.hypot(s.x - x, s.y - y);
+        let err = Math.hypot(s.x - x, s.y - y, s.vx - vx, s.vy - vy);
+        
+        if (dist > 0.1) hasLeft = true; 
+        
+        if (hasLeft && t > 1.0) {
+            if (err < minErr.val) {
+                minErr = { t: t + dt, val: err, x: s.x, y: s.y, found: true };
+            }
+        }
+    }
+    return minErr; 
+}
+
+function estimatePeriod(x, y, vx, vy) {
+    return findReturnState(x, y, vx, vy).t;
+}
+
+// 2. Newton-Raphson Solver with Least Squares Update covering [vx, vy, T]
+// We fix X, Y (Position) and try to minimize the error in returning to X, Y with same Vx, Vy.
+// This is an Over-Determined system (3 unknowns, 4 residuals).
+// We use Least Squares: J^T * J * dq = -J^T * R
+function solveGeneralPeriodic(x0, y0, vx0, vy0) {
+    let T = estimatePeriod(x0, y0, vx0, vy0);
+    // Initial State Variables: [x, y, vx, vy, T] (5 vars)
+    let state = [x0, y0, vx0, vy0, T]; 
+    let debugPoints = [];
+    
+    const T_init = T; 
+    
+    // Config
+    const maxIter = 50;
+    const eps = 1e-5; // Perturbation size (larger is better for numerical noise)
+    
+    for(let i=0; i<maxIter; i++) {
+        // Enforce Bounds on T
+        if (state[4] > T_init * 1.05) state[4] = T_init * 1.05;
+        if (state[4] < T_init * 0.95) state[4] = T_init * 0.95;
+        
+        // Current End State
+        // Integrate from variable START position
+        let S = integrate(state[0], state[1], state[2], state[3], state[4]);
+        debugPoints.push({x: S.x, y: S.y});
+        
+        // Residuals: R = End - Start (Full State: Position + Velocity)
+        let R = [
+            S.x - state[0],
+            S.y - state[1],
+            S.vx - state[2],
+            S.vy - state[3]
+        ];
+        
+        // Error Metric (Total State Error)
+        let err = Math.hypot(R[0], R[1], R[2], R[3]);
+        let posErr = Math.hypot(R[0], R[1]);
+        
+        console.log(`Iter ${i}: x=${state[0].toFixed(4)} y=${state[1].toFixed(4)} vx=${state[2].toFixed(4)} vy=${state[3].toFixed(4)} T=${state[4].toFixed(4)} | PosErr=${posErr.toExponential(4)} | TotErr=${err.toExponential(4)}`);
+
+        if (err < 1e-9) break; 
+        
+        // Compute Jacobian (4 rows x 5 columns)
+        // J_ij = dR_i / dVar_j
+        // Col 0: dR/dx
+        // Col 1: dR/dy
+        // Col 2: dR/dVx
+        // Col 3: dR/dVy
+        // Col 4: dR/dT
+        
+        let J = []; // Store as columns first for convenience
+        
+        // Perturb each variable [x, y, vx, vy, T]
+        for(let j=0; j<5; j++) {
+            let orig = state[j];
+            state[j] += eps;
+            
+            // Perturbed Result
+            let Sp = integrate(state[0], state[1], state[2], state[3], state[4]);
+            
+            let Rp = [
+                Sp.x - state[0],
+                Sp.y - state[1],
+                Sp.vx - state[2],
+                Sp.vy - state[3]
+            ];
+            
+            // Finite Difference
+            let col = [
+                (Rp[0] - R[0]) / eps,
+                (Rp[1] - R[1]) / eps,
+                (Rp[2] - R[2]) / eps,
+                (Rp[3] - R[3]) / eps
+            ];
+            J.push(col);
+            
+            state[j] = orig; // Restore
+        }
+        
+        // Under-determined System (4 constraints, 5 vars): R = J * dq
+        // Use Min-Norm Solution: dq = J^T * (J * J^T)^-1 * (-R)
+        // Let G = J * J^T (4x4 matrix)
+        
+        // 1. Compute G = J * J^T (4x4)
+        let G = [[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
+        for(let r=0; r<4; r++) { // Row of G
+            for(let c=0; c<4; c++) { // Col of G
+                let sum = 0;
+                for(let k=0; k<5; k++) { // Sum over cols of J (5 vars)
+                    sum += J[k][r] * J[k][c];
+                }
+                G[r][c] = sum;
+            }
+        }
+        
+        // 2. Invert G (4x4)
+        let G_inv = invert4x4(G);
+        if (!G_inv) break;
+        
+        // 3. Compute lambda = G_inv * (-R) (4x1)
+        let lambda = [0,0,0,0];
+        for(let r=0; r<4; r++) {
+            for(let c=0; c<4; c++) {
+                lambda[r] += G_inv[r][c] * (-R[c]);
+            }
+        }
+        
+        // 4. Compute dq = J^T * lambda (5x1)
+        let dq = [0,0,0,0,0];
+        for(let k=0; k<5; k++) {
+            for(let r=0; r<4; r++) {
+                dq[k] += J[k][r] * lambda[r];
+            }
+        }
+        
+        // Update with Backtracking Line Search
+        // We want to ensure the error actually decreases.
+        let alpha = 1.0;
+        let improved = false;
+        let bestAlphaState = [...state];
+        
+        let stepCount = 0;
+        
+        while(alpha > 1e-10) {
+            let trialState = [
+                state[0] + dq[0] * alpha,
+                state[1] + dq[1] * alpha,
+                state[2] + dq[2] * alpha,
+                state[3] + dq[3] * alpha,
+                state[4] + dq[4] * alpha
+            ];
+            
+            // Enforce Bounds on T for trial
+            if (trialState[4] > T_init * 1.05) trialState[4] = T_init * 1.05;
+            if (trialState[4] < T_init * 0.95) trialState[4] = T_init * 0.95;
+            
+            // Trial integration from trial start position
+            let S_new = integrate(trialState[0], trialState[1], trialState[2], trialState[3], trialState[4]);
+            
+            // Error metric: Total State Error
+            let err_new = Math.hypot(
+                S_new.x - trialState[0], 
+                S_new.y - trialState[1],
+                S_new.vx - trialState[2],
+                S_new.vy - trialState[3]
+            );
+            
+            if (err_new < err) {
+                state = trialState;
+                improved = true;
+                break;
+            } else {
+                alpha *= 0.5; // Reduce step size
+                stepCount++;
+            }
+        }
+        
+        if (!improved) {
+            console.log(`Optimization stalled. Last alpha=${alpha}, Last Err=${typeof err_new !== 'undefined' ? err_new.toExponential(4) : 'N/A'}`);
+            break;
+        }
+    }
+
+    
+    // Verify Convergence
+    let S_end = integrate(state[0], state[1], state[2], state[3], state[4]);
+    let finalErr = Math.hypot(
+        S_end.x - state[0],
+        S_end.y - state[1],
+        S_end.vx - state[2],
+        S_end.vy - state[3]
+    );
+
+    if (finalErr > 1e-5) {
+        // console.warn("Optimization failed to converge within tolerance. Error:", finalErr);
+        return null;
+    }
+
+    // Result
+    let finalPath = getProjectedPath(state[0], state[1], state[2], state[3], 15, 0.002);
+    return {
+        startState: { x: state[0], y: state[1], vx: state[2], vy: state[3] },
+        path: finalPath,
+        debugPoints: debugPoints
+    };
+}
+
+// 4x4 Inversion Helper
+function invert4x4(m) {
+    let size = 4;
+    let aug = [];
+    for(let i=0; i<size; i++) {
+        aug[i] = [...m[i]];
+        for(let j=0; j<size; j++) aug[i].push(i===j? 1:0);
+    }
+    for(let i=0; i<size; i++) {
+        let pivot = aug[i][i];
+        if (Math.abs(pivot) < 1e-9) return null;
+        for(let j=0; j<2*size; j++) aug[i][j] /= pivot;
+        for(let k=0; k<size; k++) {
+            if (k !== i) {
+                let factor = aug[k][i];
+                for(let j=0; j<2*size; j++) aug[k][j] -= factor * aug[i][j];
+            }
+        }
+    }
+    let res = [];
+    for(let i=0; i<size; i++) res.push(aug[i].slice(size, 2*size));
+    return res;
+}
+
+// Helper: Integrate state for time T
+function integrate(x, y, vx, vy, time) {
+    let s = { x, y, vx, vy, t: sat.t }; // Use global sat.t as start time
+    let dt = 0.002; // MATCH SIMULATION PHYSICS DT exactly
+    let t = 0;
+    while(t < time) {
+        let step = Math.min(dt, time - t);
+        let k1 = derivatives(s);
+        let s2 = { x: s.x + k1.dx*step/2, y: s.y + k1.dy*step/2, vx: s.vx + k1.dvx*step/2, vy: s.vy + k1.dvy*step/2, t: s.t + step/2 };
+        let k2 = derivatives(s2);
+        let s3 = { x: s.x + k2.dx*step/2, y: s.y + k2.dy*step/2, vx: s.vx + k2.dvx*step/2, vy: s.vy + k2.dvy*step/2, t: s.t + step/2 };
+        let k3 = derivatives(s3);
+        let s4 = { x: s.x + k3.dx*step, y: s.y + k3.dy*step, vx: s.vx + k3.dvx*step, vy: s.vy + k3.dvy*step, t: s.t + step };
+        let k4 = derivatives(s4);
+        
+        s.x += (step/6)*(k1.dx+2*k2.dx+2*k3.dx+k4.dx);
+        s.y += (step/6)*(k1.dy+2*k2.dy+2*k3.dy+k4.dy);
+        s.vx += (step/6)*(k1.dvx+2*k2.dvx+2*k3.dvx+k4.dvx);
+        s.vy += (step/6)*(k1.dvy+2*k2.dvy+2*k3.dvy+k4.dvy);
+        s.t += step;
+        t += step;
+    }
+    return s;
+}
+
+// Helper: 3x3 Matrix Inversion
+function invert3x3(m) {
+    let det = m[0][0]*(m[1][1]*m[2][2] - m[2][1]*m[1][2]) -
+              m[0][1]*(m[1][0]*m[2][2] - m[1][2]*m[2][0]) +
+              m[0][2]*(m[1][0]*m[2][1] - m[1][1]*m[2][0]);
+              
+    if (Math.abs(det) < 1e-12) return null;
+    let invDet = 1 / det;
+    
+    let result = [[0,0,0],[0,0,0],[0,0,0]];
+    
+    result[0][0] = (m[1][1]*m[2][2] - m[2][1]*m[1][2]) * invDet;
+    result[0][1] = (m[0][2]*m[2][1] - m[0][1]*m[2][2]) * invDet;
+    result[0][2] = (m[0][1]*m[1][2] - m[0][2]*m[1][1]) * invDet;
+    
+    result[1][0] = (m[1][2]*m[2][0] - m[1][0]*m[2][2]) * invDet;
+    result[1][1] = (m[0][0]*m[2][2] - m[0][2]*m[2][0]) * invDet;
+    result[1][2] = (m[1][0]*m[0][2] - m[0][0]*m[1][2]) * invDet;
+    
+    result[2][0] = (m[1][0]*m[2][1] - m[2][0]*m[1][1]) * invDet;
+    result[2][1] = (m[2][0]*m[0][1] - m[0][0]*m[2][1]) * invDet;
+    result[2][2] = (m[0][0]*m[1][1] - m[1][0]*m[0][1]) * invDet;
+    
+    return result;
+}
+
+muInput.addEventListener('input', (e) => {
+    mu = parseFloat(e.target.value);
+    document.getElementById('muVal').innerText = mu.toFixed(4);
+    renderHeatmap();
+});
+
+
+const eccInput = document.getElementById('ecc');
+eccInput.addEventListener('input', (e) => {
+    eccentricity = parseFloat(e.target.value);
+    document.getElementById('eccVal').innerText = eccentricity.toFixed(2);
+    renderHeatmap();
+});
+
+canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const zoomSensitivity = 0.001;
+    const delta = Math.exp(-e.deltaY * zoomSensitivity);
+    const newZoom = Math.max(10, Math.min(50000, camera.zoom * delta));
+    
+    // Zoom around cursor
+    const mouseWorld = canvasToWorld(e.clientX, e.clientY);
+    
+    camera.x = mouseWorld.x - (e.clientX - canvas.width/2) / newZoom;
+    camera.y = mouseWorld.y - (canvas.height/2 - e.clientY) / newZoom;
+    camera.zoom = newZoom;
+    
+    renderHeatmap();
+}, { passive: false });
+
+document.getElementById('btnL1').onclick = () => initOrbit('L1');
+document.getElementById('btnL2').onclick = () => initOrbit('L2');
+document.getElementById('btnL3').onclick = () => initOrbit('L3');
+document.getElementById('btnL4').onclick = () => initOrbit('L4');
+document.getElementById('btnL5').onclick = () => initOrbit('L5');
+
+const manifoldBtn = document.getElementById('manifoldBtn');
+manifoldBtn.onclick = () => {
+    manifoldActive = !manifoldActive;
+    if (manifoldActive) {
+        spawnManifold();
+        manifoldBtn.innerText = "Manifold Mode: ON";
+        manifoldBtn.style.background = "#335533";
+    } else {
+        manifoldSats = [];
+        manifoldBtn.innerText = "Manifold Mode: OFF";
+        manifoldBtn.style.background = "#553333";
+    }
+};
+
+const autoOptBtn = document.getElementById('autoOptBtn');
+autoOptBtn.onclick = () => {
+    autoOptimize = !autoOptimize;
+    if (autoOptimize) {
+        autoOptBtn.innerText = "Auto-Optimize: ON";
+        autoOptBtn.style.background = "#335533";
+    } else {
+        autoOptBtn.innerText = "Auto-Optimize: OFF";
+        autoOptBtn.style.background = "#553333";
+    }
+};
+
+const sunBtn = document.getElementById('sunBtn');
+sunBtn.onclick = () => {
+    sunEnabled = !sunEnabled;
+    if (sunEnabled) {
+        sunBtn.innerText = "Sun Perturbation: ON";
+        sunBtn.style.background = "#335533";
+    } else {
+        sunBtn.innerText = "Sun Perturbation: OFF";
+        sunBtn.style.background = "#553333";
+    }
+};
+
+// Initialize
+initOrbit('L1');
+
+// Start
+renderHeatmap();
+draw();
+
+</script>
+</body>
+</html>

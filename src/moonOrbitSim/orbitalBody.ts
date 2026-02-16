@@ -263,20 +263,8 @@ export class OrbitalBody extends Body {
   public target: OrbitalBody | null = null;
   public targetId: string = ""; // Serialized target ID
 
-  // Dual-rendering mode: calculate both analytical and bezier positions
-  private _trajectoryInitialized: boolean = false;
-
-  // Transfer Trajectory (Hohmann)
+  // Transfer Trajectory
   private _transferTrajectory: TransferTrajectory | null = null;
-  // Unused properties removed during refactoring
-  // private _transferStartPoint: THREE.Mesh | null = null;
-  // private _transferEndPoint: THREE.Mesh | null = null;
-  private _transferBezierRender: OrbitalBodyRender | null = null; // Re-use renderer for transfer visualization? Or just use Trajectory renderer.
-  // Actually Trajectory has its own renderer. We just need to hold the Trajectory object.
-
-  // Markers for transfer start/end
-  // private _transferStartMarker: THREE.Mesh | null = null; // Removed - moved to TransferTrajectory
-  // private _transferEndMarker: THREE.Mesh | null = null;   // Removed - moved to TransferTrajectory
 
   private _scene: THREE.Scene;
 
@@ -455,34 +443,7 @@ export class OrbitalBody extends Body {
     // this._render.updateTargetLine(lineStartPos, targetPos, camera);
   }
 
-  /**
-   * Initialize trajectory if needed (called on first update to capture start time)
-   */
-  private ensureTrajectoryInitialized(
-    centralBodyMass: number,
-    currentTime: number,
-  ): void {
-    if (!this._trajectoryInitialized) {
-      const positionVec = MeasureVector3.fromVector3<Length>(
-        this.initialPosition,
-        kilometers,
-      );
-      const velocityVec = MeasureVector3.fromVector3<Velocity>(
-        this.initialVelocity,
-        kilometers.per(seconds),
-      );
-      const centralMass = Measure.of(centralBodyMass, kilograms);
-      const startTime = Measure.of(currentTime, seconds);
 
-      this._trajectory.calculateFromState(
-        positionVec,
-        velocityVec,
-        centralMass,
-        startTime,
-      );
-      this._trajectoryInitialized = true;
-    }
-  }
 
   /**
    * Update position and velocity using numerical integration
@@ -536,9 +497,24 @@ export class OrbitalBody extends Body {
     currentTime: number = 0,
     renderOptions?: { isSelected: boolean, isTarget: boolean, trajectoriesVisible: boolean, camera?: THREE.Camera }
   ): void {
-    // Optimize: skip trajectory init if using Numerical (except for visualization?)
-    // Visualization requires trajectory. So always init.
-    this.ensureTrajectoryInitialized(centralBodyMass, currentTime);
+    // Initialize trajectory on first update (Trajectory handles idempotency internally)
+    const positionVec = MeasureVector3.fromVector3<Length>(
+      this.initialPosition,
+      kilometers,
+    );
+    const velocityVec = MeasureVector3.fromVector3<Velocity>(
+      this.initialVelocity,
+      kilometers.per(seconds),
+    );
+    const centralMass = Measure.of(centralBodyMass, kilograms);
+    const startTime = Measure.of(currentTime, seconds);
+
+    this._trajectory.calculateFromState(
+      positionVec,
+      velocityVec,
+      centralMass,
+      startTime,
+    );
     this._lastUpdateTime = currentTime; // Store for getCurrentNormalizedTime
 
     // Update trajectory debugging annotations
@@ -563,14 +539,15 @@ export class OrbitalBody extends Body {
 
     // Note: mesh/sprite position is updated in updateRenderingMode(), called from game loop
 
-    // Update orbit visualization if trajectory is initialized
-    if (this._trajectoryInitialized) {
-      // Trajectory handles all visualization including orbit line and trail
-      this._trajectory.updateOrbitVisualization(
-        this._lastUpdateTime,
-        this.position,
-      );
-    }
+    // Update orbit visualization
+    // Trajectory handles all visualization including orbit line and trail
+    // Show bezier line if this body is selected OR if it's the target of the selected body
+    const showBezierLine = renderOptions?.isSelected || renderOptions?.isTarget || false;
+    this._trajectory.update(
+      this._lastUpdateTime,
+      this.position,
+      showBezierLine
+    );
 
     // Update transfer trajectory with rendering options
     if (this._transferTrajectory && renderOptions) {
@@ -583,7 +560,8 @@ export class OrbitalBody extends Body {
       }
       
       // Call transfer trajectory's update method with visibility options
-      this._transferTrajectory.update(currentTime, { 
+      // Note: TransferTrajectory doesn't use currentPos parameter (it calculates its own)
+      this._transferTrajectory.update(currentTime, undefined, showTransfer, { 
         visible: showTransfer,
         camera: renderOptions.camera,
         targetPosition: targetPosition,
@@ -611,9 +589,6 @@ export class OrbitalBody extends Body {
     this.initialPosition = position.clone();
     this.initialVelocity = velocity.clone();
 
-    // Flag trajectory for re-initialization (will happen on next update with fresh time)
-    this._trajectoryInitialized = false;
-
     // Update radius and regenerate mesh if radius is provided
     if (radius !== undefined && radius !== this.radius) {
       this.radius = radius;
@@ -636,40 +611,10 @@ export class OrbitalBody extends Body {
     this.position.copy(this.initialPosition);
     this.velocity.copy(this.initialVelocity);
 
-    // Flag trajectory for re-initialization
-    this._trajectoryInitialized = false;
-
     // Clear trajectory
     this._trajectory.clear();
   }
 
-  /**
-   * Force-update the trajectory parameters and visualization based on the CURRENT physical state.
-   * Useful for aligning visualizations before computing transfers.
-   */
-  updateTrajectoryFromCurrentState(
-    currentTime: number,
-    centralBodyMass: number,
-  ): void {
-    const positionVec = MeasureVector3.fromVector3<Length>(
-      this.position,
-      kilometers,
-    );
-    const velocityVec = MeasureVector3.fromVector3<Velocity>(
-      this.velocity,
-      kilometers.per(seconds),
-    );
-    const centralMass = Measure.of(centralBodyMass, kilograms);
-    const startTime = Measure.of(currentTime, seconds);
-
-    this._trajectory.calculateFromState(
-      positionVec,
-      velocityVec,
-      centralMass,
-      startTime,
-    );
-    this._trajectoryInitialized = true;
-  }
 
   /**
    * Get current position (analytical/numerical position)
@@ -752,9 +697,6 @@ export class OrbitalBody extends Body {
     if (this.target) {
       this._transferTrajectory.setTargetTrajectory(this.target.getTrajectory());
     }
-
-    // Delegate marker creation to the trajectory
-    this._transferTrajectory.createMarkers(startPos, endPos, this.radius * 0.5);
   }
 
   /**
@@ -778,8 +720,6 @@ export class OrbitalBody extends Body {
       this._trajectory.clear();
     }
     this._trajectory = trajectory;
-    this._trajectoryInitialized = true; // Assume shared trajectory is already init?
-    // Or we should assume sharing implies we don't recalculate logic internally?
   }
 
 }

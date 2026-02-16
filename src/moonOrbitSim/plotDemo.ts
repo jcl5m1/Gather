@@ -359,17 +359,24 @@ export function createTransferDistanceErrorPlot(
 
     // PERFORM GLOBAL OPTIMIZATION (GRID SEARCH + HILL CLIMBING)
     // This is isolated from the rendering code as requested.
-    const globalResult = TransferCalculator.calculateGlobalOptimizedTransfer(
+    const result = TransferCalculator.calculateOptimalTransfer(
         startBody,
         targetBody,
         centralBodyMass,
-        startTime
+        startTime,
+        undefined, // seedDelay
+        undefined, // seedTOF
+        undefined, // initialDelayRange
+        undefined, // initialTOFRange
+        true // returnHeatmap
     );
 
     // Re-enable heatmap data flow but keep the window hidden (no win.open())
-    win.setHeatmap(globalResult.heatmap);
+    if (result?.heatmap) {
+        win.setHeatmap(result.heatmap);
+    }
 
-    const finalBest = globalResult.result || bestResult;
+    const finalBest = result || bestResult;
 
     // Mark the optimized solution
     if (finalBest) {

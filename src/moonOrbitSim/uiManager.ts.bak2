@@ -123,7 +123,13 @@ export class UIManager {
                             const centralBody = this.simulationController.getGameLoop().getCentralBody();
                              const currentTime = this.simulationController.getGameLoop().getCurrentTime();
 
-                             const result = TransferCalculator.calculateOptimalTransfer(
+                             // Force-update trajectories to current physical state before calculation
+                             // This ensures the prediction in TransferCalculator is grounded in reality
+                             // and that the visual orbit lines correctly align with the bodies and the transfer.
+                             focusedBody.updateTrajectoryFromCurrentState(currentTime, centralBody.getMass());
+                             body.updateTrajectoryFromCurrentState(currentTime, centralBody.getMass());
+
+                             const result = TransferCalculator.calculateOptimalHohmannTransfer(
                                 focusedBody,
                                 body,
                                 centralBody.getMass(),
@@ -131,17 +137,15 @@ export class UIManager {
                             );
                             
                             if (result) {
-                                console.log("Transfer Result:", result);
-
                                 const scene = this.simulationController.getGameLoop().getScene();
 
                                 // Check if we can reuse the plot if bodies are same
                                 const oldTransferTrajectory = (focusedBody as any).getTransferTrajectory();
 
                                 const transferTrajectory = new TransferTrajectory(scene, 0xffff00); // Yellow for transfer
-                                transferTrajectory.setTransferResult(result);
+                                
                                 // Set start/end times
-                                transferTrajectory.setTimes(currentTime, currentTime + result.timeOfFlight, result.startTime);
+                                transferTrajectory.setTimes(currentTime, currentTime + result.timeOfFlight, result.startDelay);
                                 transferTrajectory.setDeltaVs(result.deltaV1, result.deltaV2);
                                 
                                 // Provide references for burn blending
@@ -151,84 +155,13 @@ export class UIManager {
                                 const posMeasure = MeasureVector3.fromVector3<Length>(result.position, kilometers);
                                 const velMeasure = MeasureVector3.fromVector3<Velocity>(result.velocity, kilometers.per(seconds));
                                 const centralMassMeasure = Measure.of(centralBody.getMass(), kilograms);
-                                const startTimeMeasure = Measure.of(currentTime + result.startTime, seconds);
+                                const startTimeMeasure = Measure.of(currentTime + result.startDelay, seconds);
                                 
                                 transferTrajectory.calculateFromState(posMeasure, velMeasure, centralMassMeasure, startTimeMeasure);
-
-                                console.log("Transfer Trajectory:", posMeasure.getVector3(), 
-                                velMeasure.getVector3(), startTimeMeasure.value);
                                  
                                  // Store exact Lambert positions for accurate distance calculations
                                  transferTrajectory.setExactPositions(result.startPosition, result.endPosition);
-
-                                // compute the departure burn and arrival burn times based on a fixed acceleration
-                                const fixedAccel = 0.0001; // km/s^2
-                                const departureBurnTime = result.deltaV1 / fixedAccel;
-                                const arrivalBurnTime = result.deltaV2 / fixedAccel;
-                                
-                                // Store burn times in the transfer trajectory
-                                transferTrajectory.setBurnTimes(departureBurnTime, arrivalBurnTime);
-                                
-                                //compute the start of the departure burn and arrival burn
-                                const departureBurnStartTime = currentTime + result.startTime - departureBurnTime/2;
-                                const departureBurnEndTime = departureBurnStartTime + departureBurnTime;
-                                const arrivalBurnStartTime = currentTime + result.timeOfFlight - arrivalBurnTime/2;
-                                const arrivalBurnEndTime = arrivalBurnStartTime + arrivalBurnTime;
-
-                                //add markers to the transfer trajectory using the start trajectory us the departure start time
-                                const departureBurnStartPos = focusedBody.getTrajectory().getBezierPosition(departureBurnStartTime);
-                                const departureBurnEndPos = transferTrajectory.getBezierPosition(departureBurnEndTime);
-                                const arrivalBurnStartPos = transferTrajectory.getBezierPosition(arrivalBurnStartTime);
-                                const arrivalBurnEndPos = focusedBody.target.getTrajectory().getBezierPosition(arrivalBurnEndTime);
-                                
-                                console.log("Time of Flight:", result.timeOfFlight);
-                                console.log("Departure Burn Time:", departureBurnTime);
-                                console.log("Departure Burn Start Time:", departureBurnStartTime);
-                                console.log("Departure Burn End Time:", departureBurnEndTime);
-                                console.log("Arrival Burn Time:", arrivalBurnTime);
-                                console.log("Arrival Burn Start Time:", arrivalBurnStartTime);
-                                console.log("Arrival Burn End Time:", arrivalBurnEndTime);
-
-                                if (departureBurnStartPos) transferTrajectory.addMarker(departureBurnStartPos, 0x00ff00);
-                                if (departureBurnEndPos) transferTrajectory.addMarker(departureBurnEndPos, 0xff0000);
-                                if (arrivalBurnStartPos) transferTrajectory.addMarker(arrivalBurnStartPos, 0x00ff00);
-                                if (arrivalBurnEndPos) transferTrajectory.addMarker(arrivalBurnEndPos, 0xff0000);
-
-                                // Add Bezier burn arcs with velocity-based control points
-                                // Departure burn arc: from start orbit to transfer trajectory
-                                if (departureBurnStartPos && departureBurnEndPos) {
-                                    const departureBurnStartVel = focusedBody.getTrajectory().getBezierState(departureBurnStartTime, { calcVelocity: true }).velocity;
-                                    const departureBurnEndVel = transferTrajectory.getBezierState(departureBurnEndTime, { calcVelocity: true }).velocity;
-                                    
-                                    if (departureBurnStartVel && departureBurnEndVel) {
-                                        transferTrajectory.addArc(
-                                            departureBurnStartPos,
-                                            departureBurnEndPos,
-                                            departureBurnStartVel,
-                                            departureBurnEndVel,
-                                            0x00ffff, // Cyan color for departure burn arc
-                                            10000 // Curvature scale (10 * velocity)
-                                        );
-                                    }
-                                }
-
-                                // Arrival burn arc: from transfer trajectory to target orbit
-                                if (arrivalBurnStartPos && arrivalBurnEndPos) {
-                                    const arrivalBurnStartVel = transferTrajectory.getBezierState(arrivalBurnStartTime, { calcVelocity: true }).velocity;
-                                    const arrivalBurnEndVel = focusedBody.target.getTrajectory().getBezierState(arrivalBurnEndTime, { calcVelocity: true }).velocity;
-                                    
-                                    if (arrivalBurnStartVel && arrivalBurnEndVel) {
-                                        transferTrajectory.addArc(
-                                            arrivalBurnStartPos,
-                                            arrivalBurnEndPos,
-                                            arrivalBurnStartVel,
-                                            arrivalBurnEndVel,
-                                            0xff00ff, // Magenta color for arrival burn arc
-                                            10 // Curvature scale (10 * velocity)
-                                        );
-                                    }
-                                }
-
+                                 
                                  // Set it on the body
                                  focusedBody.setTransferTrajectory(transferTrajectory, result.startPosition, result.endPosition);
                                  
@@ -253,7 +186,7 @@ export class UIManager {
                                          transferTrajectory.setExactPositions(refinedResult.startPosition, refinedResult.endPosition);
                                      }
 
-                                     plot.setAnimationPosition(refinedResult ? refinedResult.startDelay : result.startTime);
+                                     plot.setAnimationPosition(refinedResult ? refinedResult.startDelay : result.startDelay);
                                      transferTrajectory.setOptimizationPlot(plot, currentTime);
                                  }
 

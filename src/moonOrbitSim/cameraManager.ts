@@ -338,17 +338,18 @@ export class CameraManager extends Body {
             const b = body as any;
             if (typeof b.getTransferTrajectory === 'function') {
                 const transfer = b.getTransferTrajectory() as TransferTrajectory;
-                if (transfer && typeof transfer.getLUTPoints === 'function') {
-                    const points = transfer.getLUTPoints();
-                    if (points) {
-                        const intersects = this._raycaster.intersectObject(points, false);
+                if (transfer) {
+                    const transferRenderer = (transfer as any)._renderer;
+                    if (transferRenderer) {
+                        const intersects: THREE.Intersection[] = [];
+                        this._raycaster.intersectObject(transferRenderer.getContainer(), true, intersects);
                         if (intersects.length > 0) {
                             const hit = intersects[0];
                             if (!closestHit || hit.distance < closestHit.distance) {
                                 closestHit = {
                                     distance: hit.distance,
                                     transfer: transfer,
-                                    index: hit.index!,
+                                    index: hit.index || 0,
                                     point: hit.point
                                 };
                             }
