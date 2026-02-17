@@ -43,45 +43,7 @@
             border: 1px solid #444;
             max-width: 350px;
         }
-        .trajectory-list {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            padding: 15px;
-            background: rgba(20, 20, 30, 0.95);
-            border-radius: 8px;
-            max-height: 300px;
-            overflow-y: auto;
-            width: 400px;
-            border: 1px solid #444;
-        }
-        .trajectory-item {
-            padding: 10px;
-            margin: 5px 0;
-            background: rgba(40, 40, 50, 0.8);
-            border-radius: 4px;
-            cursor: pointer;
-            border: 2px solid transparent;
-            transition: all 0.2s;
-        }
-        .trajectory-item:hover {
-            background: rgba(60, 60, 70, 0.9);
-            border-color: #4a9eff;
-        }
-        .trajectory-item.selected {
-            border-color: #00ff88;
-            background: rgba(0, 255, 136, 0.15);
-        }
-        .trajectory-item .dv {
-            font-size: 16px;
-            font-weight: bold;
-            color: #4af;
-        }
-        .trajectory-item .details {
-            font-size: 11px;
-            color: #aaa;
-            margin-top: 4px;
-        }
+
         label { 
             font-size: 13px; 
             font-weight: bold; 
@@ -102,49 +64,13 @@
         button:hover { 
             background: #3a6a8a; 
         }
-        button.computing {
-            background: #6a4a2a;
-            cursor: wait;
-        }
-        .hint { 
-            font-size: 11px; 
-            color: #888; 
-            margin-top: 10px; 
-            line-height: 1.4; 
-        }
+
         h3 {
             margin: 0 0 10px 0;
             font-size: 14px;
             color: #4af;
         }
-        .progress-bar {
-            width: 100%;
-            height: 4px;
-            background: #333;
-            border-radius: 2px;
-            overflow: hidden;
-            margin: 10px 0;
-        }
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #4a9eff, #00ff88);
-            width: 0%;
-            transition: width 0.3s;
-        }
-        .scatter-panel {
-            position: absolute;
-            bottom: 20px;
-            right: 20px;
-            padding: 15px;
-            background: rgba(20, 20, 30, 0.95);
-            border-radius: 8px;
-            border: 1px solid #444;
-            width: 350px;
-            height: 250px;
-            display: flex;
-            flex-direction: column;
-            z-index: 10;
-        }
+
         .poincare-panel {
             position: absolute;
             top: 20px;
@@ -168,30 +94,15 @@
             border-radius: 4px;
             margin-top: 5px;
         }
-        #scatterCanvas {
-            flex: 1;
-            width: 100%;
-            background: rgba(10, 10, 15, 0.5);
-            border: 1px solid #333;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-top: 5px;
-        }
+
     </style>
 </head>
 <body>
 
     <div class="ui-panel">
-        <h3>🌍 Earth-Moon Ballistic Capture</h3>
+        <h3>🌍 Earth-Moon Lagrange Explorer</h3>
         
-        <label>LEO Altitude: <span id="leoAltVal">400</span> km</label>
-        <input type="range" id="leoAlt" min="200" max="2000" step="50" value="400">
-        <div class="control-group">
-            <label>Search Duration: <span id="durVal">120</span> days</label>
-            <input type="range" id="durationSlider" min="30" max="360" value="120">
-        </div>
-
-         <div class="control-group" style="margin-bottom: 5px;">
+        <div class="control-group" style="margin-bottom: 5px;">
             <label for="l1AmpSlider">L1 Amplitude: <span id="l1AmpVal">10000</span> km</label>
             <div style="display: flex; gap: 5px;">
                 <button id="l1AmpDec" style="background: #444; width: 40px;">-</button>
@@ -209,23 +120,7 @@
             </div>
         </div>
         
-        <button id="searchBtn">🔍 Search Ballistic Captures</button>
-        
-        <div class="progress-bar" id="progressBar" style="display:none;">
-            <div class="progress-fill" id="progressFill"></div>
-        </div>
-        <div id="searchStats" style="display: none; justify-content: space-between; font-size: 11px; color: #aaa; margin-top: 5px;">
-            <span>Tested: <b id="statTested" style="color: #fff;">0</b></span>
-            <span>Found: <b id="statFound" style="color: #4af;">0</b></span>
-            <span id="timeWrapper">Time: <b id="statTime" style="color: #ffaa44;">30.0s</b></span>
-        </div>
-        
-        <div class="hint">
-            • Satellite starts in circular LEO<br>
-            • Searches for lunar captures<br>
-            • Optimizes for minimum Δv<br>
-            • Click trajectory to preview
-        </div>
+
     </div>
 
     <div class="stats">
@@ -237,28 +132,8 @@
         Hill Radius (Moon): <span id="moonHillVal">--</span> km<br>
         Hill Radius (System): <span id="sysHillVal">--</span> km<br>
         <br>
-        <b>Current Satellite</b><br>
-        Orbit: <span id="orbitType">LEO Circular</span><br>
-        Altitude: <span id="satAlt">400</span> km<br>
-        Velocity: <span id="satVel">7.67</span> km/s<br>
-        <br>
-        <b>Selected Transfer</b><br>
-        <span id="transferInfo">None selected</span>
     </div>
 
-    <div class="trajectory-list">
-        <h3>Ballistic Capture Opportunities</h3>
-        <div id="trajectoryListContent">
-            <div style="color: #888; text-align: center; padding: 20px;">
-                Click "Search Ballistic Captures" to find trajectories
-            </div>
-        </div>
-    </div>
-
-    <div class="scatter-panel">
-        <h3>Solution Space (Δv vs Time)</h3>
-        <canvas id="scatterCanvas"></canvas>
-    </div>
 
     <div class="poincare-panel" id="poincarePanel">
         <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -322,17 +197,6 @@ const normToDays = (norm) => (norm * TIME_UNIT) / (24 * 3600);
 // ============================================================================
 // SIMULATION STATE
 // ============================================================================
-let leoAltitude = 400; // km
-let searchDuration = 120; // days
-let particleCount = 200;
-
-let satellite = null; // Current satellite state
-let leoOrbit = null; // Reference LEO orbit
-let trajectories = []; // Found ballistic capture trajectories
-let selectedTrajectory = null;
-let isSearching = false;
-let testParticles = []; // Test particles for visualization
-let backwardPaths = []; // Backward propagation paths for debugging
 let manifoldPaths = []; // Invariant Manifolds (L1/L2)
 
 // Camera
@@ -500,28 +364,7 @@ function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, s
 // ============================================================================
 // LEO ORBIT INITIALIZATION
 // ============================================================================
-function initializeLEO(altitude_km) {
-    // Circular LEO in rotating frame
-    const r_km = EARTH_RADIUS + altitude_km;
-    const r_norm = kmToNorm(r_km);
-    
-    // Velocity for circular orbit around Earth
-    const v_circular_kms = Math.sqrt(MU_EARTH / r_km);
-    const v_circular_norm = kmsToNorm(v_circular_kms);
-    
-    // Position in rotating frame (Earth is at -MASS_RATIO, 0)
-    const x = -MASS_RATIO + r_norm;
-    const y = 0;
-    
-    // Velocity in rotating frame (circular orbit + frame rotation)
-    // For circular orbit: v_inertial = sqrt(μ/r) in tangent direction
-    // In rotating frame: v_rotating = v_inertial - ω × r
-    // With ω = 1 (normalized), ω × r = (-y, x)
-    const vx = -y; // Frame rotation contribution
-    const vy = x + MASS_RATIO + v_circular_norm; // Orbital velocity + frame rotation
-    
-    return { x, y, vx, vy, altitude_km, r_norm };
-}
+
 
 // ============================================================================
 // WORKER SETUP
@@ -543,26 +386,6 @@ searchWorker.onmessage = function(e) {
     if (type === 'SYSTEM_INFO') {
         systemInfo = payload;
         console.log("System Info Received:", systemInfo);
-    } else if (type === 'PROGRESS') {
-        const { iterations, trajectories: newTrajs, debugPaths } = payload;
-        
-        // Update stats
-        document.getElementById('statTested').textContent = iterations.toLocaleString();
-        
-        // Add new trajectories
-        if (newTrajs && newTrajs.length > 0) {
-            trajectories.push(...newTrajs);
-            trajectories.sort((a, b) => a.delta_v.total - b.delta_v.total);
-            updateTrajectoryList();
-            
-            document.getElementById('statFound').textContent = trajectories.length;
-            updateScatterPlot();
-        }
-
-        // Update debug paths for visualization
-        if (debugPaths && debugPaths.length > 0) {
-            backwardPaths = debugPaths; // Replace previous batch to avoid clutter
-        }
     } else if (type === 'DONE') {
         stopSearch(payload);
     } else if (type === 'MANIFOLDS_GENERATED') {
@@ -601,221 +424,7 @@ searchWorker.onmessage = function(e) {
 // ============================================================================
 // BALLISTIC CAPTURE SEARCH (WORKER BASED)
 // ============================================================================
-async function searchBallisticCaptures() {
-    const searchBtn = document.getElementById('searchBtn');
-    
-    // Toggle Search
-    if (isSearching) {
-        searchWorker.postMessage({ type: 'STOP_SEARCH' });
-        stopSearch("User stopped.");
-        return;
-    }
-    
-    isSearching = true;
-    searchBtn.textContent = '⏹ Stop Search';
-    searchBtn.classList.add('computing');
-    
-    const progressBar = document.getElementById('progressBar');
-    const progressFill = document.getElementById('progressFill');
-    const searchStats = document.getElementById('searchStats');
-    
-    progressBar.style.display = 'block';
-    progressFill.style.width = '100%'; 
-    progressFill.style.backgroundColor = '#4a9eff'; // Blue
-    
-    searchStats.style.display = 'flex';
-    document.getElementById('timeWrapper').style.display = 'none'; // Worker manages timeout implicitly
-    
-    document.getElementById('statTested').textContent = '0';
-    document.getElementById('statFound').textContent = '0';
-    
-    trajectories = []; // Clear for new search
-    backwardPaths = []; // Clear debug paths
-    testParticles = []; // Clear test points
-    selectedTrajectory = null;
-    updateTrajectoryList();
-    updateScatterPlot();
-    
-    const duration_norm = daysToNorm(searchDuration);
-    const leo_r_norm = leoOrbit.r_norm;
-    
-    console.log('Starting worker search...');
-    searchWorker.postMessage({ 
-        type: 'START_SEARCH', 
-        payload: { duration_norm, leo_r_norm } 
-    });
-}
 
-function stopSearch(message) {
-    isSearching = false;
-    const searchBtn = document.getElementById('searchBtn');
-    searchBtn.textContent = '🔍 Search Ballistic Captures';
-    searchBtn.classList.remove('computing');
-    
-    const progressBar = document.getElementById('progressBar');
-    const progressFill = document.getElementById('progressFill');
-    
-    // If we found something, show green, else stay indeterminate?
-    // Actually just stop animation
-    if (trajectories.length > 0) {
-        progressFill.style.width = '100%';
-        progressFill.style.backgroundColor = '#4CAF50';
-    } else {
-        progressBar.style.display = 'none';
-        console.log(message || "No trajectories found.");
-    }
-    
-    // Hide time
-    const timeWrapper = document.getElementById('timeWrapper');
-    if (timeWrapper) timeWrapper.style.display = 'none';
-}
-
-// Functions getStateFromParams, calculateDeltas, optimizeCandidate removed - moved to Worker
-
-// ============================================================================
-// UI UPDATES
-// ============================================================================
-function updateTrajectoryList() {
-    // Ensure sorted by Delta-V
-    trajectories.sort((a, b) => a.delta_v.total - b.delta_v.total);
-
-    const container = document.getElementById('trajectoryListContent');
-    
-    // 1. Handle Empty State
-    if (trajectories.length === 0) {
-        // Check if we are already showing the empty message to avoid continuous innerHTML writes
-        if (!container.querySelector('.empty-msg')) {
-             container.innerHTML = '<div class="empty-msg" style="color: #888; text-align: center; padding: 20px;">No trajectories found. Try adjusting parameters.</div>';
-        }
-        return;
-    }
-    
-    // Remove "No trajectories" message if present
-    const noTrajMsg = container.querySelector('.empty-msg');
-    if (noTrajMsg) {
-        noTrajMsg.remove();
-    }
-    
-    // 2. Create map of existing elements for reuse
-    const existingMap = new Map();
-    Array.from(container.children).forEach(child => {
-        if (child.dataset.id) existingMap.set(child.dataset.id, child);
-    });
-
-    // 3. Reconcile - Make DOM match 'trajectories' order
-    let nextSibling = container.firstElementChild;
-    
-    trajectories.forEach((traj) => {
-        let item = existingMap.get(traj.id);
-        
-        // Create if doesn't exist
-        if (!item) {
-            item = document.createElement('div');
-            item.className = 'trajectory-item';
-            item.dataset.id = traj.id;
-            item.onclick = () => selectTrajectory(traj);
-
-            const captureLabel = traj.is_capture ? '🎯 CAPTURE' : '🌙 Approach';
-            const orbitInfo = traj.orbit_count ? ` (${traj.orbit_count.toFixed(2)} orbits)` : '';
-            
-            // Only set innerHTML on creation
-            item.innerHTML = `
-                <div class="dv">${captureLabel} | Total Δv: ${traj.delta_v.total.toFixed(3)} km/s</div>
-                <div class="details" style="line-height: 1.5;">
-                    <span style="color: #4af">Earth Δv: ${traj.delta_v.earth.toFixed(3)}</span> | 
-                    <span style="color: #ffaa44">Moon Δv: ${traj.delta_v.moon.toFixed(3)}</span><br>
-                    Delay: <b style="color:#fff">${traj.delay_days.toFixed(1)}d</b> | 
-                    Transfer: ${traj.time_days.toFixed(1)}d | 
-                    Orbit: ${traj.lunar_orbit_km.toFixed(0)} km${orbitInfo}<br>
-                    Min Moon Dist: ${traj.min_moon_dist_km.toFixed(0)} km | 
-                    LEO Error: ${traj.intercept_dist_km.toFixed(0)} km
-                </div>
-            `;
-        }
-        
-        // Update Selection State
-        if (selectedTrajectory === traj) {
-            item.classList.add('selected');
-        } else {
-            item.classList.remove('selected');
-        }
-        
-        // DOM Placement logic
-        // We want 'item' to be at the current iteration position.
-        // 'nextSibling' tracks the current DOM cursor.
-        
-        if (item === nextSibling) {
-            // It's already in the right place!
-            nextSibling = nextSibling.nextElementSibling;
-        } else {
-            // It's not in the right place, or it's new.
-            // Insert it before 'nextSibling'.
-            // If nextSibling is null, it appends.
-            // insertBefore moves the element if it's already in the DOM.
-            container.insertBefore(item, nextSibling);
-            
-            // Note: We do NOT advance nextSibling here because the node that WAS at nextSibling
-            // is still waiting to be matched (unless it was 'item' which we handled in the if block).
-        }
-    });
-    
-    // 4. Cleanup
-    // Remove any DOM nodes that are NOT in the trajectory list
-    // (These are nodes that were skipped over by the reconciliation process because their IDs are gone)
-    const validIds = new Set(trajectories.map(t => t.id));
-    Array.from(container.children).forEach(child => {
-        if (child.dataset.id && !validIds.has(child.dataset.id)) {
-            child.remove();
-        }
-    });
-}
-
-function selectTrajectory(traj) {
-    selectedTrajectory = traj;
-    
-    // DEBUG: Print Green Dot Info
-    if (traj.path.length > 0) {
-        const startPoint = traj.path[0];
-        const earth_x = -MASS_RATIO;
-        const r_sq = (startPoint.x - earth_x)**2 + startPoint.y**2;
-        const r_dist_norm = Math.sqrt(r_sq);
-        const r_dist_km = normToKm(r_dist_norm);
-        const leo_orbit_km = EARTH_RADIUS + leoAltitude;
-        const diff_km = Math.abs(r_dist_km - leo_orbit_km);
-        
-        console.log("=== Selected Trajectory Info ===");
-        console.log(`ID: ${traj.id}`);
-        console.log(`Total Δv: ${traj.delta_v.total.toFixed(4)} km/s`);
-        console.log(`Earth Δv: ${traj.delta_v.earth.toFixed(4)} km/s`);
-        console.log(`Moon Δv: ${traj.delta_v.moon.toFixed(4)} km/s`);
-        console.log(`Distance from LEO Orbit: ${diff_km.toFixed(3)} km`);
-        console.log(`Path Length: ${traj.path.length}`);
-        console.log("================================");
-    }
-
-    updateTrajectoryList();
-    updateTransferInfo();
-    drawScatterPlot();
-}
-
-function updateTransferInfo() {
-    const info = document.getElementById('transferInfo');
-    
-    if (!selectedTrajectory) {
-        info.innerHTML = 'None selected';
-        return;
-    }
-    
-    const t = selectedTrajectory;
-    info.innerHTML = `
-        Total Δv: ${t.delta_v.total.toFixed(3)} km/s<br>
-        <span style="color:#4af">Earth Exit: ${t.delta_v.earth.toFixed(3)} km/s</span><br>
-        <span style="color:#ffaa44">Moon Insert: ${t.delta_v.moon.toFixed(3)} km/s</span><br>
-        Launch Delay: ${(t.delay_days || 0).toFixed(1)} days<br>
-        Transfer Time: ${(t.time_days || 0).toFixed(1)} days<br>
-        Intercept Error: ${(t.intercept_dist_km || 0).toFixed(0)} km
-    `;
-}
 
 // ============================================================================
 // RENDERING
@@ -892,10 +501,8 @@ function draw() {
         
         // Draw Sun Direction
         let sun_t = 0;
-        if (selectedTrajectory && selectedTrajectory.path) {
-            const t_offset = selectedTrajectory.initial_sun_angle || 0;
-            sun_t = t_offset / (SUN_FREQ_IN_FRAME || 1); 
-        }
+        // selectedTrajectory was removed. Defaults to 0 which is fine.
+        
         
         const sun_angle = (SUN_FREQ_IN_FRAME || 0) * sun_t;
         const sun_dir_x = -Math.cos(sun_angle);
@@ -1028,89 +635,7 @@ function draw() {
             });
         }
 
-        // Draw LEO orbit
-        if (leoOrbit && leoOrbit.r_norm) {
-            ctx.strokeStyle = 'rgba(74, 158, 255, 0.3)';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            
-            const leo_r = leoOrbit.r_norm;
-            for (let angle = 0; angle <= 2 * Math.PI; angle += 0.1) {
-                const x = earth_x + leo_r * Math.cos(angle);
-                const y = leo_r * Math.sin(angle);
-                const pos = worldToCanvas(x, y);
-                
-                if (angle === 0) {
-                    ctx.moveTo(pos.x, pos.y);
-                } else {
-                    ctx.lineTo(pos.x, pos.y);
-                }
-            }
-            ctx.stroke();
-            
-            // Draw satellite
-            if (satellite) {
-                const sat_pos = worldToCanvas(satellite.x, satellite.y);
-                ctx.fillStyle = '#00ff88';
-                ctx.beginPath();
-                ctx.arc(sat_pos.x, sat_pos.y, 6, 0, Math.PI * 2);
-                ctx.fill();
-                
-                ctx.fillStyle = '#00ff88';
-                ctx.font = 'bold 12px monospace';
-                ctx.fillText('Satellite', sat_pos.x + 10, sat_pos.y - 10);
-            }
-        }
-        
-        // Draw selected trajectory
-        if (selectedTrajectory && selectedTrajectory.path) {
-            drawPath(selectedTrajectory.path, '#00ff88', 2);
-            
-            // Draw start point
-            if (selectedTrajectory.path.length > 0) {
-                const start = selectedTrajectory.path[0];
-                const start_pos = worldToCanvas(start.x, start.y);
-                ctx.fillStyle = '#00ff88';
-                ctx.beginPath();
-                ctx.arc(start_pos.x, start_pos.y, 5, 0, Math.PI * 2);
-                ctx.fill();
-                
-                // Draw end point
-                const end = selectedTrajectory.path[selectedTrajectory.path.length - 1];
-                const end_pos = worldToCanvas(end.x, end.y);
-                ctx.fillStyle = '#ff4488';
-                ctx.beginPath();
-                ctx.arc(end_pos.x, end_pos.y, 5, 0, Math.PI * 2);
-                ctx.fill();
-            }
-        }
-        
-        // Draw all trajectories faintly
-        if (trajectories) {
-            trajectories.forEach(traj => {
-                if (traj !== selectedTrajectory && traj.path) {
-                    drawPath(traj.path, 'rgba(100, 150, 200, 0.15)', 1);
-                }
-            });
-        }
-        
-        // Draw test particles
-        if (testParticles && testParticles.length > 0) {
-            testParticles.forEach(p => {
-                const pos = worldToCanvas(p.x, p.y);
-                ctx.fillStyle = 'rgba(0, 255, 255, 0.5)';
-                ctx.beginPath();
-                ctx.arc(pos.x, pos.y, 3, 0, Math.PI * 2);
-                ctx.fill();
-            });
-        }
-        
-        // Draw backward paths
-        if (backwardPaths && backwardPaths.length > 0) {
-            backwardPaths.forEach(path => {
-                if (path) drawPath(path, 'rgba(0, 255, 255, 0.1)', 1);
-            });
-        }
+
         
         // Highlight Hovered Manifold from Poincare
         // Highlight Hovered Manifold from Poincare (White Highlight Removed, now handled by opacity)
@@ -1473,27 +998,7 @@ window.addEventListener('keydown', (e) => {
 // ============================================================================
 // UI EVENT HANDLERS
 // ============================================================================
-document.getElementById('leoAlt').addEventListener('input', (e) => {
-    leoAltitude = parseFloat(e.target.value);
-    document.getElementById('leoAltVal').textContent = leoAltitude;
-    leoOrbit = initializeLEO(leoAltitude);
-    satellite = { ...leoOrbit };
-    
-    // Update stats
-    const v_kms = normToKms(Math.sqrt(leoOrbit.vx**2 + leoOrbit.vy**2));
-    document.getElementById('satAlt').textContent = leoAltitude;
-    document.getElementById('satVel').textContent = v_kms.toFixed(2);
-});
 
-document.getElementById('durationSlider').addEventListener('input', (e) => {
-    searchDuration = parseFloat(e.target.value);
-    document.getElementById('durVal').textContent = searchDuration;
-});
-
-
-document.getElementById('searchBtn').addEventListener('click', () => {
-    searchBallisticCaptures();
-});
 
 let l1Amplitude = 10000;
 let l2Amplitude = 20000;
@@ -1565,274 +1070,12 @@ document.getElementById('l2AmpInc').addEventListener('click', () => {
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
-leoOrbit = initializeLEO(leoAltitude);
-satellite = { ...leoOrbit };
 
-// Update initial stats
-const v_kms = normToKms(Math.sqrt(leoOrbit.vx**2 + leoOrbit.vy**2));
-document.getElementById('satAlt').textContent = leoAltitude;
-document.getElementById('satVel').textContent = v_kms.toFixed(2);
 
 // ============================================================================
 // SCATTER PLOT
 // ============================================================================
-const scatterCanvas = document.getElementById('scatterCanvas');
-const scatterCtx = scatterCanvas.getContext('2d');
-let scatterBounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
-let hoveredTrajectory = null;
-let hoverPos = { x: 0, y: 0 };
 
-function updateScatterPlot() {
-    // Resize canvas to match display size
-    const rect = scatterCanvas.getBoundingClientRect();
-    scatterCanvas.width = rect.width;
-    scatterCanvas.height = rect.height;
-
-    if (!trajectories || trajectories.length === 0) {
-        scatterCtx.clearRect(0, 0, scatterCanvas.width, scatterCanvas.height);
-        scatterCtx.fillStyle = '#666';
-        scatterCtx.font = '12px monospace';
-        scatterCtx.textAlign = 'center';
-        scatterCtx.fillText('No Data', scatterCanvas.width/2, scatterCanvas.height/2);
-        return;
-    }
-
-    // Find bounds
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-
-    trajectories.forEach(t => {
-        const x = (t.time_days || 0) + (t.delay_days || 0); // Total Time
-        const y = t.delta_v.total; // Total Delta-V
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-    });
-
-    // Add padding
-    const rangeX = Math.max(maxX - minX, 1);
-    const rangeY = Math.max(maxY - minY, 0.1);
-    
-    scatterBounds = {
-        minX: minX - rangeX * 0.1,
-        maxX: maxX + rangeX * 0.1,
-        minY: minY - rangeY * 0.1,
-        maxY: maxY + rangeY * 0.1
-    };
-
-    drawScatterPlot();
-}
-
-function drawScatterPlot() {
-    const w = scatterCanvas.width;
-    const h = scatterCanvas.height;
-    scatterCtx.clearRect(0, 0, w, h);
-    
-    const { minX, maxX, minY, maxY } = scatterBounds;
-    const rangeX = maxX - minX;
-    const rangeY = maxY - minY;
-    
-    if (rangeX === 0 || rangeY === 0) return;
-
-    const marginL = 35;
-    const marginB = 25;
-    const plotW = w - marginL - 10;
-    const plotH = h - marginB - 10;
-
-    const mapX = (val) => marginL + ((val - minX) / rangeX) * plotW;
-    const mapY = (val) => (h - marginB) - ((val - minY) / rangeY) * plotH;
-
-    // Draw Axes
-    scatterCtx.strokeStyle = '#555';
-    scatterCtx.lineWidth = 1;
-    scatterCtx.beginPath();
-    scatterCtx.moveTo(marginL, 10);
-    scatterCtx.lineTo(marginL, h - marginB);
-    scatterCtx.lineTo(w - 5, h - marginB);
-    scatterCtx.stroke();
-
-    // Draw Points
-    trajectories.forEach(t => {
-        const xVal = (t.time_days || 0) + (t.delay_days || 0);
-        const yVal = t.delta_v.total;
-        
-        const cx = mapX(xVal);
-        const cy = mapY(yVal);
-        
-        const isSel = (t === selectedTrajectory);
-        const isHover = (t === hoveredTrajectory);
-        
-        scatterCtx.beginPath();
-        // Slightly larger if hovered
-        const radius = (isSel || isHover) ? (isSel ? 5 : 4) : 2.5;
-        scatterCtx.arc(cx, cy, radius, 0, Math.PI*2);
-        
-        if (isSel) {
-            scatterCtx.fillStyle = '#00ff88';
-            scatterCtx.fill();
-            scatterCtx.strokeStyle = '#fff';
-            scatterCtx.lineWidth = 2;
-            scatterCtx.stroke();
-        } else if (isHover) {
-            scatterCtx.fillStyle = '#ffaa44'; // Orange for hover
-            scatterCtx.fill();
-            scatterCtx.strokeStyle = '#fff';
-            scatterCtx.lineWidth = 1;
-            scatterCtx.stroke();
-        } else {
-            scatterCtx.fillStyle = 'rgba(74, 158, 255, 0.8)';
-            scatterCtx.fill();
-        }
-    });
-
-    // Draw Tooltip if hovered
-    if (hoveredTrajectory) {
-        const t = hoveredTrajectory;
-        const xVal = (t.time_days || 0) + (t.delay_days || 0);
-        const yVal = t.delta_v.total;
-        
-        const cx = mapX(xVal);
-        const cy = mapY(yVal);
-        
-        // Tooltip text
-        const textLines = [
-            `Δv: ${yVal.toFixed(3)} km/s`,
-            `Time: ${xVal.toFixed(1)} days`
-        ];
-        
-        scatterCtx.font = '10px monospace';
-        const lineHeight = 14;
-        const padding = 6;
-        let maxWidth = 0;
-        textLines.forEach(line => {
-            const m = scatterCtx.measureText(line);
-            if (m.width > maxWidth) maxWidth = m.width;
-        });
-        
-        const boxW = maxWidth + padding * 2;
-        const boxH = textLines.length * lineHeight + padding * 2;
-        
-        // Position tooltip to avoid edges
-        let tx = cx + 10;
-        let ty = cy - boxH - 10;
-        
-        if (tx + boxW > w) tx = cx - boxW - 10;
-        if (ty < 0) ty = cy + 10;
-        
-        // Draw box
-        scatterCtx.fillStyle = 'rgba(20, 20, 30, 0.9)';
-        scatterCtx.strokeStyle = '#666';
-        scatterCtx.lineWidth = 1;
-        scatterCtx.fillRect(tx, ty, boxW, boxH);
-        scatterCtx.strokeRect(tx, ty, boxW, boxH);
-        
-        // Draw text
-        scatterCtx.fillStyle = '#fff';
-        scatterCtx.textAlign = 'left';
-        textLines.forEach((line, i) => {
-            scatterCtx.fillText(line, tx + padding, ty + padding + (i+1)*10); // slightly adjusted y for baseline
-        });
-    }
-
-    // Labels
-    scatterCtx.fillStyle = '#aaa';
-    scatterCtx.font = '10px monospace';
-    scatterCtx.textAlign = 'center';
-    scatterCtx.fillText('Time (Delay+Flight) [days]', marginL + plotW/2, h - 5);
-    
-    scatterCtx.save();
-    scatterCtx.translate(12, h - marginB - plotH/2);
-    scatterCtx.rotate(-Math.PI/2);
-    scatterCtx.fillText('Total Δv [km/s]', 0, 0);
-    scatterCtx.restore();
-    
-    // Min/Max Labels
-    scatterCtx.textAlign = 'right';
-    scatterCtx.fillText(maxY.toFixed(2), marginL - 5, mapY(maxY));
-    scatterCtx.fillText(minY.toFixed(2), marginL - 5, mapY(minY));
-    
-    scatterCtx.textAlign = 'center';
-    scatterCtx.fillText(minX.toFixed(0), mapX(minX), h - marginB + 10);
-    scatterCtx.fillText(maxX.toFixed(0), mapX(maxX), h - marginB + 10);
-}
-
-// Interaction
-function getTrajectoryAt(mx, my) {
-    if (!trajectories || trajectories.length === 0) return null;
-    
-    const { minX, maxX, minY, maxY } = scatterBounds;
-    const w = scatterCanvas.width;
-    const h = scatterCanvas.height;
-    
-    const rangeX = maxX - minX;
-    const rangeY = maxY - minY;
-    
-    if (rangeX === 0 || rangeY === 0) return null;
-
-    const marginL = 35;
-    const marginB = 25;
-    const plotW = w - marginL - 10;
-    const plotH = h - marginB - 10;
-
-    let bestDist = 10; // Hit radius
-    let bestTraj = null;
-    
-    trajectories.forEach(t => {
-        const xVal = (t.time_days || 0) + (t.delay_days || 0);
-        const yVal = t.delta_v.total;
-        
-        const cx = marginL + ((xVal - minX) / rangeX) * plotW;
-        const cy = (h - marginB) - ((yVal - minY) / rangeY) * plotH;
-        
-        const dx = mx - cx;
-        const dy = my - cy;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestTraj = t;
-        }
-    });
-    
-    return bestTraj;
-}
-
-scatterCanvas.addEventListener('click', (e) => {
-    const rect = scatterCanvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    
-    const traj = getTrajectoryAt(mx, my);
-    if (traj) {
-        selectTrajectory(traj);
-        // Note: selectTrajectory triggers redraw via logic elsewhere or we can force it
-        drawScatterPlot();
-    }
-});
-
-scatterCanvas.addEventListener('mousemove', (e) => {
-    const rect = scatterCanvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    
-    const traj = getTrajectoryAt(mx, my);
-    if (traj !== hoveredTrajectory) {
-        hoveredTrajectory = traj;
-        hoverPos = { x: mx, y: my };
-        drawScatterPlot();
-        
-        // Show pointer cursor if hovering over a point
-        scatterCanvas.style.cursor = traj ? 'pointer' : 'default';
-    }
-});
-
-scatterCanvas.addEventListener('mouseleave', () => {
-    if (hoveredTrajectory) {
-        hoveredTrajectory = null;
-        drawScatterPlot();
-    }
-});
 
 // Initial Manifold Generation
 updateManifolds();
@@ -1876,7 +1119,12 @@ function updateSectionBounds() {
             const pad = 0.05;
             if (sec.type === 'horizontal') {
                 sec.xMin = bounds[sec.id].min; // - pad;
-                sec.xMax = bounds[sec.id].max; // + pad;
+                if (sec.id === 'u1') {
+                     // Keep U1 capped at Earth Surface
+                     sec.xMax = -MASS_RATIO - kmToNorm(EARTH_RADIUS);
+                } else {
+                     sec.xMax = bounds[sec.id].max; // + pad;
+                }
             } else {
                 sec.yMin = bounds[sec.id].min; // - pad;
                 sec.yMax = bounds[sec.id].max; // + pad;
@@ -2039,22 +1287,59 @@ function drawPoincarePlot(points) {
     }
     
     // Calculate Base Bounds if reset needed or not set
+    // Calculate Base Bounds if reset needed or not set
     if (!poincareView.base || poincareView.reset) {
          let minY = Infinity, maxY = -Infinity;
          let minVy = Infinity, maxVy = -Infinity;
          
+         // Velocity limits from data
          points.forEach(p => {
-             if (p.y < minY) minY = p.y;
-             if (p.y > maxY) maxY = p.y;
              if (p.vy < minVy) minVy = p.vy;
              if (p.vy > maxVy) maxVy = p.vy;
          });
          
-         const padY = (maxY - minY) * 0.1 || 0.1;
-         const padVy = (maxVy - minVy) * 0.1 || 0.1;
+         // Position limits from Section definition
+         if (currentPoincareSection) {
+            // Determine position bounds from section
+            let sMin, sMax;
+            if (currentPoincareSection.type === 'horizontal') {
+                sMin = currentPoincareSection.xMin;
+                sMax = currentPoincareSection.xMax;
+            } else {
+                sMin = currentPoincareSection.yMin;
+                sMax = currentPoincareSection.yMax;
+            }
+
+            // Use section bounds if they exist
+            if (sMin !== undefined && sMax !== undefined && Math.abs(sMax - sMin) > 1e-9) {
+                 minY = Math.min(sMin, sMax);
+                 maxY = Math.max(sMin, sMax);
+            } else {
+                 // Fallback to data bounds with padding
+                 points.forEach(p => {
+                     if (p.y < minY) minY = p.y;
+                     if (p.y > maxY) maxY = p.y;
+                 });
+                 const pad = (maxY - minY) * 0.1 || 0.1;
+                 minY -= pad; maxY += pad;
+            }
+         } else {
+             // Fallback
+             points.forEach(p => {
+                 if (p.y < minY) minY = p.y;
+                 if (p.y > maxY) maxY = p.y;
+             });
+             const pad = (maxY - minY) * 0.1 || 0.1;
+             minY -= pad; maxY += pad;
+         }
          
-         minY -= padY; maxY += padY;
+         // Pad Velocity
+         const padVy = (maxVy - minVy) * 0.1 || 0.1;
          minVy -= padVy; maxVy += padVy;
+         
+         // Safety check
+         if (minVy >= maxVy) { minVy -= 1; maxVy += 1; }
+         if (minY >= maxY) { minY -= 0.1; maxY += 0.1; }
          
          poincareView.base = {
              cx: (minY + maxY) / 2,
