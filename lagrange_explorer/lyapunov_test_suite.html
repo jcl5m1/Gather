@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Lyapunov Convergence Test Suite</title>
+    <style>
+        body { background: #111; color: #eee; font-family: monospace; padding: 20px; }
+        .pass { color: #4f4; }
+        .fail { color: #f44; }
+        .info { color: #88f; }
+        #results { margin-top: 20px; border-top: 1px solid #444; padding-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Lyapunov Convergence Test Suite</h1>
+    <div id="status">Running tests...</div>
+    <div id="results"></div>
+
+    <script>
+        // Mock self/postMessage to prevent errors if the file assumes worker env
+        window.self = window;
+    </script>
+
+    <!-- Load physics and logic -->
+    <script src="threebody_worker.js"></script>
+
+    <script>
+        function log(msg, type = 'normal') {
+            const div = document.createElement('div');
+            div.textContent = msg;
+            if (type === 'pass') div.className = 'pass';
+            if (type === 'fail') div.className = 'fail';
+            if (type === 'info') div.className = 'info';
+            document.getElementById('results').appendChild(div);
+            console.log(msg);
+        }
+
+        async function runTests() {
+            try {
+                const lp = solveLagrangePoints();
+                log(`Lagrange Points solved. L1: ${lp.l1.toFixed(5)}`, 'info');
+
+                // Test cases
+                const testCases = [
+                    { name: "L1 Small Amplitude (1000 km)", l_x: lp.l1, amp: 1000 },
+                    { name: "L1 Medium Amplitude (10000 km)", l_x: lp.l1, amp: 10000 },
+                    { name: "L1 Large Amplitude (20000 km) [PREVIOUSLY FAILING]", l_x: lp.l1, amp: 20000 },
+                    { name: "L1 Very Large Amplitude (30000 km)", l_x: lp.l1, amp: 30000 },
+                    { name: "L2 Large Amplitude (20000 km)", l_x: lp.l2, amp: 20000 }
+                ];
+
+                let passed = 0;
+
+                for (const test of testCases) {
+                    log(`Running ${test.name}...`);
+                    const start = performance.now();
+                    try {
+                        const res = computeLyapunov(test.l_x, test.amp);
+                        const duration = performance.now() - start;
+                        
+                        // Validation
+                        const err = Math.abs(res.amplitude_km - test.amp);
+                        if (err < 100) { // Tolerance of 100km
+                            log(`[PASS] Converged to ${res.amplitude_km.toFixed(1)} km in ${duration.toFixed(0)}ms. Period: ${res.period.toFixed(4)}`, 'pass');
+                            passed++;
+                        } else {
+                            log(`[FAIL] Result Amplitude ${res.amplitude_km.toFixed(1)} km does not match target ${test.amp} km`, 'fail');
+                        }
+                    } catch (e) {
+                         log(`[FAIL] Exception: ${e.message}`, 'fail');
+                         console.error(e);
+                    }
+                    log("-".repeat(40));
+                }
+
+                document.getElementById('status').textContent = `Tests Complete: ${passed}/${testCases.length} Passed`;
+                if (passed === testCases.length) {
+                    document.getElementById('status').className = 'pass';
+                } else {
+                    document.getElementById('status').className = 'fail';
+                }
+
+            } catch (e) {
+                log("Critical Error: " + e.message, 'fail');
+            }
+        }
+
+        window.onload = runTests;
+    </script>
+</body>
+</html>

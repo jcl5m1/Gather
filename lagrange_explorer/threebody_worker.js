@@ -112,15 +112,16 @@ function computeLyapunov(l_x, amplitude_km) {
         let converged = false;
 
         // Single Shooting Loop
-        for (let iter=0; iter<50; iter++) { // Increased iterations
+        for (let iter=0; iter<100; iter++) { // Increased iterations
             let s = { x: x0, y: 0, vx: 0, vy: best_vy };
             
-            let dt = 0.002; 
+            // Smaller time step for better precision at large amplitudes
+            let dt = 0.001; 
             let t = 0;
             let crossed = false;
             
             // Allow for significant period variation
-            const limit_t = (Math.PI / nu) * 4.0;
+            const limit_t = (Math.PI / nu) * 8.0;
             
             while (t < limit_t) {
                 const next = rk4Step(s, dt, t);
@@ -141,8 +142,8 @@ function computeLyapunov(l_x, amplitude_km) {
                 
                 // Escape checks
                 const dist = Math.abs(s.x - l_x);
-                // Flexible bound: at least 60,000km, or 4x amplitude
-                const max_dist = Math.max(0.15, 4 * target_amp_norm); 
+                // Relaxed bound: 0.5 (halfway to Earth approx) or much larger
+                const max_dist = 0.5; 
                 if (dist > max_dist || Math.abs(s.y) > max_dist) break;
                 
                 // Crash into Moon check
@@ -155,8 +156,8 @@ function computeLyapunov(l_x, amplitude_km) {
             
             if (!crossed) {
                  // Severe failure to cross y=0 inside bounds/time
-                 if (iter < 20) best_vy *= 1.05; // Try adding energy
-                 else best_vy *= 0.95;
+                 if (iter < 40) best_vy *= 1.02; // Gentler search
+                 else best_vy *= 0.98;
                  continue;
             }
             
@@ -189,7 +190,7 @@ function computeLyapunov(l_x, amplitude_km) {
                     break;
                 }
                 const dist = Math.abs(s_p.x - l_x);
-                 const max_dist = Math.max(0.15, 4 * target_amp_norm);
+                 const max_dist = 0.5; 
                 if (dist > max_dist || Math.abs(s_p.y) > max_dist) break;
                 s_p = next;
                 t_p += dt;
@@ -203,12 +204,12 @@ function computeLyapunov(l_x, amplitude_km) {
             const grad = (s_p.vx - s.vx) / d_vy;
             
             if (Math.abs(grad) < 1e-12) {
-                 best_vy += (s.vx > 0 ? -1 : 1) * 0.001; 
+                 best_vy += (s.vx > 0 ? -1 : 1) * 0.0001; 
             } else {
                  const adj = -s.vx / grad;
                  // Damped Newton
                  let step = adj;
-                 const max_change = best_vy * 0.1; // Allowed 10% change
+                 const max_change = best_vy * 0.05; // Restricted change to 5%
                  if (Math.abs(step) > max_change) step = max_change * Math.sign(step);
                  best_vy += step;
             }
