@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Earth-Moon Ballistic Capture Explorer</title>
+    <title>Earth-Moon Three-Body Explorer</title>
     <style>
         body { 
             background: #0a0a0a; 
@@ -102,21 +102,16 @@
     <div class="ui-panel">
         <h3>🌍 Earth-Moon Lagrange Explorer</h3>
         
-        <div class="control-group" style="margin-bottom: 5px;">
-            <label for="l1AmpSlider">L1 Amplitude: <span id="l1AmpVal">10000</span> km</label>
-            <div style="display: flex; gap: 5px;">
-                <button id="l1AmpDec" style="background: #444; width: 40px;">-</button>
-                <input type="range" id="l1AmpSlider" min="1000" max="50000" step="50" value="10000" style="flex: 1;">
-                <button id="l1AmpInc" style="background: #444; width: 40px;">+</button>
-            </div>
-        </div>
-
         <div class="control-group" style="margin-bottom: 15px;">
-            <label for="l2AmpSlider">L2 Amplitude: <span id="l2AmpVal">20000</span> km</label>
+            <label for="jacobiSlider">Jacobi Constant C: <span id="jacobiVal">3.150</span></label>
+            <div style="font-size: 11px; color: #aaa; margin-bottom: 4px;" id="jacobiLevel">L1+L2 orbits open</div>
             <div style="display: flex; gap: 5px;">
-                <button id="l2AmpDec" style="background: #444; width: 40px;">-</button>
-                <input type="range" id="l2AmpSlider" min="5000" max="50000" step="100" value="20000" style="flex: 1;">
-                <button id="l2AmpInc" style="background: #444; width: 40px;">+</button>
+                <button id="jacobiDec" style="background: #444; width: 40px;">-</button>
+                <input type="range" id="jacobiSlider" min="2.90" max="3.25" step="0.001" value="3.150" style="flex: 1;">
+                <button id="jacobiInc" style="background: #444; width: 40px;">+</button>
+            </div>
+            <div style="font-size: 10px; color: #555; margin-top: 3px; display: flex; justify-content: space-between;">
+                <span>2.90</span><span>C_L3≈3.012</span><span>C_L2≈3.172</span><span>C_L1≈3.188</span>
             </div>
         </div>
         
@@ -132,6 +127,9 @@
         Hill Radius (Moon): <span id="moonHillVal">--</span> km<br>
         Hill Radius (System): <span id="sysHillVal">--</span> km<br>
         <br>
+        <div id="orbitSearchStatus" style="padding-top: 5px; border-top: 1px dotted #444; margin-top: 5px;">
+             <b>Orbit Search:</b> <span id="orbitSearchMsg" style="color: #aaa;">Idle</span>
+        </div>
     </div>
 
 
@@ -193,6 +191,76 @@ const kmsToNorm = (kms) => kms / VEL_UNIT;
 const normToKms = (norm) => norm * VEL_UNIT;
 const daysToNorm = (days) => (days * 24 * 3600) / TIME_UNIT;
 const normToDays = (norm) => (norm * TIME_UNIT) / (24 * 3600);
+
+// ============================================================================
+// JACOBI CONSTANT & ZERO-VELOCITY CURVES
+// ============================================================================
+// C = 2*Ω(x,y) - v²   (Jacobi integral, conserved in CR3BP)
+// Forbidden region: Ω(x,y) < C/2  (particle cannot reach there)
+
+// Reference C values (computed analytically for μ = 0.01215, approximate)
+const C_L1_APPROX = 3.1883;
+const C_L2_APPROX = 3.1722;
+const C_L3_APPROX = 3.0121;
+const C_L45_APPROX = 2.9879;
+
+function getJacobiLevel(C) {
+    if (C > C_L1_APPROX) return 'L1+L2 necks closed (trapped)';
+    if (C > C_L2_APPROX) return 'L1 neck open, L2 closed';
+    if (C > C_L3_APPROX) return 'L1+L2 necks open';
+    if (C > C_L45_APPROX) return 'L1+L2+L3 necks open';
+    return 'Fully accessible';
+}
+
+// Offscreen canvas cache for ZVC forbidden-region overlay
+let zvcOffscreen = null;
+let zvcLastC = null;
+let zvcLastCamKey = null;
+
+function computeZVCCanvas() {
+    const W = 400, H = Math.round(400 * canvas.height / canvas.width);
+    const off = document.createElement('canvas');
+    off.width = W; off.height = H;
+    const offCtx = off.getContext('2d');
+    const img = offCtx.createImageData(W, H);
+    const d = img.data;
+    const halfC = jacobi_C / 2;
+    const mu = MASS_RATIO;
+    const x_earth = -mu, x_moon = 1 - mu;
+
+    for (let py = 0; py < H; py++) {
+        for (let px = 0; px < W; px++) {
+            const sx = (px + 0.5) / W * canvas.width;
+            const sy = (py + 0.5) / H * canvas.height;
+            const wx = (sx - canvas.width / 2) / camera.zoom + camera.x;
+            const wy = (canvas.height / 2 - sy) / camera.zoom + camera.y;
+            const r1 = Math.sqrt((wx - x_earth) ** 2 + wy ** 2);
+            const r2 = Math.sqrt((wx - x_moon) ** 2 + wy ** 2);
+            if (r1 < 0.04 || r2 < 0.015) { // near primaries – always accessible
+                const i = (py * W + px) * 4; d[i + 3] = 0; continue;
+            }
+            const Omega = 0.5 * (wx * wx + wy * wy) + (1 - mu) / r1 + mu / r2;
+            const i = (py * W + px) * 4;
+            if (Omega < halfC) {
+                d[i] = 80; d[i + 1] = 80; d[i + 2] = 80; d[i + 3] = 180;
+            } else {
+                d[i + 3] = 0;
+            }
+        }
+    }
+    offCtx.putImageData(img, 0, 0);
+    return off;
+}
+
+function drawZeroVelocityCurves() {
+    const camKey = `${camera.x.toFixed(4)},${camera.y.toFixed(4)},${camera.zoom.toFixed(1)}`;
+    if (!zvcOffscreen || zvcLastC !== jacobi_C || zvcLastCamKey !== camKey) {
+        zvcOffscreen = computeZVCCanvas();
+        zvcLastC = jacobi_C;
+        zvcLastCamKey = camKey;
+    }
+    ctx.drawImage(zvcOffscreen, 0, 0, canvas.width, canvas.height);
+}
 
 // ============================================================================
 // SIMULATION STATE
@@ -412,18 +480,39 @@ searchWorker.onmessage = function(e) {
         
         // Update visual bounds of sections
         updateSectionBounds();
+    } else if (type === 'PERIODIC_ORBIT_FOUND' || type === 'PERIODIC_ORBIT_FAILED') {
+        if (isCreatingTestBody && payload.id === currentDragId) {
+            testBodyGhost = type === 'PERIODIC_ORBIT_FOUND' ? payload : null;
+            testBodyCrossings = payload.crossings || [];
+            updateTestBodyPoincare();
+            
+            const statusMsg = document.getElementById('orbitSearchMsg');
+            if (statusMsg) {
+                if (type === 'PERIODIC_ORBIT_FOUND' && payload.crossings) {
+                    statusMsg.textContent = `Found ${payload.crossings.length}-orbit resonance`;
+                    statusMsg.style.color = '#00ffff';
+                } else {
+                    const failReason = payload.reason ? `: ${payload.reason}` : '';
+                    statusMsg.textContent = `Search Failed${failReason}`;
+                    statusMsg.style.color = '#ff4444';
+                }
+            }
+        }
+    } else if (type === 'PERIODIC_ORBIT_PROGRESS') {
+        if (isCreatingTestBody && payload.id === currentDragId) {
+            const statusMsg = document.getElementById('orbitSearchMsg');
+            if (statusMsg) {
+                if (payload.init) {
+                    statusMsg.textContent = `Searching ${payload.k}-Orbit Resonance...`;
+                } else {
+                    statusMsg.textContent = `Searching ${payload.k}-Orbit Resonance (Iter ${payload.iter}): Δr=${payload.dist_km.toFixed(1)}km, Δv=${payload.vel_ms.toFixed(1)}m/s`;
+                }
+                statusMsg.style.color = '#ffbb00';
+            }
+        }
     }
 };
 
-// ============================================================================
-// BALLISTIC CAPTURE SEARCH
-// ============================================================================
-// ============================================================================
-// BALLISTIC CAPTURE SEARCH (CONTINUOUS BACKWARD)
-// ============================================================================
-// ============================================================================
-// BALLISTIC CAPTURE SEARCH (WORKER BASED)
-// ============================================================================
 
 
 // ============================================================================
@@ -442,7 +531,10 @@ function draw() {
         
         // Draw grid
         drawGrid();
-        
+
+        // Draw zero-velocity curves (forbidden regions)
+        drawZeroVelocityCurves();
+
         // Draw Earth
         const earth_x = -MASS_RATIO;
         const earth_pos = worldToCanvas(earth_x, 0);
@@ -641,6 +733,57 @@ function draw() {
         // Highlight Hovered Manifold from Poincare (White Highlight Removed, now handled by opacity)
         // if (hoveredManifold) { ... }
         
+        // Draw Test Body Creation Preview
+        if (isCreatingTestBody && testBodyPath) {
+            if (testBodyGhost && testBodyGhost.path) {
+                // Ghost periodic orbit
+                drawPath(testBodyGhost.path, 'rgba(0, 255, 255, 0.8)', 3);
+            }
+            drawPath(testBodyPath, '#ffff00', 1.5);
+            if (testBodyStart && testBodyCurrent) {
+                ctx.strokeStyle = '#ffff00';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                const p1 = worldToCanvas(testBodyStart.x, testBodyStart.y);
+                const p2 = worldToCanvas(testBodyCurrent.x, testBodyCurrent.y);
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                
+                // Draw active poincare section used by worker
+                const vx = testBodyCurrent.x - testBodyStart.x;
+                const vy = testBodyCurrent.y - testBodyStart.y;
+                const use_y_sec = Math.abs(vy) > Math.abs(vx);
+                
+                ctx.strokeStyle = 'rgba(255, 100, 255, 0.6)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([10, 10]);
+                ctx.beginPath();
+                if (use_y_sec) {
+                    // Section is y = constant
+                    const pSec1 = worldToCanvas(-2, testBodyStart.y);
+                    const pSec2 = worldToCanvas(2, testBodyStart.y);
+                    ctx.moveTo(pSec1.x, pSec1.y);
+                    ctx.lineTo(pSec2.x, pSec2.y);
+                } else {
+                    // Section is x = constant
+                    const pSec1 = worldToCanvas(testBodyStart.x, -2);
+                    const pSec2 = worldToCanvas(testBodyStart.x, 2);
+                    ctx.moveTo(pSec1.x, pSec1.y);
+                    ctx.lineTo(pSec2.x, pSec2.y);
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
+                
+                ctx.fillStyle = 'rgba(255, 100, 255, 0.8)';
+                ctx.font = '10px monospace';
+                const labelPos = worldToCanvas(testBodyStart.x, testBodyStart.y);
+                ctx.fillText('Auto-Correction Section', labelPos.x + 10, labelPos.y - 10);
+            }
+        }
+
         // Draw Custom Trajectories (from Poincare clicks)
         if (customTrajectories && customTrajectories.length > 0) {
             customTrajectories.forEach(path => {
@@ -842,14 +985,13 @@ function drawPathFaded(path, color, width) {
         const p1 = worldToCanvas(path[i].x, path[i].y);
         const p2 = worldToCanvas(path[nextI].x, path[nextI].y);
         
-        // Avg alpha for this segment
+        // Avg progress for this segment
         const progress = (i + nextI) / 2 / N; // 0 to 1
-        const alpha = Math.max(0, 1 - Math.abs(2 * progress - 1));
         
-        // Quadratic fade for smoother look? alpha = 1 - (2*p-1)^2
-        const alphaQuad = 1 - Math.pow(2 * progress - 1, 2);
+        // Only fade out towards the end of the trajectory
+        const alphaFadeOut = 1 - Math.pow(progress, 2);
         
-        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alphaQuad})`;
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alphaFadeOut})`;
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
         ctx.lineTo(p2.x, p2.y);
@@ -903,14 +1045,151 @@ canvas.addEventListener('wheel', (e) => {
 let isPanning = false;
 let panStart = { x: 0, y: 0 };
 
+let isCreatingTestBody = false;
+let wasCreatingTestBody = false;
+let testBodyStart = null;
+let testBodyCurrent = null;
+let testBodyPath = null;
+let testBodyScale = 1.0;
+let testBodyGhost = null;
+let testBodyCrossings = [];
+let testBodySimCrossings = [];
+let currentDragId = 0;
+
+function updateTestBodyPoincare() {
+    if (!testBodyCurrent || !testBodyStart) return;
+    const vx = testBodyCurrent.x - testBodyStart.x;
+    const vy = testBodyCurrent.y - testBodyStart.y;
+    const use_y_sec = Math.abs(vy) > Math.abs(vx);
+    
+    let testPoints = [];
+    
+    testBodySimCrossings.forEach(c => {
+         testPoints.push({
+              y: use_y_sec ? c.x : c.y,
+              vy: use_y_sec ? c.vx : c.vy,
+              type: 'test_sim_cross'
+         });
+    });
+    
+    testBodyCrossings.forEach(c => {
+         testPoints.push({
+              y: use_y_sec ? c.x : c.y,
+              vy: use_y_sec ? c.vx : c.vy,
+              type: 'test_cross'
+         });
+    });
+    
+    testPoints.push({
+        y: use_y_sec ? testBodyStart.x : testBodyStart.y,
+        vy: use_y_sec ? vx : vy,
+        type: 'test_start'
+    });
+    
+    currentPoincareSection = { 
+        id: 'test_body', 
+        label: 'Test Particle',
+        type: use_y_sec ? 'horizontal' : 'vertical'
+    };
+    poincareLabel.textContent = currentPoincareSection.label;
+    poincarePanel.style.display = 'flex';
+    currentPoincarePoints = testPoints;
+    
+    // Auto-rescale the plot as interactions change
+    poincareView.reset = true;
+    poincareView.lastTestAxis = currentPoincareSection.type;
+    
+    drawPoincarePlot(testPoints);
+}
+
 canvas.addEventListener('mousedown', (e) => {
     if (e.button === 0) { // Left click
+        if (e.altKey) {
+            isCreatingTestBody = true;
+            wasCreatingTestBody = true;
+            testBodyStart = canvasToWorld(e.clientX, e.clientY);
+            testBodyCurrent = { x: testBodyStart.x, y: testBodyStart.y };
+            testBodyPath = null;
+            return;
+        }
         isPanning = true;
         panStart = { x: e.clientX, y: e.clientY };
     }
 });
 
 canvas.addEventListener('mousemove', (e) => {
+    if (isCreatingTestBody) {
+        testBodyCurrent = canvasToWorld(e.clientX, e.clientY);
+        const vx = (testBodyCurrent.x - testBodyStart.x) * testBodyScale;
+        const vy = -(testBodyCurrent.y - testBodyStart.y) * testBodyScale; 
+        // Note: canvas Y is inverted from math Y, however canvasToWorld applies it.
+        // Wait, earlier I used vy = testBodyCurrent.y - testBodyStart.y. Let me check the math.
+        // If Y goes up on screen, and screen Y decreases, then canvasToWorld handles inversion. 
+        // So vy = testBodyCurrent.y - testBodyStart.y is conceptually right.
+        // BUT let's stick to what was typed:
+        const vy_corrected = (testBodyCurrent.y - testBodyStart.y) * testBodyScale;
+        const state = { x: testBodyStart.x, y: testBodyStart.y, vx, vy: vy_corrected };
+        window.testBodyState = state; // cache for spacebar debugging
+        
+        currentDragId++;
+        searchWorker.postMessage({
+            type: 'FIND_PERIODIC_ORBIT',
+            payload: { id: currentDragId, state, max_crossings: 8 }
+        });
+        
+        const statusMsg = document.getElementById('orbitSearchMsg');
+        if (statusMsg) {
+            statusMsg.textContent = 'Searching...';
+            statusMsg.style.color = '#ffbb00';
+        }
+        
+        try {
+            const dt = 0.01;
+            const result = propagate(state, Math.PI * 4, dt, 0, 4000, true);
+            testBodyPath = result.path;
+            
+            // Calculate crossings from simulated path
+            testBodySimCrossings = [];
+            const use_y_sec_sim = Math.abs(vy_corrected) > Math.abs(vx);
+            const sec_val = use_y_sec_sim ? testBodyStart.y : testBodyStart.x;
+            const sign_vel = Math.sign(use_y_sec_sim ? vy_corrected : vx) || 1;
+            
+            let t_sim = 0;
+            for (let i = 0; i < testBodyPath.length - 1; i++) {
+                 const p1 = testBodyPath[i];
+                 const p2 = testBodyPath[i+1];
+                 
+                 let crossed = false;
+                 let frac = 0;
+                 if (use_y_sec_sim) {
+                     if (Math.sign(p1.y - sec_val) !== Math.sign(p2.y - sec_val) && p2.vy * sign_vel > 0 && t_sim > 0.2) {
+                         frac = (sec_val - p1.y) / (p2.y - p1.y);
+                         crossed = true;
+                     }
+                 } else {
+                     if (Math.sign(p1.x - sec_val) !== Math.sign(p2.x - sec_val) && p2.vx * sign_vel > 0 && t_sim > 0.2) {
+                         frac = (sec_val - p1.x) / (p2.x - p1.x);
+                         crossed = true;
+                     }
+                 }
+                 
+                 if (crossed) {
+                     testBodySimCrossings.push({
+                         x: p1.x + frac * (p2.x - p1.x),
+                         y: p1.y + frac * (p2.y - p1.y),
+                         vx: p1.vx + frac * (p2.vx - p1.vx),
+                         vy: p1.vy + frac * (p2.vy - p1.vy)
+                     });
+                 }
+                 t_sim += dt;
+            }
+            updateTestBodyPoincare();
+        } catch (err) {
+            console.error(err);
+        }
+        return;
+    }
+
     if (isPanning) {
         const dx = (e.clientX - panStart.x) / camera.zoom;
         const dy = (e.clientY - panStart.y) / camera.zoom;
@@ -929,11 +1208,40 @@ canvas.addEventListener('mousemove', (e) => {
 });
 
 canvas.addEventListener('mouseup', () => {
+    if (isCreatingTestBody) {
+        isCreatingTestBody = false;
+        if (testBodyGhost && testBodyGhost.path) {
+             // Auto-Snap to the periodic orbit
+             testBodyPath = testBodyGhost.path;
+        }
+        if (testBodyPath) {
+            customTrajectories = [testBodyPath];
+        }
+        testBodyPath = null;
+        testBodyGhost = null;
+        testBodyCrossings = [];
+        testBodySimCrossings = [];
+        if (poincarePanel.style.display === 'flex') {
+            drawPoincarePlot(currentPoincarePoints);
+        }
+        
+        const statusMsg = document.getElementById('orbitSearchMsg');
+        if (statusMsg) {
+            statusMsg.textContent = 'Idle';
+            statusMsg.style.color = '#aaa';
+        }
+        
+        return;
+    }
     isPanning = false;
 });
 
 // Click for Poincaré Selection
 canvas.addEventListener('click', (e) => {
+    if (wasCreatingTestBody) {
+        wasCreatingTestBody = false;
+        return;
+    }
     if (isPanning) return; // Don't trigger if dragging
     if (!window.poincareSections) return;
     
@@ -992,6 +1300,32 @@ window.addEventListener('keydown', (e) => {
         camera.x = 0.5 - MASS_RATIO;
         camera.y = 0;
         camera.zoom = 800;
+    } else if (e.key === ' ') {
+        if (window.testBodyState) {
+            console.log("--- Proposed Test Particle ---");
+            console.log("Initial Position and Velocity:", window.testBodyState);
+            
+            const state = window.testBodyState;
+            const use_y_sec = Math.abs(state.vy) > Math.abs(state.vx);
+            
+            console.log("Poincaré Scatter Initial Config:", {
+                coord: use_y_sec ? state.x : state.y,
+                velocity: use_y_sec ? state.vx : state.vy,
+                axis: use_y_sec ? 'x vs vx' : 'y vs vy'
+            });
+            
+            if (typeof testBodySimCrossings !== 'undefined' && testBodySimCrossings.length > 0) {
+                console.log("Poincaré Scatter Intersections:");
+                testBodySimCrossings.forEach((c, idx) => {
+                    console.log(`  Crossing ${idx + 1}: coord=${use_y_sec ? c.x : c.y}, velocity=${use_y_sec ? c.vx : c.vy}`);
+                });
+            } else {
+                console.log("No Poincaré intersections found from propagation.");
+            }
+            console.log("------------------------------");
+        } else {
+            console.log("No test particle active. Option-drag your mouse to create one.");
+        }
     }
 });
 
@@ -1000,71 +1334,38 @@ window.addEventListener('keydown', (e) => {
 // ============================================================================
 
 
-let l1Amplitude = 10000;
-let l2Amplitude = 20000;
+let jacobi_C = 3.150;
 
-const l1Slider = document.getElementById('l1AmpSlider');
-const l2Slider = document.getElementById('l2AmpSlider');
+const jacobiSlider = document.getElementById('jacobiSlider');
 
-// Update function
 function updateManifolds() {
-    searchWorker.postMessage({ 
-        type: 'GENERATE_MANIFOLDS', 
-        payload: { 
-            amp_l1: l1Amplitude,
-            amp_l2: l2Amplitude
-        } 
+    searchWorker.postMessage({
+        type: 'GENERATE_MANIFOLDS',
+        payload: { jacobi_C }
     });
 }
 
-// L1 Listeners
-function updateL1(val) {
-    l1Amplitude = parseInt(val);
-    l1Slider.value = l1Amplitude;
-    document.getElementById('l1AmpVal').textContent = l1Amplitude;
+function setJacobiDisplay(val) {
+    jacobi_C = parseFloat(parseFloat(val).toFixed(3));
+    jacobiSlider.value = jacobi_C;
+    document.getElementById('jacobiVal').textContent = jacobi_C.toFixed(3);
+    document.getElementById('jacobiLevel').textContent = getJacobiLevel(jacobi_C);
+    zvcOffscreen = null; // redraw forbidden regions immediately
+}
+
+function setJacobi(val) {
+    setJacobiDisplay(val);
     updateManifolds();
 }
 
-l1Slider.addEventListener('input', (e) => {
-    document.getElementById('l1AmpVal').textContent = e.target.value;
+// Live ZVC update while dragging; full recompute on release
+jacobiSlider.addEventListener('input', (e) => setJacobiDisplay(e.target.value));
+jacobiSlider.addEventListener('change', (e) => setJacobi(e.target.value));
+document.getElementById('jacobiDec').addEventListener('click', () => {
+    setJacobi(Math.max(2.90, jacobi_C - 0.005).toFixed(3));
 });
-l1Slider.addEventListener('change', (e) => {
-    updateL1(e.target.value);
-});
-document.getElementById('l1AmpDec').addEventListener('click', () => {
-    let val = parseInt(l1Slider.value) - 100;
-    if (val < l1Slider.min) val = l1Slider.min;
-    updateL1(val);
-});
-document.getElementById('l1AmpInc').addEventListener('click', () => {
-    let val = parseInt(l1Slider.value) + 100;
-    if (val > l1Slider.max) val = l1Slider.max;
-    updateL1(val);
-});
-
-// L2 Listeners
-function updateL2(val) {
-    l2Amplitude = parseInt(val);
-    l2Slider.value = l2Amplitude;
-    document.getElementById('l2AmpVal').textContent = l2Amplitude;
-    updateManifolds();
-}
-
-l2Slider.addEventListener('input', (e) => {
-    document.getElementById('l2AmpVal').textContent = e.target.value;
-});
-l2Slider.addEventListener('change', (e) => {
-    updateL2(e.target.value);
-});
-document.getElementById('l2AmpDec').addEventListener('click', () => {
-    let val = parseInt(l2Slider.value) - 500;
-    if (val < l2Slider.min) val = l2Slider.min;
-    updateL2(val);
-});
-document.getElementById('l2AmpInc').addEventListener('click', () => {
-    let val = parseInt(l2Slider.value) + 500;
-    if (val > l2Slider.max) val = l2Slider.max;
-    updateL2(val);
+document.getElementById('jacobiInc').addEventListener('click', () => {
+    setJacobi(Math.min(3.25, jacobi_C + 0.005).toFixed(3));
 });
 
 // ============================================================================
@@ -1077,7 +1378,8 @@ document.getElementById('l2AmpInc').addEventListener('click', () => {
 // ============================================================================
 
 
-// Initial Manifold Generation
+// Initial label and manifold generation
+document.getElementById('jacobiLevel').textContent = getJacobiLevel(jacobi_C);
 updateManifolds();
 
 // Update section bounds based on intersections
@@ -1438,16 +1740,38 @@ function drawPoincarePlot(points) {
         const cy = mapVy(p.vy);
         
         poincareCtx.beginPath();
-        poincareCtx.arc(cx, cy, 2, 0, Math.PI * 2);
-        
-        if (p.type === 'stable') {
-            poincareCtx.fillStyle = '#00ff88'; 
-        } else if (p.type === 'unstable') {
-            poincareCtx.fillStyle = '#ff5050'; 
+        if (p.type === 'test_cross') {
+            poincareCtx.arc(cx, cy, 3, 0, Math.PI * 2);
+            poincareCtx.fillStyle = '#00ffff'; // cyan
+            poincareCtx.fill();
+            poincareCtx.strokeStyle = 'white';
+            poincareCtx.lineWidth = 1;
+            poincareCtx.stroke();
+        } else if (p.type === 'test_sim_cross') {
+            poincareCtx.arc(cx, cy, 3, 0, Math.PI * 2);
+            poincareCtx.fillStyle = '#ffff00'; // yellow
+            poincareCtx.fill();
+            poincareCtx.strokeStyle = 'black';
+            poincareCtx.lineWidth = 1;
+            poincareCtx.stroke();
+        } else if (p.type === 'test_start') {
+            poincareCtx.arc(cx, cy, 5, 0, Math.PI * 2);
+            poincareCtx.fillStyle = '#ffffff'; // white
+            poincareCtx.fill();
+            poincareCtx.strokeStyle = 'black';
+            poincareCtx.lineWidth = 2;
+            poincareCtx.stroke();
         } else {
-             poincareCtx.fillStyle = '#ccc';
+            poincareCtx.arc(cx, cy, 2, 0, Math.PI * 2);
+            if (p.type === 'stable') {
+                poincareCtx.fillStyle = '#00ff88'; 
+            } else if (p.type === 'unstable') {
+                poincareCtx.fillStyle = '#ff5050'; 
+            } else {
+                poincareCtx.fillStyle = '#ccc';
+            }
+            poincareCtx.fill();
         }
-        poincareCtx.fill();
     });
     
     // Labels

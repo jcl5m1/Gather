@@ -465,22 +465,296 @@ function propagate(state, duration, dt = 0.001, t_start = 0, max_steps = 2000, s
 
 
 // ============================================================================
+// DIFFERENTIAL CORRECTION
+// ============================================================================
+let latestSearchId = -1;
+
+async function findGeneralPeriodicOrbit(guess_state, num_crossings = 1, dry_run = false, progressCallback = null, searchId = -1) {
+    let u = [guess_state.x, guess_state.vx, guess_state.vy];
+    const y_sec = guess_state.y;
+    let sign_vy = Math.sign(guess_state.vy) || 1;
+    
+    // Check if motion is primarily in x direction, then use x section.
+    let use_y_sec = Math.abs(guess_state.vy) > Math.abs(guess_state.vx);
+    let sec_val = use_y_sec ? guess_state.y : guess_state.x;
+    if (!use_y_sec) {
+        u = [guess_state.y, guess_state.vx, guess_state.vy];
+        sign_vy = Math.sign(guess_state.vx) || 1;
+    }
+    
+    const max_t = 50.0; // Extended time to allow for up to 8 crossings
+
+    const evaluateRun = (uv) => {
+        let s = {
+            x: use_y_sec ? uv[0] : sec_val,
+            y: use_y_sec ? sec_val : uv[0],
+            vx: uv[1],
+            vy: uv[2]
+        };
+        let t = 0;
+        let dt = 0.005;
+        let crossed_count = 0;
+        let return_state = null;
+        let return_t = 0;
+        let crossings = [];
+        
+        let escapeReason = `Max integration time reached (${max_t} TU)`;
+        while (t < max_t) {
+            let next = rk4Step(s, dt, t);
+            let crossed_sec = false;
+            let frac = 0;
+            if (use_y_sec) {
+                if (Math.sign(s.y - sec_val) !== Math.sign(next.y - sec_val) && next.vy * sign_vy > 0 && t > 0.2) {
+                    frac = (sec_val - s.y) / (next.y - s.y);
+                    crossed_sec = true;
+                }
+            } else {
+                if (Math.sign(s.x - sec_val) !== Math.sign(next.x - sec_val) && next.vx * sign_vy > 0 && t > 0.2) {
+                    frac = (sec_val - s.x) / (next.x - s.x);
+                    crossed_sec = true;
+                }
+            }
+            if (crossed_sec) {
+                const intersect_state = {
+                    x: s.x + frac * (next.x - s.x),
+                    y: s.y + frac * (next.y - s.y),
+                    vx: s.vx + frac * (next.vx - s.vx),
+                    vy: s.vy + frac * (next.vy - s.vy)
+                };
+                crossings.push(intersect_state);
+                crossed_count++;
+                if (crossed_count === num_crossings) {
+                    return_state = intersect_state;
+                    return_t = t + dt * frac;
+                    break;
+                }
+            }
+            // escapes
+            if (Math.abs(next.x) > 2 || Math.abs(next.y) > 2) {
+                const exceeded = Math.abs(next.x) > 2 ? `|x|=${Math.abs(next.x).toFixed(2)}` : `|y|=${Math.abs(next.y).toFixed(2)}`;
+                escapeReason = `Escaped system bounds (>2), ${exceeded}`;
+                break;
+            }
+            const dE = Math.sqrt((next.x + MASS_RATIO)**2 + next.y**2);
+            const dM = Math.sqrt((next.x - (1-MASS_RATIO))**2 + next.y**2);
+            if (dE < kmToNorm(EARTH_RADIUS) || dM < kmToNorm(MOON_RADIUS)) {
+                escapeReason = 'Collided with primary body';
+                break;
+            }
+            
+            s = next;
+            t += dt;
+        }
+        if (crossed_count < num_crossings) return { failed: true, reason: `Only ${crossed_count}/${num_crossings} crossings. ${escapeReason}` };
+        
+        let diff = [
+            (use_y_sec ? return_state.x : return_state.y) - uv[0],
+            return_state.vx - uv[1],
+            return_state.vy - uv[2]
+        ];
+        return { diff, return_state, return_t, crossings };
+    };
+
+    if (dry_run) {
+        return evaluateRun(u);
+    }
+
+    let last_err = null;
+    // Newton solver with finite differences
+    for (let iter = 0; iter < 50; iter++) {
+        // Yield to allow new messages to update latestSearchId and so UI receives progress
+        await new Promise(r => setTimeout(r, 0));
+        if (searchId !== -1 && searchId !== latestSearchId) {
+            return { failed: true, reason: 'Aborted for newer search' };
+        }
+
+        let res = evaluateRun(u);
+        if (res && res.failed) return { error: `Eval failed: ${res.reason}` };
+        
+        let dist_err_km = Math.abs(res.diff[0]) * DIST_UNIT;
+        let vel_err_ms = Math.sqrt(res.diff[1]**2 + res.diff[2]**2) * VEL_UNIT * 1000;
+        
+        // Error norm
+        let err = Math.sqrt(res.diff[0]**2 + res.diff[1]**2 + res.diff[2]**2);
+        last_err = { dist: dist_err_km, vel: vel_err_ms };
+        
+        if (progressCallback) progressCallback(iter, dist_err_km, vel_err_ms);
+        
+        if (err < 1e-6) {
+            // Converged
+            return {
+                state: {
+                    x: use_y_sec ? u[0] : sec_val,
+                    y: use_y_sec ? sec_val : u[0],
+                    vx: u[1],
+                    vy: u[2]
+                },
+                period: res.return_t,
+                crossings: res.crossings
+            };
+        }
+        
+        // Jacobian using finite differences
+        let J = [[0,0,0], [0,0,0], [0,0,0]];
+        let d = 1e-6; // Smaller perturbation size for highly chaotic multi-turn orbits
+        let jac_failed = false;
+        let jac_fail_reason = "";
+        for (let i = 0; i < 3; i++) {
+            let u_pert = [...u];
+            u_pert[i] += d;
+            let res_pert = evaluateRun(u_pert);
+            if (res_pert && res_pert.failed) {
+                // If forward step fails, try backward
+                u_pert[i] = u[i] - 2*d;
+                res_pert = evaluateRun(u_pert);
+                if (res_pert && res_pert.failed) {
+                    jac_failed = true;
+                    jac_fail_reason = res_pert.reason;
+                    break;
+                }
+                for (let j = 0; j < 3; j++) {
+                    J[j][i] = (res.diff[j] - res_pert.diff[j]) / d; // Reverse sign
+                }
+                continue;
+            }
+            for (let j = 0; j < 3; j++) {
+                J[j][i] = (res_pert.diff[j] - res.diff[j]) / d;
+            }
+        }
+        if (jac_failed) return { error: `Jacobian failed: ${jac_fail_reason}` };
+        
+        // Invert J (3x3)
+        let det = J[0][0]*(J[1][1]*J[2][2] - J[1][2]*J[2][1]) -
+                  J[0][1]*(J[1][0]*J[2][2] - J[1][2]*J[2][0]) +
+                  J[0][2]*(J[1][0]*J[2][1] - J[1][1]*J[2][0]);
+        
+        if (Math.abs(det) < 1e-12) return { error: 'Singular Jacobian' }; // Singular
+        
+        let invJ = [
+            [(J[1][1]*J[2][2] - J[1][2]*J[2][1])/det, (J[0][2]*J[2][1] - J[0][1]*J[2][2])/det, (J[0][1]*J[1][2] - J[0][2]*J[1][1])/det],
+            [(J[1][2]*J[2][0] - J[1][0]*J[2][2])/det, (J[0][0]*J[2][2] - J[0][2]*J[2][0])/det, (J[0][2]*J[1][0] - J[0][0]*J[1][2])/det],
+            [(J[1][0]*J[2][1] - J[1][1]*J[2][0])/det, (J[0][1]*J[2][0] - J[0][0]*J[2][1])/det, (J[0][0]*J[1][1] - J[0][1]*J[1][0])/det]
+        ];
+        
+        // Newton step
+        let step = [0, 0, 0];
+        for (let i = 0; i < 3; i++) {
+            for (let j = 0; j < 3; j++) {
+                step[i] += invJ[i][j] * res.diff[j];
+            }
+        }
+        
+        // Limit step size
+        let step_len = Math.sqrt(step[0]**2 + step[1]**2 + step[2]**2);
+        if (step_len > 0.05) {
+            for (let i = 0; i < 3; i++) step[i] = step[i] * 0.05 / step_len;
+        }
+        
+        for (let i = 0; i < 3; i++) u[i] -= step[i];
+    }
+    
+    return { error: `Did not converge within max iterations (dist mismatch: ${last_err ? last_err.dist.toFixed(1) : '?'} km, vel mismatch: ${last_err ? last_err.vel.toFixed(1) : '?'} m/s)` }; // Did not converge
+}
+
+// ============================================================================
 // WORKER MESSAGE HANDLING
 // ============================================================================
-
-
-self.onmessage = function(e) {
+self.onmessage = async function(e) {
     const { type, payload } = e.data;
 
-    if (type === 'GENERATE_MANIFOLDS') {
-        const { duration_norm = daysToNorm(60), amp_l1, amp_l2 } = payload || {};
+    if (type === 'FIND_PERIODIC_ORBIT') {
+        latestSearchId = payload.id;
+        const payloadState = payload.state;
+        const max_crossings = payload.max_crossings || 1;
+        let result = null;
+        let evaluateAll = await findGeneralPeriodicOrbit(payloadState, max_crossings, true, null, payload.id);
         
-        // RECOMPUTE Orbits with new amplitudes
+        if (latestSearchId !== payload.id) return;
+        
+        let attempts = [];
+        if (evaluateAll && evaluateAll.crossings) {
+            const use_y_sec = Math.abs(payloadState.vy) > Math.abs(payloadState.vx);
+            const mapNorm = 50000 / DIST_UNIT;
+            const velNorm = 1.5 / VEL_UNIT;
+            
+            evaluateAll.crossings.forEach((c, idx) => {
+                let err;
+                if (use_y_sec) {
+                    // Section is y = const. Plot is x vs vx
+                    const diffX = (c.x - payloadState.x) / mapNorm;
+                    const diffVx = (c.vx - payloadState.vx) / velNorm;
+                    err = Math.sqrt(diffX*diffX + diffVx*diffVx);
+                } else {
+                    // Section is x = const. Plot is y vs vy
+                    const diffY = (c.y - payloadState.y) / mapNorm;
+                    const diffVy = (c.vy - payloadState.vy) / velNorm;
+                    err = Math.sqrt(diffY*diffY + diffVy*diffVy);
+                }
+                attempts.push({ k: idx + 1, err, state: c });
+            });
+            // Try solving for the k-crossings that naturally have the smallest mismatch first
+            attempts.sort((a,b) => a.err - b.err);
+        } else {
+            // Fallback
+            for (let i=1; i<=max_crossings; i++) attempts.push({k: i});
+        }
+        
+        let eval_crossings = evaluateAll ? evaluateAll.crossings : [];
+        
+        for (let opt of attempts) {
+            if (latestSearchId !== payload.id) return;
+            const guessState = opt.state ? opt.state : payloadState;
+            postMessage({ type: 'PERIODIC_ORBIT_PROGRESS', payload: { id: payload.id, k: opt.k, init: true } });
+            result = await findGeneralPeriodicOrbit(guessState, opt.k, false, (iter, distKm, velMs) => {
+                postMessage({ 
+                    type: 'PERIODIC_ORBIT_PROGRESS', 
+                    payload: { 
+                        id: payload.id, 
+                        k: opt.k, 
+                        iter: iter, 
+                        dist_km: distKm, 
+                        vel_ms: velMs 
+                    } 
+                });
+            }, payload.id);
+            if (result && result.state) {
+                break;
+            }
+        }
+        
+        // Return latest crossings found for visualization
+        const crossings = (result && result.state && result.crossings) ? result.crossings : eval_crossings;
+
+        // Only return path if converged
+        if (result && result.state) {
+            const propRes = propagate(result.state, result.period * 1.05, 0.005, 0, Math.max(4000, max_crossings * 1000), true);
+            postMessage({ type: 'PERIODIC_ORBIT_FOUND', payload: { id: payload.id, state: result.state, path: propRes.path, period: result.period, crossings } });
+        } else {
+            postMessage({ type: 'PERIODIC_ORBIT_FAILED', payload: { id: payload.id, crossings, reason: result ? result.error : 'Unknown error' } });
+        }
+    } else if (type === 'GENERATE_MANIFOLDS') {
+        const { duration_norm = daysToNorm(60), amp_l1, amp_l2, jacobi_C } = payload || {};
+
         const lp = solveLagrangePoints();
         const l1 = lp.l1, l2 = lp.l2, l3 = lp.l3, l4 = lp.l4, l5 = lp.l5;
-        
-        const l1_orbit = computeLyapunov(l1, amp_l1);
-        const l2_orbit = computeLyapunov(l2, amp_l2);
+
+        // Actual Jacobi constants at each Lagrange point
+        const C_L1 = 2 * getPotential(l1, 0);
+        const C_L2 = 2 * getPotential(l2, 0);
+        const l1_open = jacobi_C === undefined || jacobi_C < C_L1;
+        const l2_open = jacobi_C === undefined || jacobi_C < C_L2;
+
+        let final_amp_l1 = null, final_amp_l2 = null;
+        if (jacobi_C !== undefined) {
+            if (l1_open) final_amp_l1 = computeAmplitudeFromJacobi(l1, jacobi_C);
+            if (l2_open) final_amp_l2 = computeAmplitudeFromJacobi(l2, jacobi_C);
+        } else {
+            final_amp_l1 = amp_l1 || 10000;
+            final_amp_l2 = amp_l2 || 20000;
+        }
+
+        const l1_orbit = l1_open ? computeLyapunov(l1, final_amp_l1) : null;
+        const l2_orbit = l2_open ? computeLyapunov(l2, final_amp_l2) : null;
 
         // Send updated orbits to main thread immediately so UI updates
         const l1_decomp = getEigenDecomposition(l1);
@@ -497,7 +771,7 @@ self.onmessage = function(e) {
             }
         });
 
-        generateManifolds(duration_norm, amp_l1, amp_l2);
+        generateManifolds(duration_norm, final_amp_l1, final_amp_l2);
 
     } else if (type === 'COMPUTE_SYSTEM_INFO') {
         const lp = solveLagrangePoints();
@@ -640,14 +914,44 @@ function powerIteration(M, invert=false) {
     return v;
 }
 
-function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
+// Binary search for the Lyapunov amplitude that yields a given Jacobi constant.
+// C decreases monotonically as amplitude increases.
+function computeAmplitudeFromJacobi(l_x, target_C) {
+    const C_L = 2 * getPotential(l_x, 0);
+    if (target_C >= C_L) return 200; // above L-point energy, return minimal orbit
+
+    let lo = 200;    // km – tiny orbit, C ≈ C_L
+    let hi = 55000;  // km – large orbit, much lower C
+
+    for (let iter = 0; iter < 10; iter++) {
+        const mid = (lo + hi) / 2;
+        const orbit = computeLyapunov(l_x, mid);
+        if (!orbit || !orbit.vy0) { hi = mid; continue; }
+        const x0 = l_x - kmToNorm(mid);
+        const C_orbit = 2 * getPotential(x0, 0) - orbit.vy0 * orbit.vy0;
+        if (C_orbit > target_C) lo = mid;  // C too high → orbit too small
+        else                    hi = mid;  // C too low  → orbit too large
+    }
+    return (lo + hi) / 2;
+}
+
+function generateManifolds(duration, amp_l1 = null, amp_l2 = null) {
     console.log(`Generating Manifolds: Duration=${duration}, L1_Amp=${amp_l1}, L2_Amp=${amp_l2}`);
     const { l1, l2 } = solveLagrangePoints();
-    
-    let l2_orbit;
+
+    let l1_orbit = null, l2_orbit = null;
+    const manifolds = [];
+    const poincareIntersections = [];
+    let manifoldIdCounter = 0;
+    const epsilon = 1e-5;
+    const moon_x = 1 - MASS_RATIO;
+    const earth_x = -MASS_RATIO;
+    const r_hill_norm = Math.pow(MASS_RATIO / (3 * (1 - MASS_RATIO)), 1/3);
+
+    if (amp_l1 !== null) { // L1 neck open
     // 1. Compute L1 Lyapunov Orbit
-    const l1_orbit = computeLyapunov(l1, amp_l1);
-    
+    l1_orbit = computeLyapunov(l1, amp_l1);
+
     // Initial State of Orbit
     const x0 = l1 - kmToNorm(amp_l1);
     const vy0 = l1_orbit.vy0;
@@ -689,17 +993,6 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
     
     // Stable Eigenvector (v_s) corresponds to largest eigenvalue of M^-1 (smallest of M)
     const v_s = powerIteration(M, true);
-    
-    const manifolds = [];
-    const manifoldsMap = new Map(); // Temp map to ensure we don't have dupes if logic changes, but array is fine.
-    // Actually simpler: just use valid linear IDs.
-    let manifoldIdCounter = 0;
-
-    
-    const epsilon = 1e-5; // Perturbation magnitude (normalized)
-    const moon_x = 1 - MASS_RATIO;
-    const earth_x = -MASS_RATIO;
-    const r_hill_norm = Math.pow(MASS_RATIO / (3 * (1 - MASS_RATIO)), 1/3); // Hill Radius
     
     // 4. Generate Manifolds from Samples
     orbitSamples.forEach((sample, idx) => {
@@ -770,7 +1063,7 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
             }
             
             // Keep all 32 paths for visual rendering
-            manifolds.push({ type: 'unstable', path: res_u.path, id: manifoldId });
+            manifolds.push({ type: 'unstable', path: res_u.path, id: manifoldId, lpoint: 'l1' });
 
             // Only use Moon-bound trajectories for Ballistic Capture Seeding
             // (Keep this logic restricted to visual subset or all? 
@@ -837,16 +1130,16 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
                 }
 
                 // Keep all 32 paths for visual rendering
-                manifolds.push({ type: 'stable', path: res_s.path, id: manifoldId });
+                manifolds.push({ type: 'stable', path: res_s.path, id: manifoldId, lpoint: 'l1' });
             });
         });
+    } // end L1 block
 
     // ========================================================================
     // L2 STABLE MANIFOLDS (Interior & Exterior)
     // ========================================================================
-    {
+    if (amp_l2 !== null) { // L2 neck open
         // 1. Compute L2 Lyapunov Orbit
-        // Use L2 amplitude
         l2_orbit = computeLyapunov(l2, amp_l2);
         
         // Initial State
@@ -949,7 +1242,7 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
 
                 // Keep 32 samples
                 if (res_s.path.length > 10) {
-                     manifolds.push({ type: 'stable', path: res_s.path, id: manifoldId });
+                     manifolds.push({ type: 'stable', path: res_s.path, id: manifoldId, lpoint: 'l2' });
                 }
             });
 
@@ -1004,11 +1297,11 @@ function generateManifolds(duration, amp_l1 = 10000, amp_l2 = 20000) {
 
                 // Keep 32 samples
                 if (res_u.path.length > 10) {
-                    manifolds.push({ type: 'unstable', path: res_u.path, id: manifoldId });
+                    manifolds.push({ type: 'unstable', path: res_u.path, id: manifoldId, lpoint: 'l2' });
                 }
             });
         });
-    }
+    } // end L2 block
 
     postMessage({
         type: 'MANIFOLDS_GENERATED',
