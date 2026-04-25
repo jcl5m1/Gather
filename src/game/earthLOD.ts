@@ -1,0 +1,296 @@
+/**
+ * earthLOD.ts — seven-level recursive tiled grid.
+ * L1 = 4×8; each level splits every tile into 4×4 children:
+ * L2 = 16×32, L3 = 64×128, L4 = 256×512, L5 = 1024×2048, L6 = 4096×8192, L7 = 16384×32768, L8 = 65536×131072, L9 = 262144×524288.
+ *
+ * Per frame, for each active LOD level:
+ *   1. Project camDir onto tile grid — O(1) seed.
+ *   2. BFS outward, rejecting tiles past the geometric horizon OR outside
+ *      the camera frustum.  Only truly on-screen tiles are spawned.
+ *   3. Each tile gets a filled mesh + a white LineLoop border.
+ */
+
+import {
+    Scene, Mesh, SphereGeometry,
+    MeshBasicMaterial, MeshStandardMaterial,
+    CanvasTexture, Vector3,
+    LineLoop, LineBasicMaterial, BufferGeometry, Float32BufferAttribute,
+    Frustum, Matrix4, Sphere,
+    PerspectiveCamera,
+} from 'three';
+import { R } from './constants';
+
+interface LodDef { Nr: number; Nc: number; hue: number; radius: number; }
+
+const LODS: LodDef[] = [
+    { Nr:      4, Nc:      8, hue:  50, radius: R - 150 },
+    { Nr:     16, Nc:     32, hue: 185, radius: R - 100 },
+    { Nr:     64, Nc:    128, hue: 270, radius: R -  70 },
+    { Nr:    256, Nc:    512, hue:  30, radius: R -  40 },
+    { Nr:   1024, Nc:   2048, hue: 340, radius: R -  10 },
+    { Nr:   4096, Nc:   8192, hue: 120, radius: R -   5 },
+    { Nr:  16384, Nc:  32768, hue: 300, radius: R -   2 },
+    { Nr:   65536, Nc:  131072, hue:  10, radius: R -   1 },
+    { Nr:  262144, Nc:  524288, hue: 200, radius: R -   1 },
+];
+
+const LOD_TRANSITION_DEG = 50;
+
+const SEGS = [16, 12, 8, 6, 4, 3, 2, 2, 2];
+const TEX  = 256;
+
+// ── Canvas texture ────────────────────────────────────────────────────────────
+
+function buildTexture(l: number, r: number, c: number): CanvasTexture {
+    const { hue } = LODS[l];
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = TEX;
+    const ctx = cv.getContext('2d')!;
+
+    ctx.fillStyle = `hsl(${hue},35%,${(r + c) % 2 === 0 ? 11 : 17}%)`;
+    ctx.fillRect(0, 0, TEX, TEX);
+
+    ctx.strokeStyle = `hsl(${hue},75%,52%)`;
+    ctx.lineWidth   = 4;
+    ctx.strokeRect(2, 2, TEX - 4, TEX - 4);
+
+    ctx.font      = 'bold 24px monospace';
+    ctx.fillStyle = `hsl(${hue},95%,68%)`;
+    ctx.fillText(`z${l + 1}`, 10, 30);
+
+    ctx.font      = 'bold 40px monospace';
+    ctx.fillStyle = '#ddeeff';
+    ctx.fillText(`R${r}`, 10, TEX / 2 - 4);
+    ctx.fillText(`C${c}`, 10, TEX / 2 + 44);
+
+    const T = 12;
+    ctx.strokeStyle = `hsl(${hue},60%,55%)`;
+    ctx.lineWidth   = 1.5;
+    for (const [dx, dy] of [[0, 0], [TEX, 0], [0, TEX], [TEX, TEX]] as [number, number][]) {
+        ctx.beginPath();
+        ctx.moveTo(dx + (dx ? -T : T), dy);
+        ctx.lineTo(dx,                  dy);
+        ctx.lineTo(dx,                  dy + (dy ? -T : T));
+        ctx.stroke();
+    }
+
+    return new CanvasTexture(cv);
+}
+
+// ── Wireframe border ──────────────────────────────────────────────────────────
+
+// Traces the 4 arc edges of a tile as a LineLoop on the sphere surface.
+function buildBorder(l: number, r: number, c: number): LineLoop {
+    const { Nr, Nc, radius } = LODS[l];
+    const phiS   = 2 * Math.PI * c       / Nc;
+    const phiE   = 2 * Math.PI * (c + 1) / Nc;
+    const thetaS = Math.PI * r       / Nr;
+    const thetaE = Math.PI * (r + 1) / Nr;
+    const rad = radius + 50;  // just above the tile surface
+    const N   = 10;           // arc sample points per edge
+
+    const pts: number[] = [];
+    const push = (phi: number, theta: number) => {
+        const s = Math.sin(theta);
+        pts.push(-Math.cos(phi) * s * rad, Math.cos(theta) * rad, Math.sin(phi) * s * rad);
+    };
+    for (let i = 0; i < N; i++) push(phiS + (phiE - phiS) * i / N, thetaS);  // top
+    for (let i = 0; i < N; i++) push(phiE, thetaS + (thetaE - thetaS) * i / N);  // right
+    for (let i = 0; i < N; i++) push(phiE + (phiS - phiE) * i / N, thetaE);  // bottom
+    for (let i = 0; i < N; i++) push(phiS, thetaE + (thetaS - thetaE) * i / N);  // left
+
+    const geo = new BufferGeometry();
+    geo.setAttribute('position', new Float32BufferAttribute(pts, 3));
+    const mat = new LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false });
+    const line = new LineLoop(geo, mat);
+    line.renderOrder = l + 6;
+    return line;
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+function tileKey(l: number, r: number, c: number): string { return `${l}_${r}_${c}`; }
+function clamp01(x: number): number { return x < 0 ? 0 : x > 1 ? 1 : x; }
+
+function tileDot(l: number, r: number, c: number, d: Vector3): number {
+    const { Nr, Nc } = LODS[l];
+    const phi   = 2 * Math.PI * (c + 0.5) / Nc;
+    const theta =     Math.PI * (r + 0.5) / Nr;
+    const sinT  = Math.sin(theta);
+    return (-Math.cos(phi) * sinT) * d.x
+         +  Math.cos(theta)        * d.y
+         + ( Math.sin(phi) * sinT) * d.z;
+}
+
+// ── EarthLOD ──────────────────────────────────────────────────────────────────
+
+interface Entry { mesh: Mesh; border: LineLoop; alpha: number; level: number; }
+
+export class EarthLOD {
+    private pool         = new Map<string, Entry>();
+    private _camDir      = new Vector3();
+    private _lastAlpha   = LODS.map(() => 0);
+    private _lastHeight  = 1;
+    private _visibleCount = 0;
+    private _frustum     = new Frustum();
+    private _vpMatrix    = new Matrix4();
+    private _tileSphere  = new Sphere();
+    private _tileCenter  = new Vector3();
+
+    get activeLevel(): number {
+        for (let l = LODS.length - 1; l > 0; l--)
+            if (this._lastAlpha[l] > 0.5) return l + 1;
+        return 1;
+    }
+
+    get visibleTileCount(): number { return this._visibleCount; }
+
+    get textureMemoryMB(): number {
+        return this._visibleCount * TEX * TEX * 4 / (1024 * 1024);
+    }
+
+    get activeTileFovDeg(): number {
+        const Nr = LODS[this.activeLevel - 1].Nr;
+        const halfChord = R * Math.sin(Math.PI / (2 * Nr));
+        return 2 * Math.atan2(halfChord, this._lastHeight) * 180 / Math.PI;
+    }
+
+    constructor(private scene: Scene) {
+        scene.add(new Mesh(
+            new SphereGeometry(R - 200, 64, 32),
+            new MeshStandardMaterial({ color: 0x060d1a, roughness: 1, metalness: 0 }),
+        ));
+    }
+
+    setBaseTexture(): void {}
+
+    update(camPos: Vector3, camera: PerspectiveCamera): void {
+        const height = Math.max(1, camPos.length() - R);
+        this._lastHeight = height;
+        this._camDir.copy(camPos).normalize();
+
+        // Build view-projection frustum from the live camera matrices.
+        this._vpMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        this._frustum.setFromProjectionMatrix(this._vpMatrix);
+
+        const levelAlpha: number[] = [1];
+        for (let l = 1; l < LODS.length; l++) {
+            const { Nr } = LODS[l - 1];
+            const fov = 2 * Math.atan2(R * Math.sin(Math.PI / (2 * Nr)), height) * 180 / Math.PI;
+            levelAlpha.push(fov >= LOD_TRANSITION_DEG ? 1 : 0);
+        }
+        this._lastAlpha = levelAlpha;
+
+        const horizonDot = Math.max(-0.2, R / (R + height));
+
+        const wanted = new Set<string>();
+        for (let l = 0; l < LODS.length; l++)
+            if (levelAlpha[l] > 0.005)
+                this._bfs(l, horizonDot, wanted);
+
+        this._visibleCount = wanted.size;
+
+        for (const k of wanted)
+            if (!this.pool.has(k)) this._spawn(k);
+
+        for (const [k, e] of this.pool) {
+            const target = wanted.has(k) ? levelAlpha[e.level] : 0;
+            e.alpha += (target - e.alpha) * 0.08;
+
+            (e.mesh.material   as MeshBasicMaterial).opacity = e.alpha;
+            (e.border.material as LineBasicMaterial).opacity = e.alpha;
+
+            if (e.alpha < 0.005 && !wanted.has(k)) {
+                this.scene.remove(e.mesh);
+                this.scene.remove(e.border);
+                const mat = e.mesh.material as MeshBasicMaterial;
+                mat.map?.dispose();
+                mat.dispose();
+                e.mesh.geometry.dispose();
+                (e.border.material as LineBasicMaterial).dispose();
+                e.border.geometry.dispose();
+                this.pool.delete(k);
+            }
+        }
+    }
+
+    /**
+     * BFS from the seed tile outward.
+     * A tile is rejected if:
+     *   (a) its centre is past the geometric horizon (dot < horizonDot), OR
+     *   (b) its bounding sphere does not intersect the camera frustum.
+     */
+    private _bfs(l: number, horizonDot: number, wanted: Set<string>): void {
+        const { Nr, Nc, radius } = LODS[l];
+        const d = this._camDir;
+
+        let phi = Math.atan2(d.z, -d.x);
+        if (phi < 0) phi += 2 * Math.PI;
+        const theta = Math.acos(Math.max(-1, Math.min(1, d.y)));
+
+        const r0 = Math.min(Nr - 1, Math.floor(theta * Nr / Math.PI));
+        const c0 = Math.min(Nc - 1, Math.floor(phi   * Nc / (2 * Math.PI)));
+
+        // Tight bounding-sphere radius: circumradius of tile patch (half-diagonal).
+        // Tile spans PI/Nr in theta and PI/Nr in phi (Nc=2*Nr), so both half-extents
+        // are PI/(2*Nr).  Exact corner-to-centre arc = acos(cos²(PI/(2*Nr))).
+        const halfExt = Math.PI / (2 * Nr);
+        const tileBS  = radius * Math.sin(Math.acos(Math.cos(halfExt) * Math.cos(halfExt))) * 0.75;
+
+        const visited = new Set<number>();
+        const queue: number[] = [r0 * Nc + c0];
+        visited.add(r0 * Nc + c0);
+
+        while (queue.length > 0) {
+            const idx = queue.shift()!;
+            const r   = Math.floor(idx / Nc);
+            const c   = idx % Nc;
+
+            // (a) Back-face / horizon cull
+            if (tileDot(l, r, c, d) < horizonDot) continue;
+
+            // (b) Frustum cull — bounding sphere centred at tile centre on sphere
+            const pf   = 2 * Math.PI * (c + 0.5) / Nc;
+            const tf   = Math.PI     * (r + 0.5) / Nr;
+            const sinT = Math.sin(tf);
+            this._tileCenter.set(-Math.cos(pf)*sinT*radius, Math.cos(tf)*radius, Math.sin(pf)*sinT*radius);
+            this._tileSphere.set(this._tileCenter, tileBS);
+            if (!this._frustum.intersectsSphere(this._tileSphere)) continue;
+
+            wanted.add(tileKey(l, r, c));
+
+            const nb = [
+                r       * Nc + ((c - 1 + Nc) % Nc),
+                r       * Nc + ((c + 1)      % Nc),
+                r > 0      ? (r - 1) * Nc + c : -1,
+                r < Nr - 1 ? (r + 1) * Nc + c : -1,
+            ];
+            for (const ni of nb)
+                if (ni >= 0 && !visited.has(ni)) { visited.add(ni); queue.push(ni); }
+        }
+    }
+
+    private _spawn(k: string): void {
+        const parts = k.split('_');
+        const l = +parts[0], r = +parts[1], c = +parts[2];
+        const { Nr, Nc, radius } = LODS[l];
+        const s = SEGS[l];
+
+        const geo = new SphereGeometry(
+            radius, s, s,
+            2 * Math.PI * c / Nc, 2 * Math.PI / Nc,
+                Math.PI * r / Nr,     Math.PI / Nr,
+        );
+        const mat = new MeshBasicMaterial({
+            map: buildTexture(l, r, c), transparent: true, opacity: 0, depthWrite: false,
+        });
+        const mesh = new Mesh(geo, mat);
+        mesh.renderOrder = l + 1;
+        this.scene.add(mesh);
+
+        const border = buildBorder(l, r, c);
+        this.scene.add(border);
+
+        this.pool.set(k, { mesh, border, alpha: 0, level: l });
+    }
+}

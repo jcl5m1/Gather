@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Gather</title>
+    <!-- Prevent iOS Safari double-tap zoom and pinch zoom.
+         user-scalable=no is ignored since iOS 10; gesturestart is the reliable gate. -->
+    <script>
+        document.addEventListener('gesturestart',  function(e){ e.preventDefault(); });
+        document.addEventListener('gesturechange', function(e){ e.preventDefault(); });
+        document.addEventListener('gestureend',    function(e){ e.preventDefault(); });
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; touch-action: none; }
+        canvas { display: block; }
+
+        #hud {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            background: rgba(8, 8, 12, 0.92);
+            padding: 6px 12px 26px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        #hud-title {
+            font-size: 9px; font-weight: 600; letter-spacing: 2px;
+            text-transform: uppercase; color: #555;
+            font-family: -apple-system, sans-serif;
+            padding: 2px 2px 0;
+        }
+        #hud-slots {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 6px;
+        }
+        .slot { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+        .slot-swatch { width: 16px; height: 16px; border-radius: 4px; }
+        .slot-name  { font-size: 8px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; font-family: -apple-system, sans-serif; }
+        .slot-count { font-size: 13px; font-weight: 400; color: #ccc; font-family: -apple-system, sans-serif; }
+
+        #tile-info {
+            position: fixed; top: 16px; left: 16px;
+            font-family: -apple-system, monospace; font-size: 11px;
+            color: rgba(255,255,255,0.7);
+            pointer-events: none; z-index: 10;
+            line-height: 1.6;
+        }
+
+        #zoom-controls {
+            position: fixed; right: 16px; top: 16px;
+            display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 10;
+        }
+        .zoom-btn {
+            width: 48px; height: 48px; border-radius: 14px;
+            background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+            color: #fff; font-size: 26px; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
+            font-family: -apple-system, sans-serif;
+        }
+        .zoom-btn:active { background: rgba(255,255,255,0.18); }
+
+        #flash {
+            position: fixed; pointer-events: none;
+            font-size: 15px; font-weight: 600; font-family: -apple-system, sans-serif;
+            opacity: 0; white-space: nowrap;
+        }
+
+        #loading {
+            position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+            background: #000; color: #444; font-family: -apple-system, sans-serif;
+            font-size: 13px; letter-spacing: 2px; text-transform: uppercase; z-index: 100;
+            transition: opacity 0.5s;
+        }
+
+        .ctrl-divider {
+            width: 24px; height: 1px; background: rgba(255,255,255,0.1); margin: 2px 0;
+        }
+
+        /* ── Build panel ─────────────────────────────────────────────────── */
+        #build-panel {
+            position: fixed; left: 0; top: 0; bottom: 0;
+            width: 220px;
+            background: rgba(8, 8, 14, 0.96);
+            border-right: 1px solid rgba(255,255,255,0.08);
+            z-index: 20;
+            display: flex; flex-direction: column;
+            font-family: -apple-system, sans-serif;
+        }
+        #build-panel-scroll {
+            flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+            padding-bottom: 40px;
+        }
+        .bm-hidden { display: none !important; }
+
+        .bm-panel-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 18px 16px 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.07);
+        }
+        .bm-panel-title {
+            font-size: 11px; font-weight: 600; letter-spacing: 2px;
+            text-transform: uppercase; color: #888;
+        }
+        .bm-close-btn {
+            background: none; border: none; color: #555; font-size: 18px;
+            cursor: pointer; line-height: 1; padding: 4px;
+        }
+        .bm-close-btn:active { color: #fff; }
+
+        .bm-section-label {
+            font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+            color: #444; padding: 14px 16px 6px;
+        }
+
+        .bm-item {
+            margin: 0 10px; padding: 12px;
+            border: 1px solid rgba(255,255,255,0.07); border-radius: 10px;
+            display: flex; flex-direction: column; gap: 4px;
+        }
+        .bm-item-name {
+            font-size: 14px; font-weight: 500; color: #ddd;
+        }
+        .bm-item-desc {
+            font-size: 10px; color: #555; line-height: 1.4;
+        }
+        .bm-item-cost {
+            font-size: 11px; margin-top: 2px;
+        }
+        .bm-build-btn {
+            margin-top: 8px; padding: 8px;
+            background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 8px; color: #fff; font-size: 13px; cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .bm-build-btn:not(:disabled):active { background: rgba(255,255,255,0.18); }
+
+        /* ── Modal ───────────────────────────────────────────────────────── */
+        #build-modal {
+            position: fixed; inset: 0; z-index: 30;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .bm-backdrop {
+            position: absolute; inset: 0;
+            background: rgba(0,0,0,0.6);
+        }
+        .bm-modal-card {
+            position: relative; z-index: 1;
+            background: rgba(14,14,20,0.98);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 20px; min-width: 240px; max-width: 300px;
+            max-height: 80vh; display: flex; flex-direction: column;
+            font-family: -apple-system, sans-serif;
+        }
+        #bm-modal-title {
+            font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+            color: #666; margin-bottom: 14px;
+        }
+        #bm-modal-options {
+            display: flex; flex-direction: column; gap: 8px;
+            overflow-y: auto; -webkit-overflow-scrolling: touch;
+            flex: 1;
+        }
+        .bm-option {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 12px;
+            background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px; color: #ddd;
+            cursor: pointer; text-align: left; width: 100%;
+            -webkit-tap-highlight-color: transparent;
+            flex-wrap: wrap;
+        }
+        .bm-option:not(:disabled):active { background: rgba(255,255,255,0.12); }
+        .bm-swatch {
+            width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0;
+        }
+        .bm-option-label {
+            font-size: 13px; font-weight: 500; flex: 1;
+        }
+        .bm-option-sub {
+            font-size: 10px; color: #555; width: 100%;
+            padding-left: 24px; line-height: 1.4;
+        }
+        #bm-modal-cancel {
+            margin-top: 14px; width: 100%; padding: 9px;
+            background: none; border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px; color: #555; font-size: 13px; cursor: pointer;
+        }
+        #bm-modal-cancel:active { color: #fff; }
+
+        #hud-slots {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 5px;
+        }
+
+        /* ── Scale bar ───────────────────────────────────────────────────── */
+        /* ── Tech panel ──────────────────────────────────────────────────── */
+        #tech-panel {
+            position: fixed; right: 0; top: 0; bottom: 0;
+            width: 260px;
+            background: rgba(8, 8, 14, 0.96);
+            border-left: 1px solid rgba(255,255,255,0.08);
+            z-index: 20;
+            display: flex; flex-direction: column;
+            font-family: -apple-system, sans-serif;
+        }
+        #tech-panel-scroll {
+            flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+            padding-bottom: 40px;
+        }
+        .tp-card {
+            margin: 8px 10px;
+            padding: 12px;
+            border: 1px solid rgba(255,255,255,0.07); border-radius: 10px;
+            display: flex; flex-direction: column; gap: 4px;
+        }
+        .tp-done  { border-color: rgba(143,188,143,0.35); }
+        .tp-locked { opacity: 0.45; }
+        .tp-name  { font-size: 14px; font-weight: 500; color: #ddd; }
+        .tp-desc  { font-size: 10px; color: #555; line-height: 1.4; }
+        .tp-cost  { font-size: 11px; margin-top: 2px; }
+        .tp-badge { font-size: 10px; color: #8fbc8f; margin-top: 4px; }
+        .tp-badge-locked { color: #555; }
+
+        #scale-bar {
+            position: fixed; bottom: 80px; right: 16px;
+            display: flex; flex-direction: column; align-items: flex-end;
+            gap: 3px; pointer-events: none; z-index: 10;
+        }
+        #scale-line {
+            height: 7px;
+            border: 2px solid rgba(255,255,255,0.65);
+            border-top: none;
+            min-width: 30px;
+            transition: width 0.25s ease;
+        }
+        #scale-label {
+            font-size: 10px; color: rgba(255,255,255,0.65);
+            font-family: -apple-system, sans-serif;
+            letter-spacing: 0.3px;
+        }
+        /* ── Settings modal ──────────────────────────────────────────── */
+        #settings-modal {
+            position: fixed; inset: 0; z-index: 30;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #settings-modal .bm-modal-card { min-width: 260px; max-width: 320px; }
+        .settings-section-label {
+            font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+            color: #444; margin: 12px 0 8px;
+        }
+        .settings-row {
+            display: flex; flex-direction: column; gap: 4px;
+            padding: 12px;
+            border: 1px solid rgba(255,255,255,0.07); border-radius: 10px;
+            margin-bottom: 8px;
+        }
+        .settings-row-title {
+            font-size: 13px; font-weight: 500; color: #ddd;
+        }
+        .settings-row-desc {
+            font-size: 10px; color: #555; line-height: 1.4;
+        }
+        .settings-danger-btn {
+            margin-top: 8px; padding: 8px;
+            background: rgba(180,40,40,0.15); border: 1px solid rgba(180,40,40,0.4);
+            border-radius: 8px; color: #e57373; font-size: 13px; cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            font-family: -apple-system, sans-serif;
+        }
+        .settings-danger-btn:active { background: rgba(180,40,40,0.35); }
+        #settings-confirm {
+            display: flex; flex-direction: column; gap: 8px; margin-top: 4px;
+        }
+        #settings-confirm-msg {
+            font-size: 12px; color: #aaa; line-height: 1.5;
+        }
+        .settings-confirm-yes {
+            padding: 9px;
+            background: rgba(180,40,40,0.25); border: 1px solid rgba(180,40,40,0.5);
+            border-radius: 8px; color: #e57373; font-size: 13px; cursor: pointer;
+            font-family: -apple-system, sans-serif;
+        }
+        .settings-confirm-yes:active { background: rgba(180,40,40,0.5); }
+        .settings-confirm-no {
+            padding: 9px;
+            background: none; border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px; color: #555; font-size: 13px; cursor: pointer;
+            font-family: -apple-system, sans-serif;
+        }
+        .settings-confirm-no:active { color: #fff; }
+    </style>
+</head>
+<body>
+
+<div id="loading">Loading Earth…</div>
+<div id="hud">
+    <!-- #hud-title and slot grid injected by HUD.ts -->
+    <div id="hud-slots"></div>
+</div>
+
+<div id="zoom-controls">
+    <button class="zoom-btn" id="btn-in">+</button>
+    <button class="zoom-btn" id="btn-out">−</button>
+    <button class="zoom-btn" id="btn-home" style="font-size:18px;">⌂</button>
+    <div class="ctrl-divider"></div>
+    <button class="zoom-btn" id="btn-build" style="font-size:20px;">🏗</button>
+    <button class="zoom-btn" id="btn-stats" style="font-size:20px;">📈</button>
+    <button class="zoom-btn" id="btn-tech"     style="font-size:20px;">🔬</button>
+    <button class="zoom-btn" id="btn-settings" style="font-size:20px;">⚙</button>
+</div>
+
+<!-- Build panel (slide-in from left) -->
+<div id="build-panel" class="bm-hidden">
+    <div class="bm-panel-header">
+        <span class="bm-panel-title">Build</span>
+        <button class="bm-close-btn" id="bm-panel-close">✕</button>
+    </div>
+
+    <div id="build-panel-scroll">
+    <div class="bm-section-label">Vehicles</div>
+
+    <div class="bm-item">
+        <div class="bm-item-name">Truck</div>
+        <div class="bm-item-desc">Automated hauler · 90 km/h · 20 t payload · Coal or Wood fuel</div>
+        <div class="bm-item-cost" id="bm-truck-cost">— / 15 t Iron</div>
+        <div class="bm-item-cost" id="bm-truck-fuel" style="color:#666">Fuel: Wood</div>
+        <button class="bm-build-btn" id="bm-truck-btn">Build</button>
+    </div>
+
+    <div class="bm-section-label">Structures</div>
+
+    <div class="bm-item">
+        <div class="bm-item-name">Refinery</div>
+        <div class="bm-item-desc">Select output product · Steel or Gasoline · fuel auto-selected · Concrete foundation</div>
+        <div class="bm-item-cost" id="bm-refinery-cost">— / 5 t Iron</div>
+        <div class="bm-item-cost" id="bm-refinery-stone-cost">— / 50 t Stone</div>
+        <button class="bm-build-btn" id="bm-refinery-btn">Build</button>
+    </div>
+
+    <div class="bm-item">
+        <div class="bm-item-name">Oil Well</div>
+        <div class="bm-item-desc">Crude oil extraction · 1 Gt deposit · 42.7 MJ/kg · Assign trucks to haul</div>
+        <div class="bm-item-cost" id="bm-oilwell-cost">— / 150 t Steel</div>
+        <button class="bm-build-btn" id="bm-oilwell-btn">Build</button>
+    </div>
+
+    <div class="bm-item">
+        <div class="bm-item-name">Power Plant</div>
+        <div class="bm-item-desc">Converts fuel to electricity · Wood 25% · Coal 38% · Oil 40% · Gasoline 35% efficiency</div>
+        <div class="bm-item-cost" id="bm-powerplant-cost">— / 10 t Iron</div>
+        <div class="bm-item-cost" id="bm-powerplant-stone-cost">— / 100 t Stone</div>
+        <button class="bm-build-btn" id="bm-powerplant-btn">Build</button>
+    </div>
+    </div>
+</div>
+
+<!-- Resource / fuel selection modal -->
+<div id="build-modal" class="bm-hidden">
+    <div class="bm-backdrop"></div>
+    <div class="bm-modal-card">
+        <div id="bm-modal-title"></div>
+        <div id="bm-modal-options"></div>
+        <button id="bm-modal-cancel">Cancel</button>
+    </div>
+</div>
+
+<!-- Tech tree panel (slide-in from right) -->
+<div id="tech-panel" class="bm-hidden">
+    <div class="bm-panel-header">
+        <span class="bm-panel-title">Research</span>
+        <button class="bm-close-btn" id="tp-close">✕</button>
+    </div>
+    <div id="tech-panel-scroll">
+        <div class="bm-section-label">Transport Fuel</div>
+        <div id="tech-panel-content"></div>
+    </div>
+</div>
+
+<!-- Settings modal -->
+<div id="settings-modal" class="bm-hidden">
+    <div class="bm-backdrop"></div>
+    <div class="bm-modal-card">
+        <div style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#666;margin-bottom:4px;">Settings</div>
+        <div class="settings-section-label">Data</div>
+        <div class="settings-row" id="settings-clear-row">
+            <div class="settings-row-title">Clear Save</div>
+            <div class="settings-row-desc">Wipe all inventory, structures, and trucks. The page will reload.</div>
+            <button class="settings-danger-btn" id="settings-clear-btn">Clear Save Data…</button>
+        </div>
+        <div id="settings-confirm" style="display:none;">
+            <div id="settings-confirm-msg">All resources, trucks, and structures will be permanently deleted. This cannot be undone.</div>
+            <button class="settings-confirm-yes" id="settings-confirm-yes">Yes, delete everything</button>
+            <button class="settings-confirm-no"  id="settings-confirm-no">Cancel</button>
+        </div>
+        <button id="settings-close" style="margin-top:14px;width:100%;padding:9px;background:none;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#555;font-size:13px;cursor:pointer;font-family:-apple-system,sans-serif;">Close</button>
+    </div>
+</div>
+
+<div id="tile-info"></div>
+
+<div id="scale-bar">
+    <div id="scale-line"></div>
+    <div id="scale-label"></div>
+</div>
+
+<div id="flash"></div>
+
+<script src="game.bundle.js?v=5"></script>
+</body>
+</html>

@@ -7,7 +7,9 @@
     "build": "webpack",
     "start": "webpack serve",
     "build:mine": "webpack --config webpack.mineGather.config.js",
-    "start:mine": "webpack serve --config webpack.mineGather.config.js"
+    "start:mine": "webpack serve --config webpack.mineGather.config.js",
+    "build:game": "webpack --config webpack.game.config.js",
+    "start:game": "webpack serve --config webpack.game.config.js"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +27,7 @@
     "@types/three": "^0.169.0",
     "@types/uuid": "^10.0.0",
     "copy-webpack-plugin": "^12.0.2",
+    "playwright": "^1.59.1",
     "ts-loader": "^9.5.1",
     "webpack": "^5.96.1",
     "webpack-cli": "^5.1.4",

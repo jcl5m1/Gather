@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "es6",
+    "module": "es6",
+    "strict": true,
+    "esModuleInterop": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "lib": ["dom", "es6", "dom.iterable", "scripthost"],
+    "baseUrl": "./",
+    "paths": { "*": ["node_modules/*"] }
+  },
+  "include": ["src/game/**/*"],
+  "exclude": ["node_modules", "src/moonOrbitSim/**/*", "src/mineGather/**/*"]
+}
