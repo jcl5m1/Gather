@@ -154,6 +154,8 @@ uniform float uIntensity;    // glow brightness
 uniform float uFade;         // 0 at surface, 1 above ~1 Mm
 uniform vec3  uSkyColor;
 uniform vec3  uSunColor;
+uniform float uInnerOpacity; // inner limb glow opacity
+uniform float uInnerWidth;   // inner limb falloff width
 
 void main() {
     // ── Reconstruct the camera ray for this pixel ─────────────────────────
@@ -222,8 +224,8 @@ void main() {
         // innerDayMask: 1 on night/terminator side, 0 on fully-lit dayside
         float innerDayMask = 1.0 - smoothstep(0.0, 0.3, NdotL);
 
-        float innerLimb = exp(-pow((1.0 - t) / 0.0875, 2.0)) * step(0.0, 1.0 - t);
-        float innerGlow = innerLimb * 0.4 * innerDayMask;
+        float innerLimb = exp(-pow((1.0 - t) / uInnerWidth, 2.0)) * step(0.0, 1.0 - t);
+        float innerGlow = innerLimb * uInnerOpacity * innerDayMask;
         gl_FragColor = vec4(color * innerGlow, innerGlow);
     } else {
         // Outside the disc: outer halo glow only.
@@ -253,6 +255,8 @@ export class AtmosphereGlow {
                 uFade:        { value: 1.0 },
                 uSkyColor:    { value: new Color(0.07, 0.20, 0.72) },
                 uSunColor:    { value: new Color(0.52, 0.76, 1.00) },
+                uInnerOpacity:{ value: 0.4 },
+                uInnerWidth:  { value: 0.0875 },
             },
             transparent: true,
             blending:    AdditiveBlending,
@@ -281,6 +285,8 @@ export class AtmosphereGlow {
     setIntensity(v: number):      void { this._mat.uniforms.uIntensity.value  = v; }
     setSkyColor(hex: string):     void { (this._mat.uniforms.uSkyColor.value as Color).set(hex); }
     setSunColor(hex: string):     void { (this._mat.uniforms.uSunColor.value as Color).set(hex); }
+    setInnerOpacity(v: number):   void { this._mat.uniforms.uInnerOpacity.value = v; }
+    setInnerWidth(v: number):     void { this._mat.uniforms.uInnerWidth.value   = v; }
 }
 
 export function addAtmosphere(overlayScene: Scene): AtmosphereGlow {

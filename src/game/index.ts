@@ -612,8 +612,10 @@ _bindLiveSlider('trp-ambient', 'trp-ambient-val', 3, v => daylightOverlay.setAmb
 
 _bindLiveSlider('trp-rim-front',   'trp-rim-front-val',   1, v => {});
 _bindLiveSlider('trp-rim-back',    'trp-rim-back-val',    1, _v => {});  // removed
-_bindLiveSlider('trp-glow-front',  'trp-glow-front-val',  2, v => atmosphere.setIntensity(v));
-_bindLiveSlider('trp-glow-back',   'trp-glow-back-val',   2, _v => {});  // removed
+_bindLiveSlider('trp-glow-front',    'trp-glow-front-val',    2, v => atmosphere.setIntensity(v));
+_bindLiveSlider('trp-glow-back',     'trp-glow-back-val',     2, _v => {});  // removed
+_bindLiveSlider('trp-inner-opacity', 'trp-inner-opacity-val', 2, v => atmosphere.setInnerOpacity(v));
+_bindLiveSlider('trp-inner-width',   'trp-inner-width-val',   2, v => atmosphere.setInnerWidth(v));
 _bindLiveSlider('trp-sun-mod',     'trp-sun-mod-val',     2, _v => {});  // removed
 _bindLiveSlider('trp-night-floor', 'trp-night-floor-val', 2, _v => {});  // removed
 
