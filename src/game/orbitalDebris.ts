@@ -8,9 +8,15 @@
  *   4. Radius        r = a(1 − e·cos E)
  *   5. 3-D position via Rodrigues rotation into the tilted orbital plane
  *
+ * Geometry: 11 vertices per particle (1 head + 10 tail steps).
+ *           10 line segments connecting them → true curved arc.
+ *           aVertRole ∈ [0.0, 1.0] — 0=head, 1=tail tip.
+ *           Each vertex independently solves Kepler at its own M offset,
+ *           so the polyline follows the exact Keplerian arc.
+ *
  * Orbital elements per particle (packed into two attributes):
  *   aOrbit1 = (semi-major axis a, eccentricity e, inclination i, RAAN Ω)
- *   aOrbit2 = (arg-of-perigee ω, mean anomaly M0, _, _)   [zw unused]
+ *   aOrbit2 = (arg-of-perigee ω, mean anomaly M0, unused, unused)
  *
  * Eccentricity range: 0.7 – 0.99  (highly elliptical debris)
  * Semi-major axis chosen so perigee stays above ~200 km.
@@ -29,22 +35,23 @@ import {
 import { R } from './constants';
 
 // ── Physics ────────────────────────────────────────────────────────────────
-const GM = 3.986004418e14;   // Earth gravitational parameter (m³/s²)
+const GM = 3.986004418e14;          // Earth gravitational parameter (m³/s²)
 
 // ── Eccentricity range ─────────────────────────────────────────────────────
 const ECC_MIN = 0.70;
 const ECC_MAX = 0.99;
 
 // ── Perigee altitude range (m) ─────────────────────────────────────────────
-//   Perigee randomly placed between 200 km and 1000 km above surface.
-//   Semi-major axis derived from: a = r_perigee / (1 - e)
 const PERIGEE_MIN = R + 200_000;    // 200 km above surface
 const PERIGEE_MAX = R + 1_000_000;  // 1 Mm above surface
 
-// ── Streak ─────────────────────────────────────────────────────────────────
-//   Streak is expressed as a fixed Δ in mean anomaly (radians).
-//   At perigee the particle moves faster → streak appears longer there.
-const STREAK_DM = 0.018;   // mean-anomaly offset for tail vertex
+// ── Tail geometry ──────────────────────────────────────────────────────────
+//   TAIL_STEPS segments → TAIL_STEPS+1 vertices per particle (including head).
+//   TAIL_TOTAL_DM is the total mean-anomaly arc spanned by the full tail.
+const TAIL_STEPS    = 10;                     // number of line segments
+const VERTS_PER     = TAIL_STEPS + 1;         // 11 vertices per particle
+const TAIL_TOTAL_DM = 0.12;                   // total tail arc in mean anomaly (rad)
+const STEP_DM       = TAIL_TOTAL_DM / TAIL_STEPS;  // per-step offset
 
 // ── Count ──────────────────────────────────────────────────────────────────
 const COUNT = 10_000;
@@ -55,23 +62,21 @@ const DEBRIS_VERT = /* glsl */`
 attribute vec4 aOrbit1;
 // Element set 2: (argPeri, M0, unused, unused)
 attribute vec4 aOrbit2;
-// 0 = head vertex, 1 = tail vertex
+// 0.0 = head, 1.0 = tail tip  (evenly spaced at 0.0, 0.1, 0.2, ... 1.0)
 attribute float aVertRole;
 
-uniform float uTime;       // simulation time (s)
-uniform float uGM;         // gravitational parameter (m³/s²)
-uniform float uStreakDM;   // mean-anomaly offset for tail (rad)
+uniform float uTime;        // simulation time (s)
+uniform float uGM;          // gravitational parameter (m³/s²)
+uniform float uTailTotalDM; // total mean-anomaly arc of the tail (rad)
 
 varying float vRole;
 
-// ── Kepler solver (Newton-Raphson, 6 iterations) ──────────────────────────
+// ── Kepler solver (Newton-Raphson, 6 iterations) ─────────────────────────
 float solveKepler(float M, float e) {
-    // Reduce M to [0, 2π)
     M = mod(M, 6.28318530718);
-    float E = M;    // initial guess
+    float E = M;
     for (int i = 0; i < 6; i++) {
-        float dE = (E - e * sin(E) - M) / (1.0 - e * cos(E));
-        E -= dE;
+        E -= (E - e * sin(E) - M) / (1.0 - e * cos(E));
     }
     return E;
 }
@@ -83,45 +88,37 @@ vec3 rotateAxis(vec3 v, vec3 k, float theta) {
 }
 
 void main() {
-    float a        = aOrbit1.x;   // semi-major axis (m, scene units)
-    float e        = aOrbit1.y;   // eccentricity
-    float incl     = aOrbit1.z;   // inclination (rad)
-    float raan     = aOrbit1.w;   // right ascension of ascending node (rad)
-    float argPeri  = aOrbit2.x;   // argument of perigee (rad)
-    float M0       = aOrbit2.y;   // initial mean anomaly (rad)
+    float a       = aOrbit1.x;
+    float e       = aOrbit1.y;
+    float incl    = aOrbit1.z;
+    float raan    = aOrbit1.w;
+    float argPeri = aOrbit2.x;
+    float M0      = aOrbit2.y;
 
-    // Mean motion n = sqrt(GM / a³)
+    // Mean motion
     float n = sqrt(uGM / (a * a * a));
 
-    // Mean anomaly at current time — offset tail by uStreakDM
-    float M = M0 + n * uTime - aVertRole * uStreakDM;
+    // Each vertex sits at a different point along the tail arc.
+    // aVertRole=0 → head (current position), aVertRole=1 → tail tip (furthest back).
+    float M = M0 + n * uTime - aVertRole * uTailTotalDM;
 
-    // Solve Kepler's equation for eccentric anomaly E
+    // Solve Kepler → eccentric anomaly
     float E = solveKepler(M, e);
 
-    // True anomaly ν
-    float sinHalf = sqrt((1.0 + e) / (1.0 - e)) * tan(E * 0.5);
-    float nu      = 2.0 * atan(sinHalf);
+    // True anomaly
+    float nu = 2.0 * atan(sqrt((1.0 + e) / (1.0 - e)) * tan(E * 0.5));
 
-    // Orbital radius at this true anomaly
+    // Orbital radius
     float r = a * (1.0 - e * cos(E));
 
-    // Position in orbital plane (perifocal frame)
-    float cosNu = cos(nu);
-    float sinNu = sin(nu);
+    // Build 3-D orbital frame
+    vec3 north      = vec3(0.0, 1.0, 0.0);
+    vec3 nodeDir    = vec3(cos(raan), 0.0, sin(raan));
+    vec3 orbitZ     = rotateAxis(north,   nodeDir, incl);
+    vec3 perigeeDir = rotateAxis(nodeDir, orbitZ,  argPeri);
+    vec3 semilatDir = cross(orbitZ, perigeeDir);
 
-    // Build 3-D orbital frame via Rodrigues:
-    //   nodeDir = ascending node direction
-    //   orbitY  = normal direction tilted by inclination
-    //   perigeeDir = rotated into orbital plane by argPeri
-    vec3 north   = vec3(0.0, 1.0, 0.0);
-    vec3 nodeDir = vec3(cos(raan), 0.0, sin(raan));
-    vec3 orbitZ  = rotateAxis(north, nodeDir, incl);   // orbital plane normal
-    vec3 perigeeDir = rotateAxis(nodeDir, orbitZ, argPeri);
-    vec3 semilatDir = cross(orbitZ, perigeeDir);        // 90° from perigee in plane
-
-    // Final world position
-    vec3 pos = r * (perigeeDir * cosNu + semilatDir * sinNu);
+    vec3 pos = r * (perigeeDir * cos(nu) + semilatDir * sin(nu));
 
     vRole       = aVertRole;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
@@ -129,11 +126,10 @@ void main() {
 
 // ── Fragment shader ────────────────────────────────────────────────────────
 const DEBRIS_FRAG = /* glsl */`
-varying float vRole;   // 0 = head (bright), 1 = tail (transparent)
+varying float vRole;   // 0.0 = head (bright white), 1.0 = tail tip (transparent)
 
 void main() {
-    float alpha = 1.0 - vRole;
-    alpha = alpha * alpha;                         // quadratic fade
+    float alpha = (1.0 - vRole) * (1.0 - vRole);   // quadratic fade to tail
     gl_FragColor = vec4(1.0, 1.0, 1.0, alpha * 0.85);
 }`;
 
@@ -144,36 +140,44 @@ export class OrbitalDebris {
     private _simTime: number = 0.0;
 
     constructor(scene: Scene) {
-        const VERTS = COUNT * 2;
+        const TOTAL_VERTS   = COUNT * VERTS_PER;                  // 110,000
+        const TOTAL_INDICES = COUNT * TAIL_STEPS * 2;             // 200,000 (10 segments × 2 endpoints each)
 
-        const orbit1  = new Float32Array(VERTS * 4);   // (a, e, incl, raan)
-        const orbit2  = new Float32Array(VERTS * 4);   // (argPeri, M0, 0, 0)
-        const role    = new Float32Array(VERTS);
-        const indices = new Uint32Array(COUNT * 2);
+        const orbit1  = new Float32Array(TOTAL_VERTS * 4);
+        const orbit2  = new Float32Array(TOTAL_VERTS * 4);
+        const role    = new Float32Array(TOTAL_VERTS);
+        const indices = new Uint32Array(TOTAL_INDICES);
 
         for (let i = 0; i < COUNT; i++) {
             // ── Randomise orbital elements ─────────────────────────────────
-            const e        = ECC_MIN + Math.random() * (ECC_MAX - ECC_MIN);
-            const rPeri    = PERIGEE_MIN + Math.random() * (PERIGEE_MAX - PERIGEE_MIN);
-            const a        = rPeri / (1 - e);           // semi-major axis (m)
-            const incl     = Math.acos(1 - 2 * Math.random());  // uniform sphere
-            const raan     = Math.random() * Math.PI * 2;
-            const argPeri  = Math.random() * Math.PI * 2;
-            const M0       = Math.random() * Math.PI * 2;
+            const e       = ECC_MIN + Math.random() * (ECC_MAX - ECC_MIN);
+            const rPeri   = PERIGEE_MIN + Math.random() * (PERIGEE_MAX - PERIGEE_MIN);
+            const a       = rPeri / (1 - e);
+            const incl    = Math.acos(1 - 2 * Math.random());
+            const raan    = Math.random() * Math.PI * 2;
+            const argPeri = Math.random() * Math.PI * 2;
+            const M0      = Math.random() * Math.PI * 2;
 
-            const vi = i * 2;   // head vertex index
+            const vBase = i * VERTS_PER;   // first vertex index for this particle
 
-            for (let v = 0; v < 2; v++) {
-                const idx = (vi + v) * 4;
-                orbit1[idx+0] = a;     orbit1[idx+1] = e;
-                orbit1[idx+2] = incl;  orbit1[idx+3] = raan;
-                orbit2[idx+0] = argPeri; orbit2[idx+1] = M0;
-                orbit2[idx+2] = 0;     orbit2[idx+3] = 0;
-                role[vi + v] = v === 0 ? 0.0 : 1.0;
+            // Write 11 vertices for this particle
+            for (let s = 0; s < VERTS_PER; s++) {
+                const vi  = vBase + s;
+                const vi4 = vi * 4;
+                orbit1[vi4+0] = a;       orbit1[vi4+1] = e;
+                orbit1[vi4+2] = incl;    orbit1[vi4+3] = raan;
+                orbit2[vi4+0] = argPeri; orbit2[vi4+1] = M0;
+                orbit2[vi4+2] = 0;       orbit2[vi4+3] = 0;
+                // role: 0/10, 1/10, 2/10 ... 10/10
+                role[vi] = s / TAIL_STEPS;
             }
 
-            indices[i*2+0] = vi;
-            indices[i*2+1] = vi + 1;
+            // Write 10 line segments as index pairs: (v0,v1), (v1,v2), ... (v9,v10)
+            for (let s = 0; s < TAIL_STEPS; s++) {
+                const ii = (i * TAIL_STEPS + s) * 2;
+                indices[ii+0] = vBase + s;
+                indices[ii+1] = vBase + s + 1;
+            }
         }
 
         const geo = new BufferGeometry();
@@ -186,27 +190,25 @@ export class OrbitalDebris {
             vertexShader:   DEBRIS_VERT,
             fragmentShader: DEBRIS_FRAG,
             uniforms: {
-                uTime:     { value: 0.0 },
-                uGM:       { value: GM },
-                uStreakDM: { value: STREAK_DM },
+                uTime:        { value: 0.0 },
+                uGM:          { value: GM },
+                uTailTotalDM: { value: TAIL_TOTAL_DM },
             },
             transparent: true,
             blending:    AdditiveBlending,
             depthWrite:  false,
-            depthTest:   true,
         });
 
         this._mesh = new LineSegments(geo, this._mat);
         this._mesh.frustumCulled = false;
-        this._mesh.renderOrder   = 12;
-
+        this._mesh.renderOrder   = 20;
         scene.add(this._mesh);
     }
 
     /** Advance simulation by dt seconds (already scaled by timeScale). */
     update(dt: number): void {
         this._simTime += dt;
-        this._mat.uniforms.uTime.value = this._simTime;
+        (this._mat.uniforms['uTime'] as { value: number }).value = this._simTime;
     }
 
     dispose(): void {
