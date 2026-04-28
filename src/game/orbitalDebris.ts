@@ -38,8 +38,8 @@ import { R } from './constants';
 const GM = 3.986004418e14;          // Earth gravitational parameter (m³/s²)
 
 // ── Eccentricity range ─────────────────────────────────────────────────────
-const ECC_MIN = 0.90;
-const ECC_MAX = 1.00;
+const ECC_MIN = 0.00;
+const ECC_MAX = 0.10;
 
 // ── Perigee altitude range (m) ─────────────────────────────────────────────
 const PERIGEE_MIN = R + 200_000;    // 200 km above surface
