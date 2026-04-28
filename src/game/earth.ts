@@ -150,7 +150,8 @@ uniform vec3  uCamDir;       // unit vector from planet to camera
 uniform float uCamDist;      // camera distance from planet centre (metres)
 uniform vec3  uSunDir;       // unit vector toward sun (planet-centred)
 uniform float uPlanetR;      // planet radius (metres)
-uniform float uIntensity;    // glow brightness
+uniform float uGlowFront;   // outer glow intensity on sun-facing limb
+uniform float uGlowBack;    // outer glow intensity on anti-sun limb
 uniform float uFade;         // 0 at surface, 1 above ~1 Mm
 uniform vec3  uSkyColor;
 uniform vec3  uSunColor;
@@ -229,7 +230,13 @@ void main() {
         gl_FragColor = vec4(color * innerGlow, innerGlow);
     } else {
         // Outside the disc: outer halo glow only.
-        float atm = outerGlow * uIntensity * uFade;
+        // Split intensity by sun direction at the silhouette point:
+        //   qNorm is the normalised silhouette point direction.
+        //   NdotS > 0 = sun-facing limb (front), < 0 = back-lit limb (back).
+        float NdotS_outer  = dot(normalize(qClose), uSunDir);
+        float frontWeight  = smoothstep(-0.3, 0.3, NdotS_outer);   // 0=back, 1=front
+        float glowIntensity = mix(uGlowBack, uGlowFront, frontWeight);
+        float atm = outerGlow * glowIntensity * uFade;
         gl_FragColor = vec4(color * atm, atm);
     }
 }`;
@@ -251,7 +258,8 @@ export class AtmosphereGlow {
                 uCamDist:     { value: R * 2 },
                 uPlanetR:     { value: R },
                 uSunDir:      { value: new Vector3(0.9962, 0.0872, 0) },
-                uIntensity:   { value: 1.2 },
+                uGlowFront:   { value: 1.2 },
+                uGlowBack:    { value: 0.45 },
                 uFade:        { value: 1.0 },
                 uSkyColor:    { value: new Color(0.07, 0.20, 0.72) },
                 uSunColor:    { value: new Color(0.52, 0.76, 1.00) },
@@ -282,7 +290,8 @@ export class AtmosphereGlow {
     }
 
     setSunDir(dir: Vector3):      void { (this._mat.uniforms.uSunDir.value as Vector3).copy(dir); }
-    setIntensity(v: number):      void { this._mat.uniforms.uIntensity.value  = v; }
+    setGlowFront(v: number):      void { this._mat.uniforms.uGlowFront.value  = v; }
+    setGlowBack(v: number):       void { this._mat.uniforms.uGlowBack.value   = v; }
     setSkyColor(hex: string):     void { (this._mat.uniforms.uSkyColor.value as Color).set(hex); }
     setSunColor(hex: string):     void { (this._mat.uniforms.uSunColor.value as Color).set(hex); }
     setInnerOpacity(v: number):   void { this._mat.uniforms.uInnerOpacity.value = v; }
