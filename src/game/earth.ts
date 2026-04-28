@@ -103,7 +103,7 @@ export class DaylightOverlay {
             uniforms: {
                 uSunDir:        { value: sunDir.clone() },
                 uSunIntensity:  { value: 1.0 },
-                uAmbient:       { value: 0.25 },
+                uAmbient:       { value: 0.1 },
             },
             transparent: true,
             blending:    NormalBlending,
@@ -340,7 +340,7 @@ uniform float uDeepOceanLevel;
 uniform float uSpecPower;       // shininess exponent (default 80)
 uniform float uSpecIntensity;   // overall brightness (default 0.6)
 uniform vec3  uSpecColor;       // highlight colour (default near-white)
-uniform float uSpecAmbient;     // ambient reflection floor (default 0.15)
+
 
 // ── Noise / height field (mirrors terrainGen.ts) ──────────────────────────────
 const int   OCTAVE_COUNT = 8;   // fewer octaves for perf (ocean is smooth)
@@ -422,9 +422,7 @@ void main() {
     float NdotH  = max(0.0, dot(N, H));
     float NdotL  = max(0.0, dot(N, uSunDir));
     float spec   = pow(NdotH, uSpecPower) * NdotL;  // NdotL kills spec on night side
-    float amb    = uSpecAmbient * oceanMask;              // ambient floor on ocean surface
-
-    float alpha  = (spec * uSpecIntensity + amb) * oceanMask;
+    float alpha  = spec * uSpecIntensity * oceanMask;
     gl_FragColor = vec4(uSpecColor * alpha, alpha);
 }`;
 
@@ -447,7 +445,6 @@ export class OceanSpecular {
                 uDeepOceanLevel:{ value: 0.50 },
                 uSpecPower:     { value: 40.0 },
                 uSpecIntensity: { value: 0.6 },
-                uSpecAmbient:   { value: 0.15 },
                 uSpecColor:     { value: new Color(0.85, 0.95, 1.0) },
             },
             transparent: true,
@@ -475,7 +472,6 @@ export class OceanSpecular {
     setDeepOceanLevel(v: number):   void { this._mat.uniforms.uDeepOceanLevel.value = v; }
     setSpecPower(v: number):        void { this._mat.uniforms.uSpecPower.value      = v; }
     setSpecIntensity(v: number):    void { this._mat.uniforms.uSpecIntensity.value  = v; }
-    setSpecAmbient(v: number):      void { this._mat.uniforms.uSpecAmbient.value    = v; }
 }
 
 export function addOceanSpecular(overlayScene: Scene): OceanSpecular {
