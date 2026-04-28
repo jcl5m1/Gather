@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Truck Orientation Test</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; font-family: -apple-system, sans-serif; }
+        canvas { display: block; }
+
+        #controls {
+            position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 8px; align-items: center; z-index: 10;
+        }
+        .ctrl-btn {
+            width: 44px; height: 44px; border-radius: 10px;
+            background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+            color: #fff; font-size: 22px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .ctrl-btn:active { background: rgba(255,255,255,0.25); }
+
+        /* Screen-space endpoint dots */
+        .dot {
+            position: fixed; width: 10px; height: 10px; border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none; z-index: 5;
+        }
+
+        #legend {
+            position: fixed; top: 74px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 14px; font-size: 11px; color: #777; white-space: nowrap;
+            z-index: 10;
+        }
+        .leg-dot {
+            width: 9px; height: 9px; border-radius: 50%;
+            display: inline-block; vertical-align: middle; margin-right: 3px;
+        }
+
+        #status {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            font-size: 11px; color: #666; letter-spacing: 0.4px; white-space: nowrap;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+<div id="controls">
+    <button class="ctrl-btn" id="btn-in">+</button>
+    <span id="zoom-label" style="color:#555;font-size:11px;min-width:36px;text-align:center">pico</span>
+    <button class="ctrl-btn" id="btn-out">−</button>
+    <button class="ctrl-btn" id="btn-pause" style="font-size:16px">⏸</button>
+</div>
+
+<div id="legend">
+    <span><span class="leg-dot" style="background:#33ff33"></span>Dest SW (KSC)</span>
+    <span><span class="leg-dot" style="background:#ff3333"></span>Source NE (+100 m)</span>
+    <span style="background:#d0d0d0;color:#111;padding:1px 6px;border-radius:3px;font-size:10px">▬ Truck</span>
+</div>
+
+<!-- Screen-space dots: positions updated each frame via JS -->
+<div id="dot-dst" class="dot" style="background:#33ff33"></div>
+<div id="dot-src" class="dot" style="background:#ff3333"></div>
+
+<div id="status">loading…</div>
+
+<script src="testTruck.bundle.js"></script>
+</body>
+</html>

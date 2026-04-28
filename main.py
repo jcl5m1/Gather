@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 from tinydb import TinyDB, Query
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
-import time, random
+import os, time, random
 
 app = Flask(__name__, static_folder='dist', template_folder='templates')
 CORS(app)  # Enable CORS for all routes
@@ -84,9 +84,17 @@ def handleDelete():
 def index():
     return send_from_directory(app.static_folder, 'index.html')
 
+@app.route('/mobile')
+def mobile():
+    return render_template('mobile.html')
+
+@app.route('/lagrange_explorer/<path:filename>')
+def lagrange_explorer(filename):
+    return send_from_directory(os.path.join(os.path.dirname(__file__), 'lagrange_explorer'), filename)
+
 @app.route('/test')
 def test():
     return render_template('test.html')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8010, debug=True)
+    app.run(host='0.0.0.0', port=9000, debug=True)

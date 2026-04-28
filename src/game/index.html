@@ -295,9 +295,128 @@
             font-family: -apple-system, sans-serif;
         }
         .settings-confirm-no:active { color: #fff; }
+
+        /* ── Terrain panel ───────────────────────────────────────────────── */
+        #terrain-panel {
+            position: fixed; right: 72px; top: 16px;
+            width: 210px;
+            background: rgba(8, 8, 14, 0.96);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            z-index: 20;
+            font-family: -apple-system, sans-serif;
+            padding: 14px 14px 16px;
+            display: flex; flex-direction: column; gap: 10px;
+            max-height: calc(100vh - 40px); overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        .trp-title {
+            font-size: 9px; font-weight: 600; letter-spacing: 2px;
+            text-transform: uppercase; color: #555;
+            margin-bottom: 2px;
+        }
+        .trp-row { display: flex; flex-direction: column; gap: 4px; }
+        .trp-label {
+            display: flex; justify-content: space-between;
+            font-size: 11px; color: #888;
+        }
+        .trp-val { color: #ccc; font-variant-numeric: tabular-nums; min-width: 32px; text-align: right; }
+        .trp-slider {
+            -webkit-appearance: none; appearance: none;
+            width: 100%; height: 3px;
+            background: rgba(255,255,255,0.15); border-radius: 2px; outline: none;
+            cursor: pointer;
+        }
+        .trp-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px; height: 14px; border-radius: 50%;
+            background: #fff; cursor: pointer;
+        }
+        .trp-slider::-moz-range-thumb {
+            width: 14px; height: 14px; border-radius: 50%;
+            background: #fff; border: none; cursor: pointer;
+        }
+        .trp-section-label {
+            font-size: 9px; font-weight: 600; letter-spacing: 1.5px;
+            text-transform: uppercase; color: #444; margin-top: 2px;
+        }
+        .trp-divider { height: 1px; background: rgba(255,255,255,0.07); margin: 2px 0; }
+        #trp-colormap { width: 100%; height: 52px; border-radius: 4px; display: block; margin-bottom: 2px; }
+        .trp-save-btn {
+            width: 100%; padding: 8px;
+            background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 8px; color: #ccc; font-size: 12px; cursor: pointer;
+            font-family: -apple-system, sans-serif; margin-top: 2px;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .trp-save-btn:active { background: rgba(255,255,255,0.18); color: #fff; }
+        .trp-layer { display: flex; flex-direction: column; }
+        .trp-layer-hd {
+            display: flex; align-items: center; gap: 6px;
+            padding: 4px 0; cursor: pointer; user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .trp-layer-name {
+            font-size: 10px; font-weight: 600; letter-spacing: 1px;
+            text-transform: uppercase; color: #888; flex: 1;
+        }
+        .trp-chevron {
+            font-size: 8px; color: #555;
+            display: inline-block; transition: transform 0.2s;
+        }
+        .trp-chevron.open { transform: rotate(90deg); }
+        .trp-layer-bd { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 4px 10px; }
+        .trp-layer-bd.collapsed { display: none; }
+        .trp-layer-en {
+            font-size: 10px; padding: 1px 6px; border-radius: 3px;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+            color: #555; cursor: pointer; font-family: -apple-system, sans-serif;
+            -webkit-tap-highlight-color: transparent; line-height: 1.6;
+        }
+        .trp-layer-en.enabled {
+            background: rgba(100,200,255,0.15); border-color: rgba(100,200,255,0.5);
+            color: #64c8ff;
+        }
+        .trp-blend-select {
+            font-size: 10px; padding: 2px 4px; border-radius: 3px;
+            background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+            color: #888; cursor: pointer; -webkit-appearance: none;
+            font-family: -apple-system, sans-serif;
+        }
+        .trp-swatch {
+            width: 14px; height: 14px; flex-shrink: 0; padding: 0;
+            border-radius: 3px; border: 1px solid rgba(255,255,255,0.25);
+            background: rgba(255,255,255,0.06); cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .trp-swatch-ed {
+            display: flex; align-items: center; gap: 6px;
+            padding: 2px 0 4px 18px;
+        }
+        .trp-alpha-lbl { font-size: 10px; color: #666; flex-shrink: 0; }
+        .trp-alpha-slider { flex: 1; }
+        .trp-color-pick {
+            width: 32px; height: 18px; padding: 1px 2px;
+            border: 1px solid rgba(255,255,255,0.15); border-radius: 3px;
+            cursor: pointer; background: none; flex-shrink: 0;
+        }
+
+        #reload-btn {
+            position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
+            z-index: 100;
+            background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+            color: #fff; font-size: 12px; font-family: -apple-system, sans-serif;
+            padding: 5px 14px; border-radius: 20px;
+            cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
+            letter-spacing: 0.5px;
+        }
+        #reload-btn:active { background: rgba(255,255,255,0.22); }
     </style>
 </head>
 <body>
+
+<button id="reload-btn" onclick="location.href=location.pathname+'?v='+Date.now()">↺ Reload</button>
+
 
 <div id="loading">Loading Earth…</div>
 <div id="hud">
@@ -314,6 +433,209 @@
     <button class="zoom-btn" id="btn-stats" style="font-size:20px;">📈</button>
     <button class="zoom-btn" id="btn-tech"     style="font-size:20px;">🔬</button>
     <button class="zoom-btn" id="btn-settings" style="font-size:20px;">⚙</button>
+    <button class="zoom-btn" id="btn-terrain"  style="font-size:18px;">⛰</button>
+</div>
+
+<!-- Terrain shader parameter panel -->
+<div id="terrain-panel" class="bm-hidden">
+    <div class="trp-title">Terrain</div>
+
+    <!-- ── Base Terrain layer ── -->
+    <div class="trp-layer">
+        <div class="trp-layer-hd" id="trp-base-hd">
+            <span class="trp-chevron open" id="trp-base-chevron">▶</span>
+            <span class="trp-layer-name">Base Terrain</span>
+            <button class="trp-layer-en enabled" id="trp-base-en">●</button>
+        </div>
+        <div class="trp-layer-bd" id="trp-base-bd">
+            <div class="trp-section-label">Shape</div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Feature Scale</span><span class="trp-val" id="trp-feature-scale-val">1.4</span></div>
+                <input class="trp-slider" type="range" id="trp-feature-scale" min="1" max="12" step="0.1" value="1.4">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Roughness</span><span class="trp-val" id="trp-persistence-val">0.54</span></div>
+                <input class="trp-slider" type="range" id="trp-persistence" min="0.30" max="0.70" step="0.01" value="0.54">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Crunchiness</span><span class="trp-val" id="trp-lacunarity-val">2.90</span></div>
+                <input class="trp-slider" type="range" id="trp-lacunarity" min="1.50" max="3.00" step="0.05" value="2.90">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Layer 2 Scale</span><span class="trp-val" id="trp-l2scale-val">1.30</span></div>
+                <input class="trp-slider" type="range" id="trp-l2scale" min="0.50" max="3.00" step="0.05" value="1.30">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Continental Bias</span><span class="trp-val" id="trp-continental-val">0.00</span></div>
+                <input class="trp-slider" type="range" id="trp-continental" min="0.00" max="0.35" step="0.01" value="0.00">
+            </div>
+            <div class="trp-divider"></div>
+            <div class="trp-section-label">Color Map</div>
+            <canvas id="trp-colormap" width="182" height="52"></canvas>
+            <div class="trp-row">
+                <div class="trp-label"><span>Ocean</span><span class="trp-val" id="trp-ocean-val">0.50</span></div>
+                <input class="trp-slider" type="range" id="trp-ocean" min="0.30" max="0.70" step="0.01" value="0.50">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Shoreline</span><span class="trp-val" id="trp-shore-val">0.52</span></div>
+                <input class="trp-slider" type="range" id="trp-shore" min="0.30" max="0.70" step="0.01" value="0.52">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Lowland</span><span class="trp-val" id="trp-lowland-val">0.55</span></div>
+                <input class="trp-slider" type="range" id="trp-lowland" min="0.30" max="0.70" step="0.01" value="0.55">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Highland</span><span class="trp-val" id="trp-highland-val">0.62</span></div>
+                <input class="trp-slider" type="range" id="trp-highland" min="0.30" max="0.70" step="0.01" value="0.62">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Snowline</span><span class="trp-val" id="trp-snow-val">0.68</span></div>
+                <input class="trp-slider" type="range" id="trp-snow" min="0.30" max="0.70" step="0.01" value="0.68">
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Polar Ice layer ── -->
+    <div class="trp-layer">
+        <div class="trp-layer-hd" id="trp-ice-hd">
+            <span class="trp-chevron" id="trp-ice-chevron">▶</span>
+            <span class="trp-layer-name">Polar Ice</span>
+            <button class="trp-layer-en" id="trp-ice-en">●</button>
+            <select class="trp-blend-select" id="trp-ice-blend">
+                <option value="0">Normal</option>
+                <option value="1">Screen</option>
+                <option value="2">Multiply</option>
+                <option value="3">Add</option>
+            </select>
+        </div>
+        <div class="trp-layer-bd collapsed" id="trp-ice-bd">
+            <div class="trp-section-label">Color Map</div>
+            <canvas id="trp-ice-cmap" width="182" height="52" style="display:block;border-radius:4px;margin-bottom:2px;width:100%;"></canvas>
+            <!-- Clear stop -->
+            <div class="trp-row">
+                <div class="trp-label">
+                    <button class="trp-swatch" id="trp-ice-clear-swatch" title="Clear color"></button>
+                    <span>Clear</span>
+                    <span class="trp-val" id="trp-ice-clear-level-val">0.00</span>
+                </div>
+                <input class="trp-slider" type="range" id="trp-ice-clear-level" min="0" max="1" step="0.01" value="0">
+            </div>
+            <div class="trp-swatch-ed bm-hidden" id="trp-ice-clear-ed">
+                <input type="color" class="trp-color-pick" id="trp-ice-clear-color" value="#b0cce0">
+                <span class="trp-alpha-lbl">A</span>
+                <input type="range" class="trp-slider trp-alpha-slider" id="trp-ice-clear-alpha" min="0" max="1" step="0.01" value="1">
+                <span class="trp-val" id="trp-ice-clear-alpha-val">1.00</span>
+            </div>
+            <!-- Ice stop -->
+            <div class="trp-row">
+                <div class="trp-label">
+                    <button class="trp-swatch" id="trp-ice-ice-swatch" title="Ice color"></button>
+                    <span>Ice</span>
+                    <span class="trp-val" id="trp-ice-ice-level-val">1.00</span>
+                </div>
+                <input class="trp-slider" type="range" id="trp-ice-ice-level" min="0" max="1" step="0.01" value="1">
+            </div>
+            <div class="trp-swatch-ed bm-hidden" id="trp-ice-ice-ed">
+                <input type="color" class="trp-color-pick" id="trp-ice-ice-color" value="#d9edff">
+                <span class="trp-alpha-lbl">A</span>
+                <input type="range" class="trp-slider trp-alpha-slider" id="trp-ice-ice-alpha" min="0" max="1" step="0.01" value="1">
+                <span class="trp-val" id="trp-ice-ice-alpha-val">1.00</span>
+            </div>
+            <div class="trp-divider"></div>
+            <div class="trp-section-label">Noise</div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Scale</span><span class="trp-val" id="trp-ice-scale-val">2.0</span></div>
+                <input class="trp-slider" type="range" id="trp-ice-scale" min="1" max="12" step="0.1" value="2.0">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Azimuth</span><span class="trp-val" id="trp-ice-azimuth-val">1.50</span></div>
+                <input class="trp-slider" type="range" id="trp-ice-azimuth" min="0.1" max="10" step="0.1" value="1.5">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Opacity</span><span class="trp-val" id="trp-ice-opacity-val">1.00</span></div>
+                <input class="trp-slider" type="range" id="trp-ice-opacity" min="0" max="10" step="0.1" value="1.0">
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Lighting layer ── -->
+    <div class="trp-layer">
+        <div class="trp-layer-hd" id="trp-lighting-hd">
+            <span class="trp-chevron" id="trp-lighting-chevron">▶</span>
+            <span class="trp-layer-name">Lighting</span>
+        </div>
+        <div class="trp-layer-bd collapsed" id="trp-lighting-bd">
+            <div class="trp-section-label">Sun Position</div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Elevation</span><span class="trp-val" id="trp-sun-el-val">5</span><span style="color:#555;font-size:9px;margin-left:1px">°</span></div>
+                <input class="trp-slider" type="range" id="trp-sun-el" min="0" max="90" step="1" value="5">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Azimuth</span><span class="trp-val" id="trp-sun-az-val">0</span><span style="color:#555;font-size:9px;margin-left:1px">°</span></div>
+                <input class="trp-slider" type="range" id="trp-sun-az" min="0" max="360" step="1" value="0">
+            </div>
+            <div class="trp-divider"></div>
+            <div class="trp-section-label">Intensity</div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Sun Intensity</span><span class="trp-val" id="trp-sun-int-val">1.00</span></div>
+                <input class="trp-slider" type="range" id="trp-sun-int" min="0" max="2" step="0.05" value="1.0">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Ambient</span><span class="trp-val" id="trp-ambient-val">0.25</span></div>
+                <input class="trp-slider" type="range" id="trp-ambient" min="0" max="0.5" step="0.01" value="0.25">
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Atmosphere layer ── -->
+    <div class="trp-layer">
+        <div class="trp-layer-hd" id="trp-atm-hd">
+            <span class="trp-chevron" id="trp-atm-chevron">▶</span>
+            <span class="trp-layer-name">Atmosphere</span>
+        </div>
+        <div class="trp-layer-bd collapsed" id="trp-atm-bd">
+            <div class="trp-section-label">Glow Shape</div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Rim Front</span><span class="trp-val" id="trp-rim-front-val">4.5</span></div>
+                <input class="trp-slider" type="range" id="trp-rim-front" min="1" max="30" step="0.1" value="4.5">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Rim Back</span><span class="trp-val" id="trp-rim-back-val">3.0</span></div>
+                <input class="trp-slider" type="range" id="trp-rim-back" min="1" max="30" step="0.1" value="3.0">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Glow Front</span><span class="trp-val" id="trp-glow-front-val">0.85</span></div>
+                <input class="trp-slider" type="range" id="trp-glow-front" min="0" max="2" step="0.05" value="0.85">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Glow Back</span><span class="trp-val" id="trp-glow-back-val">0.45</span></div>
+                <input class="trp-slider" type="range" id="trp-glow-back" min="0" max="2" step="0.05" value="0.45">
+            </div>
+            <div class="trp-divider"></div>
+            <div class="trp-section-label">Day / Night</div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Day Mix</span><span class="trp-val" id="trp-sun-mod-val">0.75</span></div>
+                <input class="trp-slider" type="range" id="trp-sun-mod" min="0" max="1" step="0.01" value="0.75">
+            </div>
+            <div class="trp-row">
+                <div class="trp-label"><span>Night Floor</span><span class="trp-val" id="trp-night-floor-val">0.25</span></div>
+                <input class="trp-slider" type="range" id="trp-night-floor" min="0" max="1" step="0.01" value="0.25">
+            </div>
+            <div class="trp-divider"></div>
+            <div class="trp-section-label">Colors</div>
+            <div style="display:flex;gap:8px;align-items:center;padding:2px 0">
+                <span style="font-size:11px;color:#888;flex:1">Shadow</span>
+                <input type="color" class="trp-color-pick" id="trp-atm-shadow-color" value="#1233b8">
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;padding:2px 0">
+                <span style="font-size:11px;color:#888;flex:1">Sunlit</span>
+                <input type="color" class="trp-color-pick" id="trp-atm-sun-color" value="#85c2ff">
+            </div>
+        </div>
+    </div>
+
+    <div class="trp-divider"></div>
+    <button class="trp-save-btn" id="trp-save-btn">Save &amp; Copy to Clipboard</button>
 </div>
 
 <!-- Build panel (slide-in from left) -->

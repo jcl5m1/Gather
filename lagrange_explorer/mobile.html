@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0a0a0f">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Gather — Orbital Tools</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            min-height: 100dvh;
+            overflow-x: hidden;
+        }
+
+        /* Starfield background */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                radial-gradient(1px 1px at 15% 20%, #fff 0%, transparent 100%),
+                radial-gradient(1px 1px at 40% 60%, rgba(255,255,255,0.7) 0%, transparent 100%),
+                radial-gradient(1.5px 1.5px at 65% 15%, rgba(255,255,255,0.5) 0%, transparent 100%),
+                radial-gradient(1px 1px at 80% 75%, rgba(255,255,255,0.8) 0%, transparent 100%),
+                radial-gradient(1px 1px at 25% 85%, rgba(255,255,255,0.6) 0%, transparent 100%),
+                radial-gradient(1px 1px at 55% 40%, rgba(200,220,255,0.5) 0%, transparent 100%),
+                radial-gradient(1px 1px at 90% 30%, rgba(255,255,255,0.4) 0%, transparent 100%),
+                radial-gradient(1px 1px at 10% 50%, rgba(255,255,255,0.3) 0%, transparent 100%),
+                radial-gradient(1px 1px at 70% 90%, rgba(200,220,255,0.6) 0%, transparent 100%),
+                radial-gradient(1px 1px at 35% 35%, rgba(255,255,255,0.4) 0%, transparent 100%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        header {
+            position: relative;
+            z-index: 1;
+            padding: 48px 24px 24px;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 13px;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            color: #5a8fc0;
+            margin-bottom: 8px;
+        }
+
+        h1 {
+            margin: 0 0 8px;
+            font-size: 32px;
+            font-weight: 300;
+            color: #fff;
+            letter-spacing: -0.5px;
+        }
+
+        .subtitle {
+            font-size: 13px;
+            color: #666;
+            margin: 0;
+        }
+
+        main {
+            position: relative;
+            z-index: 1;
+            padding: 12px 16px 40px;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+
+        .section-label {
+            font-size: 11px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: #445;
+            margin: 24px 0 10px 4px;
+        }
+
+        .card {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            padding: 18px 20px;
+            margin-bottom: 10px;
+            text-decoration: none;
+            color: inherit;
+            transition: background 0.15s, border-color 0.15s, transform 0.1s;
+            -webkit-user-select: none;
+            user-select: none;
+            cursor: pointer;
+        }
+
+        .card:active {
+            background: rgba(255,255,255,0.08);
+            border-color: rgba(255,255,255,0.15);
+            transform: scale(0.98);
+        }
+
+        .card-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            flex-shrink: 0;
+        }
+
+        .card-icon.blue   { background: rgba(60, 120, 200, 0.2); }
+        .card-icon.purple { background: rgba(120, 60, 200, 0.2); }
+        .card-icon.teal   { background: rgba(40, 160, 160, 0.2); }
+        .card-icon.orange { background: rgba(200, 120, 40, 0.2); }
+        .card-icon.green  { background: rgba(60, 180, 80, 0.2); }
+
+        .card-text {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 500;
+            color: #f0f0f0;
+            margin-bottom: 3px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .card-desc {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.4;
+        }
+
+        .card-arrow {
+            color: #334;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .badge {
+            display: inline-block;
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: #5a8fc0;
+            background: rgba(60,120,200,0.15);
+            border-radius: 4px;
+            padding: 2px 6px;
+            margin-top: 4px;
+        }
+
+        footer {
+            position: relative;
+            z-index: 1;
+            text-align: center;
+            padding: 16px;
+            font-size: 11px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <p class="logo">Gather</p>
+    <h1>Orbital Tools</h1>
+    <p class="subtitle">Three-body mechanics &amp; orbital simulation</p>
+</header>
+
+<main>
+
+    <a class="card" href="game.html">
+        <div class="card-icon blue">🚀</div>
+        <div class="card-text">
+            <div class="card-title">Resume Game</div>
+        </div>
+        <div class="card-arrow">›</div>
+    </a>
+
+</main>
+
+<footer>Gather · orbital mechanics research</footer>
+
+<script>
+    const ua = navigator.userAgent;
+    const isIOSChrome = /CriOS/.test(ua);
+
+    if (isIOSChrome) {
+        document.body.style.height = (window.screen.height + 1) + 'px';
+        setTimeout(() => {
+            window.scrollTo(0, 1);
+            document.body.style.height = '';
+        }, 50);
+    } else {
+        const el = document.documentElement;
+        const fn = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen;
+        if (fn) fn.call(el).catch(() => {});
+    }
+</script>
+
+</body>
+</html>

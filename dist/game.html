@@ -400,9 +400,23 @@
             border: 1px solid rgba(255,255,255,0.15); border-radius: 3px;
             cursor: pointer; background: none; flex-shrink: 0;
         }
+
+        #reload-btn {
+            position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
+            z-index: 100;
+            background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
+            color: #fff; font-size: 12px; font-family: -apple-system, sans-serif;
+            padding: 5px 14px; border-radius: 20px;
+            cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
+            letter-spacing: 0.5px;
+        }
+        #reload-btn:active { background: rgba(255,255,255,0.22); }
     </style>
 </head>
 <body>
+
+<button id="reload-btn" onclick="location.href=location.pathname+'?v='+Date.now()">↺ Reload</button>
+
 
 <div id="loading">Loading Earth…</div>
 <div id="hud">

@@ -11,14 +11,15 @@
  */
 
 import {
-    Scene, Mesh, SphereGeometry,
-    MeshBasicMaterial, MeshStandardMaterial,
-    CanvasTexture, Vector3,
-    LineLoop, LineBasicMaterial, BufferGeometry, Float32BufferAttribute,
+    Scene, Mesh, SphereGeometry, WebGLRenderer, WebGLRenderTarget,
+    MeshBasicMaterial,
+    Vector3,
+    BufferGeometry, Float32BufferAttribute,
     Frustum, Matrix4, Sphere,
     PerspectiveCamera,
 } from 'three';
 import { R } from './constants';
+import { TerrainGen, TerrainParams } from './terrainGen';
 
 interface LodDef { Nr: number; Nc: number; hue: number; radius: number; }
 
@@ -39,78 +40,9 @@ const LOD_TRANSITION_DEG = 50;
 const SEGS = [16, 12, 8, 6, 4, 3, 2, 2, 2];
 const TEX  = 256;
 
-// ── Canvas texture ────────────────────────────────────────────────────────────
-
-function buildTexture(l: number, r: number, c: number): CanvasTexture {
-    const { hue } = LODS[l];
-    const cv = document.createElement('canvas');
-    cv.width = cv.height = TEX;
-    const ctx = cv.getContext('2d')!;
-
-    ctx.fillStyle = `hsl(${hue},35%,${(r + c) % 2 === 0 ? 11 : 17}%)`;
-    ctx.fillRect(0, 0, TEX, TEX);
-
-    ctx.strokeStyle = `hsl(${hue},75%,52%)`;
-    ctx.lineWidth   = 4;
-    ctx.strokeRect(2, 2, TEX - 4, TEX - 4);
-
-    ctx.font      = 'bold 24px monospace';
-    ctx.fillStyle = `hsl(${hue},95%,68%)`;
-    ctx.fillText(`z${l + 1}`, 10, 30);
-
-    ctx.font      = 'bold 40px monospace';
-    ctx.fillStyle = '#ddeeff';
-    ctx.fillText(`R${r}`, 10, TEX / 2 - 4);
-    ctx.fillText(`C${c}`, 10, TEX / 2 + 44);
-
-    const T = 12;
-    ctx.strokeStyle = `hsl(${hue},60%,55%)`;
-    ctx.lineWidth   = 1.5;
-    for (const [dx, dy] of [[0, 0], [TEX, 0], [0, TEX], [TEX, TEX]] as [number, number][]) {
-        ctx.beginPath();
-        ctx.moveTo(dx + (dx ? -T : T), dy);
-        ctx.lineTo(dx,                  dy);
-        ctx.lineTo(dx,                  dy + (dy ? -T : T));
-        ctx.stroke();
-    }
-
-    return new CanvasTexture(cv);
-}
-
-// ── Wireframe border ──────────────────────────────────────────────────────────
-
-// Traces the 4 arc edges of a tile as a LineLoop on the sphere surface.
-function buildBorder(l: number, r: number, c: number): LineLoop {
-    const { Nr, Nc, radius } = LODS[l];
-    const phiS   = 2 * Math.PI * c       / Nc;
-    const phiE   = 2 * Math.PI * (c + 1) / Nc;
-    const thetaS = Math.PI * r       / Nr;
-    const thetaE = Math.PI * (r + 1) / Nr;
-    const rad = radius + 50;  // just above the tile surface
-    const N   = 10;           // arc sample points per edge
-
-    const pts: number[] = [];
-    const push = (phi: number, theta: number) => {
-        const s = Math.sin(theta);
-        pts.push(-Math.cos(phi) * s * rad, Math.cos(theta) * rad, Math.sin(phi) * s * rad);
-    };
-    for (let i = 0; i < N; i++) push(phiS + (phiE - phiS) * i / N, thetaS);  // top
-    for (let i = 0; i < N; i++) push(phiE, thetaS + (thetaE - thetaS) * i / N);  // right
-    for (let i = 0; i < N; i++) push(phiE + (phiS - phiE) * i / N, thetaE);  // bottom
-    for (let i = 0; i < N; i++) push(phiS, thetaE + (thetaS - thetaE) * i / N);  // left
-
-    const geo = new BufferGeometry();
-    geo.setAttribute('position', new Float32BufferAttribute(pts, 3));
-    const mat = new LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false });
-    const line = new LineLoop(geo, mat);
-    line.renderOrder = l + 6;
-    return line;
-}
-
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 function tileKey(l: number, r: number, c: number): string { return `${l}_${r}_${c}`; }
-function clamp01(x: number): number { return x < 0 ? 0 : x > 1 ? 1 : x; }
 
 function tileDot(l: number, r: number, c: number, d: Vector3): number {
     const { Nr, Nc } = LODS[l];
@@ -124,7 +56,7 @@ function tileDot(l: number, r: number, c: number, d: Vector3): number {
 
 // ── EarthLOD ──────────────────────────────────────────────────────────────────
 
-interface Entry { mesh: Mesh; border: LineLoop; alpha: number; level: number; }
+interface Entry { mesh: Mesh; alpha: number; level: number; rt: WebGLRenderTarget; }
 
 export class EarthLOD {
     private pool         = new Map<string, Entry>();
@@ -155,14 +87,39 @@ export class EarthLOD {
         return 2 * Math.atan2(halfChord, this._lastHeight) * 180 / Math.PI;
     }
 
-    constructor(private scene: Scene) {
+    private _terrainGen: TerrainGen;
+
+    constructor(private scene: Scene, renderer: WebGLRenderer) {
+        this._terrainGen = new TerrainGen(renderer, TEX);
         scene.add(new Mesh(
             new SphereGeometry(R - 200, 64, 32),
-            new MeshStandardMaterial({ color: 0x060d1a, roughness: 1, metalness: 0 }),
+            new MeshBasicMaterial({ color: 0x060d1a }),
         ));
     }
 
     setBaseTexture(): void {}
+
+    setTerrainParams(params: Partial<TerrainParams>): void {
+        this._terrainGen.setParams(params);
+    }
+
+    get terrainParams(): TerrainParams { return this._terrainGen.params; }
+
+    regenerateTiles(): void {
+        for (const [k, e] of this.pool) {
+            const parts = k.split('_');
+            const l = +parts[0], r = +parts[1], c = +parts[2];
+            const { Nr, Nc } = LODS[l];
+            const newRt = this._terrainGen.generate(
+                2 * Math.PI * c / Nc, 2 * Math.PI / Nc,
+                    Math.PI * r / Nr,     Math.PI / Nr,
+            );
+            e.rt.dispose();
+            e.rt = newRt;
+            (e.mesh.material as MeshBasicMaterial).map = newRt.texture;
+            (e.mesh.material as MeshBasicMaterial).needsUpdate = true;
+        }
+    }
 
     update(camPos: Vector3, camera: PerspectiveCamera): void {
         const height = Math.max(1, camPos.length() - R);
@@ -181,7 +138,7 @@ export class EarthLOD {
         }
         this._lastAlpha = levelAlpha;
 
-        const horizonDot = Math.max(-0.2, R / (R + height));
+        const horizonDot = Math.max(-0.5, R / (R + height));
 
         const wanted = new Set<string>();
         for (let l = 0; l < LODS.length; l++)
@@ -197,18 +154,13 @@ export class EarthLOD {
             const target = wanted.has(k) ? levelAlpha[e.level] : 0;
             e.alpha += (target - e.alpha) * 0.08;
 
-            (e.mesh.material   as MeshBasicMaterial).opacity = e.alpha;
-            (e.border.material as LineBasicMaterial).opacity = e.alpha;
+            (e.mesh.material as MeshBasicMaterial).opacity = e.alpha;
 
             if (e.alpha < 0.005 && !wanted.has(k)) {
                 this.scene.remove(e.mesh);
-                this.scene.remove(e.border);
-                const mat = e.mesh.material as MeshBasicMaterial;
-                mat.map?.dispose();
-                mat.dispose();
+                (e.mesh.material as MeshBasicMaterial).dispose();
                 e.mesh.geometry.dispose();
-                (e.border.material as LineBasicMaterial).dispose();
-                e.border.geometry.dispose();
+                e.rt.dispose();
                 this.pool.delete(k);
             }
         }
@@ -231,11 +183,12 @@ export class EarthLOD {
         const r0 = Math.min(Nr - 1, Math.floor(theta * Nr / Math.PI));
         const c0 = Math.min(Nc - 1, Math.floor(phi   * Nc / (2 * Math.PI)));
 
-        // Tight bounding-sphere radius: circumradius of tile patch (half-diagonal).
+        // Bounding-sphere radius: circumradius of tile patch (half-diagonal).
         // Tile spans PI/Nr in theta and PI/Nr in phi (Nc=2*Nr), so both half-extents
         // are PI/(2*Nr).  Exact corner-to-centre arc = acos(cos²(PI/(2*Nr))).
+        // Use 1.1x oversize so tiles near the screen edge aren't incorrectly culled.
         const halfExt = Math.PI / (2 * Nr);
-        const tileBS  = radius * Math.sin(Math.acos(Math.cos(halfExt) * Math.cos(halfExt))) * 0.75;
+        const tileBS  = radius * Math.sin(Math.acos(Math.cos(halfExt) * Math.cos(halfExt))) * 1.1;
 
         const visited = new Set<number>();
         const queue: number[] = [r0 * Nc + c0];
@@ -246,8 +199,9 @@ export class EarthLOD {
             const r   = Math.floor(idx / Nc);
             const c   = idx % Nc;
 
-            // (a) Back-face / horizon cull
-            if (tileDot(l, r, c, d) < horizonDot) continue;
+            // (a) Back-face / horizon cull — subtract halfExt margin so tiles whose
+            // centre is just past the horizon are kept if their body is still visible.
+            if (tileDot(l, r, c, d) < horizonDot - halfExt) continue;
 
             // (b) Frustum cull — bounding sphere centred at tile centre on sphere
             const pf   = 2 * Math.PI * (c + 0.5) / Nc;
@@ -281,16 +235,17 @@ export class EarthLOD {
             2 * Math.PI * c / Nc, 2 * Math.PI / Nc,
                 Math.PI * r / Nr,     Math.PI / Nr,
         );
+        const rt  = this._terrainGen.generate(
+            2 * Math.PI * c / Nc,  2 * Math.PI / Nc,
+                Math.PI * r / Nr,      Math.PI / Nr,
+        );
         const mat = new MeshBasicMaterial({
-            map: buildTexture(l, r, c), transparent: true, opacity: 0, depthWrite: false,
+            map: rt.texture, transparent: true, opacity: 0, depthWrite: false,
         });
         const mesh = new Mesh(geo, mat);
         mesh.renderOrder = l + 1;
         this.scene.add(mesh);
 
-        const border = buildBorder(l, r, c);
-        this.scene.add(border);
-
-        this.pool.set(k, { mesh, border, alpha: 0, level: l });
+        this.pool.set(k, { mesh, alpha: 0, level: l, rt });
     }
 }

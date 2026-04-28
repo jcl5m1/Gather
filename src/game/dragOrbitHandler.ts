@@ -8,6 +8,21 @@ import { ZoomController } from './zoomController';
 
 const DRAG_THRESHOLD_PX = 8;
 
+let _buildTime = '--';
+fetch('/build-time')
+    .then(r => r.json())
+    .then((d: { time: string }) => {
+        const p = Object.fromEntries(
+            new Intl.DateTimeFormat('en-US', {
+                timeZone: 'America/New_York', hour12: false,
+                month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+            }).formatToParts(new Date(d.time)).map(x => [x.type, x.value])
+        );
+        _buildTime = `${p.month}/${p.day}-${p.hour}:${p.minute}:${p.second}`;
+    })
+    .catch(() => { _buildTime = 'unknown'; });
+
 // Module-level reusable temps (single-threaded, no re-entrancy)
 const _backward  = new Vector3();
 const _north     = new Vector3();
@@ -298,7 +313,7 @@ export class DragOrbitHandler {
         if (!this.dragging) {
             const extra = this.tapInfo.length ? '\n\n' + this.tapInfo.join('\n') : '';
             const tile  = this.tileInfo ? '\n' + this.tileInfo : '';
-            this.debugLabel.textContent = `height ${heightStr}\ndist   ${distStr}${tile}` + extra;
+            this.debugLabel.textContent = `build  ${_buildTime}\nheight ${heightStr}\ndist   ${distStr}${tile}` + extra;
             return;
         }
 

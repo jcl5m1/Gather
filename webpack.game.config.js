@@ -1,5 +1,6 @@
 const path = require('path');
 const CopyWebpackPlugin = require('copy-webpack-plugin');
+const webpack = require('webpack');
 
 module.exports = {
   entry: {
@@ -40,24 +41,34 @@ module.exports = {
     compress: true,
     port: 9000,
     hot: false,
-    liveReload: false,
-    client: false,     // don't inject WebSocket client — its reconnect logic was reloading the page
+    liveReload: true,
+    client: {
+      logging: 'none',
+      overlay: false,
+      webSocketTransport: 'sockjs',
+    },
+    webSocketServer: 'sockjs',
     host: '0.0.0.0',
     allowedHosts: 'all',
     headers: {
-      // Prevent iOS from caching the bundle — old cached bundles contained the
-      // webpack HMR client which triggered rapid page reloads when HMR 404'd.
       'Cache-Control': 'no-store',
     },
     setupMiddlewares: (middlewares, devServer) => {
-      // Log every HTTP request so we can see page-reload loops even if JS never runs
+      let lastBuildTime = new Date().toISOString();
+
+      // Updated after every successful compilation
+      devServer.compiler.hooks.done.tap('BuildTimeTracker', () => {
+        lastBuildTime = new Date().toISOString();
+      });
+
+      devServer.app.get('/build-time', (_req, res) => res.json({ time: lastBuildTime }));
+
       devServer.app.use((req, res, next) => {
         const ts = new Date().toISOString().slice(11, 23);
         console.log(`[${ts}] HTTP ${req.method} ${req.url}`);
         next();
       });
 
-      // Client-side log endpoint (supports GET from sendBeacon/fetch and POST from sendBeacon)
       const handleLog = (req, res) => {
         const level = (req.query.level || 'LOG').toString().toUpperCase();
         const msg   = decodeURIComponent((req.query.msg  || '').toString());

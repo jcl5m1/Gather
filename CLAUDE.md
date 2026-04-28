@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Gather is a resource-gathering automation game with realistic orbital mechanics. It contains two main interactive sub-projects:
+Gather is a web-based mobile resource-gathering game rendered on a real-scale Earth. The primary project is the **game** (`src/game/`). The repository also contains supporting sub-projects:
 
-1. **moonOrbitSim** (`src/moonOrbitSim/`) — Full 3D orbital simulation using Three.js, compiled via webpack
-2. **game** (`src/game/`) — Mobile-first iOS resource-gathering game, compiled via webpack
+1. **game** (`src/game/`) — **PRIMARY PROJECT** — Mobile-first web game (iOS/Android), compiled via webpack; dev server on port 9000
+2. **moonOrbitSim** (`src/moonOrbitSim/`) — Full 3D orbital simulation using Three.js, compiled via webpack
 3. **lagrange_explorer/** — Standalone HTML/JS files for three-body problem exploration (no build step required); `lagrange_explorer/game.html` is the legacy single-file version of the game
 
 There is also a minor game module **mineGather** (`src/mineGather/`) with its own webpack config.

@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Gather</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; touch-action: none; }
+        canvas { display: block; }
+
+        #hud {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            background: rgba(8, 8, 12, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            padding: 12px 12px 30px;
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 6px;
+        }
+        .slot { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .slot-swatch { width: 20px; height: 20px; border-radius: 5px; }
+        .slot-name  { font-size: 9px; color: #555; text-transform: uppercase; letter-spacing: 0.5px; font-family: -apple-system, sans-serif; }
+        .slot-count { font-size: 20px; font-weight: 200; color: #fff; font-family: -apple-system, sans-serif; }
+
+        #zoom-controls {
+            position: fixed; right: 16px; top: 50%; transform: translateY(-50%);
+            display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 10;
+        }
+        .zoom-btn {
+            width: 48px; height: 48px; border-radius: 14px;
+            background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+            color: #fff; font-size: 26px; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
+            font-family: -apple-system, sans-serif;
+        }
+        .zoom-btn:active { background: rgba(255,255,255,0.18); }
+        #zoom-label {
+            font-size: 9px; color: #444; text-align: center;
+            font-family: -apple-system, sans-serif; letter-spacing: 1px; text-transform: uppercase;
+        }
+
+        #flash {
+            position: fixed; pointer-events: none;
+            font-size: 15px; font-weight: 600; font-family: -apple-system, sans-serif;
+            opacity: 0; white-space: nowrap;
+        }
+
+        #loading {
+            position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+            background: #000; color: #444; font-family: -apple-system, sans-serif;
+            font-size: 13px; letter-spacing: 2px; text-transform: uppercase; z-index: 100;
+            transition: opacity 0.5s;
+        }
+    </style>
+</head>
+<body>
+
+<div id="loading">Loading Earth…</div>
+<div id="hud"></div>
+<div id="zoom-controls">
+    <button class="zoom-btn" id="btn-in">+</button>
+    <div id="zoom-label">hood</div>
+    <button class="zoom-btn" id="btn-out">−</button>
+</div>
+<div id="flash"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ── Real-world scale (meters) ─────────────────────────────────────
+const R        = 6_371_000;
+const HOUSE_R  = 6;    // 12 m diameter cylinder
+const HOUSE_H  = 6;    // 6 m tall
+const PAD_W    = 12;   // single-family footprint
+const PAD_H    = 0.3;
+const RES_DIST = 200;  // metres from homebase to each resource pad
+
+// ── Resource class ────────────────────────────────────────────────
+class Resource {
+    constructor(name, color, total) {
+        this.name = name; this.color = color; this.total = total;
+        this.gathered = 0; this.mesh = null;
+    }
+    gather() { if (this.gathered >= this.total) return false; this.gathered++; return true; }
+    get hex() { return '#' + this.color.toString(16).padStart(6, '0'); }
+}
+
+const resources = [
+    new Resource('Wood',    0x8B5E3C, 999),
+    new Resource('Stone',   0x9E9E9E, 999),
+    new Resource('Iron',    0xB0BEC5, 500),
+    new Resource('Coal',    0x455A64, 800),
+    new Resource('Crystal', 0x00BCD4,  80),
+];
+
+// ── Renderer ──────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.5, 5e7);
+
+// Top-down: camera looks along -Y, so screen "up" = world -Z
+camera.up.set(0, 0, -1);
+
+// ── Lighting ──────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const sun = new THREE.DirectionalLight(0xfff4e0, 1.1);
+sun.position.set(R * 3, R * 4, R * 1.5);
+scene.add(sun);
+
+// ── Stars ─────────────────────────────────────────────────────────
+{
+    const geo = new THREE.BufferGeometry();
+    const pts = new Float32Array(3000 * 3);
+    for (let i = 0; i < pts.length; i++) pts[i] = (Math.random() - 0.5) * R * 80;
+    geo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
+    scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: R * 0.003 })));
+}
+
+// ── Earth texture ─────────────────────────────────────────────────
+const BASE = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/textures/planets/';
+const loader = new THREE.TextureLoader();
+
+let loadedCount = 0;
+function onTextureLoad() {
+    loadedCount++;
+    if (loadedCount === 3) {
+        const loadingEl = document.getElementById('loading');
+        loadingEl.style.opacity = '0';
+        setTimeout(() => loadingEl.remove(), 500);
+    }
+}
+
+const earthMap   = loader.load(BASE + 'earth_atmos_2048.jpg',   onTextureLoad);
+const normalMap  = loader.load(BASE + 'earth_normal_2048.jpg',  onTextureLoad);
+const specMap    = loader.load(BASE + 'earth_specular_2048.jpg', onTextureLoad);
+
+// ── Planet sphere ─────────────────────────────────────────────────
+const planetMat = new THREE.MeshStandardMaterial({
+    map:       earthMap,
+    normalMap: normalMap,
+    roughness: 0.85,
+    metalness: 0.05,
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(R, 64, 64), planetMat));
+
+// Cloud layer
+const cloudTex = loader.load(BASE + 'earth_clouds_1024.png', onTextureLoad);
+loadedCount--; // clouds are bonus — don't block the loading screen
+const cloudMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(R * 1.006, 48, 48),
+    new THREE.MeshStandardMaterial({ map: cloudTex, transparent: true, opacity: 0.4, depthWrite: false })
+);
+scene.add(cloudMesh);
+
+// Atmosphere rim
+scene.add(new THREE.Mesh(
+    new THREE.SphereGeometry(R * 1.015, 32, 32),
+    new THREE.MeshStandardMaterial({ color: 0x64b5f6, transparent: true, opacity: 0.06, side: THREE.FrontSide })
+));
+
+// ── Utility: orient + place on sphere surface ─────────────────────
+function placeOnSurface(mesh, normal, rise) {
+    mesh.position.copy(normal.clone().multiplyScalar(R + rise));
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+}
+
+const northPole = new THREE.Vector3(0, 1, 0);
+
+// ── Green ground patch ────────────────────────────────────────────
+const patch = new THREE.Mesh(
+    new THREE.CircleGeometry(RES_DIST * 1.6, 48),
+    new THREE.MeshStandardMaterial({ color: 0x2e6b28, roughness: 1 })
+);
+placeOnSurface(patch, northPole, 0.2);
+scene.add(patch);
+
+// ── Homebase cylinder (north pole) ────────────────────────────────
+const homebase = new THREE.Mesh(
+    new THREE.CylinderGeometry(HOUSE_R, HOUSE_R, HOUSE_H, 16),
+    new THREE.MeshStandardMaterial({ color: 0xffd54f, metalness: 0.25, roughness: 0.6 })
+);
+placeOnSurface(homebase, northPole, HOUSE_H / 2);
+scene.add(homebase);
+const homebasePos = homebase.position.clone();
+
+// ── Resource pads ─────────────────────────────────────────────────
+const angStep = RES_DIST / R; // radians
+
+resources.forEach((res, i) => {
+    const phi   = angStep;
+    const theta = (i / resources.length) * Math.PI * 2;
+    const normal = new THREE.Vector3(
+        Math.sin(phi) * Math.cos(theta),
+        Math.cos(phi),
+        Math.sin(phi) * Math.sin(theta)
+    ).normalize();
+
+    const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(PAD_W, PAD_H, PAD_W),
+        new THREE.MeshStandardMaterial({ color: res.color, roughness: 0.7 })
+    );
+    placeOnSurface(mesh, normal, PAD_H / 2);
+    mesh.userData.resource = res;
+    scene.add(mesh);
+    res.mesh = mesh;
+});
+
+// ── Zoom levels — all positions directly above north pole ─────────
+// Camera at (0, R + height, 0), looking straight down (-Y axis).
+// camera.up = (0,0,-1) so -Z = screen up, +X = screen right.
+const ZOOM = [
+    { pos: new THREE.Vector3(0, R + 30,    0), look: homebasePos.clone(),           name: 'street' },
+    { pos: new THREE.Vector3(0, R + 500,   0), look: homebasePos.clone(),           name: 'hood'   },
+    { pos: new THREE.Vector3(0, R + 6000,  0), look: new THREE.Vector3(0, R, 0),   name: 'city'   },
+    { pos: new THREE.Vector3(0, R + 60000, 0), look: new THREE.Vector3(0, R, 0),   name: 'region' },
+    { pos: new THREE.Vector3(0, R * 3,     0), look: new THREE.Vector3(0, 0, 0),   name: 'planet' },
+];
+
+let zoomIdx = 1;
+const targetCamPos  = ZOOM[zoomIdx].pos.clone();
+const targetLookAt  = ZOOM[zoomIdx].look.clone();
+const currentLookAt = targetLookAt.clone();
+
+camera.position.copy(targetCamPos);
+camera.lookAt(currentLookAt);
+
+const zoomLabel = document.getElementById('zoom-label');
+
+function setZoom(idx) {
+    zoomIdx = Math.max(0, Math.min(ZOOM.length - 1, idx));
+    targetCamPos.copy(ZOOM[zoomIdx].pos);
+    targetLookAt.copy(ZOOM[zoomIdx].look);
+    zoomLabel.textContent = ZOOM[zoomIdx].name;
+}
+
+document.getElementById('btn-in').addEventListener('click',  () => setZoom(zoomIdx - 1));
+document.getElementById('btn-out').addEventListener('click', () => setZoom(zoomIdx + 1));
+
+// ── HUD ───────────────────────────────────────────────────────────
+const hud = document.getElementById('hud');
+const countEls = {};
+resources.forEach(res => {
+    const slot   = document.createElement('div'); slot.className = 'slot';
+    const swatch = document.createElement('div'); swatch.className = 'slot-swatch'; swatch.style.background = res.hex;
+    const name   = document.createElement('div'); name.className = 'slot-name'; name.textContent = res.name;
+    const count  = document.createElement('div'); count.className = 'slot-count'; count.textContent = '0';
+    countEls[res.name] = count;
+    slot.append(swatch, name, count);
+    hud.appendChild(slot);
+});
+
+// ── Flash ─────────────────────────────────────────────────────────
+const flashEl = document.getElementById('flash');
+let flashTimer = null;
+function showFlash(text, color, x, y) {
+    if (flashTimer) clearTimeout(flashTimer);
+    Object.assign(flashEl.style, { color, left: x + 'px', top: (y - 36) + 'px',
+        transform: 'translateX(-50%)', transition: 'none', opacity: '1' });
+    flashEl.textContent = text;
+    flashTimer = setTimeout(() => { flashEl.style.transition = 'opacity 0.4s'; flashEl.style.opacity = '0'; }, 500);
+}
+
+// ── Raycasting ────────────────────────────────────────────────────
+const raycaster = new THREE.Raycaster();
+const pointer   = new THREE.Vector2();
+
+function onTap(cx, cy) {
+    pointer.set((cx / window.innerWidth) * 2 - 1, -(cy / window.innerHeight) * 2 + 1);
+    raycaster.setFromCamera(pointer, camera);
+    const hits = raycaster.intersectObjects(resources.map(r => r.mesh));
+    if (!hits.length) return;
+    const res = hits[0].object.userData.resource;
+    if (res.gather()) {
+        countEls[res.name].textContent = res.gathered;
+        hits[0].object.scale.set(1.15, 2.0, 1.15);
+        setTimeout(() => hits[0].object.scale.set(1, 1, 1), 130);
+        showFlash('+1 ' + res.name, res.hex, cx, cy);
+    }
+}
+
+renderer.domElement.addEventListener('touchstart', e => {
+    e.preventDefault();
+    onTap(e.touches[0].clientX, e.touches[0].clientY);
+}, { passive: false });
+renderer.domElement.addEventListener('click', e => onTap(e.clientX, e.clientY));
+
+// ── Resize ────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ── Render loop ───────────────────────────────────────────────────
+function animate() {
+    requestAnimationFrame(animate);
+    camera.position.lerp(targetCamPos, 0.07);
+    currentLookAt.lerp(targetLookAt, 0.07);
+    camera.lookAt(currentLookAt);
+    cloudMesh.rotation.y += 0.00002; // slow cloud drift
+    renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>

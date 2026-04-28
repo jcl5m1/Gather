@@ -190,28 +190,46 @@ void main() {
     float sinRay = clamp(dClose / uCamDist, 0.0, 1.0);
     float t = sinRay / max(sinSil, 0.0001);
 
-    // Gaussian bell peaked at t=1 (the silhouette ring)
+    // ── Outer glow: Gaussian bell peaked at t=1 (outside the disc, t>1) ──
     float atmWidth = 0.18;
-    float edge = exp(-pow((t - 1.0) / atmWidth, 2.0));
+    float outerGlow = exp(-pow((t - 1.0) / atmWidth, 2.0));
 
-    // ── Hide fragments that are behind the planet body ────────────────────
-    // If the ray hits the planet disc (dClose < R) AND the hit is in front of
-    // the camera, suppress the glow so it doesn't bleed over the lit day side.
+    // ── Inner limb: thin atmospheric tint inside the silhouette edge ──────
+    // Decays from the silhouette inward, only on the planet-facing side.
+    // Uses 1-t so it is 0 at the silhouette and rises toward disc centre,
+    // but multiplied by t^4 so it stays close to the edge (limb darkening).
+    float innerWidth = 0.35;
+    float innerLimb  = exp(-pow((1.0 - t) / innerWidth, 2.0)) * pow(t, 1.5);
+
+    // ── Determine if this ray hits the planet body ────────────────────────
     float tPlanet = -dot(C, rd) - sqrt(max(0.0, uPlanetR * uPlanetR - dClose * dClose));
-    if (dClose < uPlanetR && tPlanet > 0.0) {
-        gl_FragColor = vec4(0.0);
-        return;
-    }
+    bool  hitsBody = (dClose < uPlanetR) && (tPlanet > 0.0);
 
-    float atm = edge * uIntensity * uFade;
-
-    // ── Sun tint ──────────────────────────────────────────────────────────
+    // Sun tint (shared for both terms)
     vec3  qNorm   = dClose > 0.001 ? normalize(qClose) : uCamDir;
     float NdotS   = dot(qNorm, uSunDir);
     float sunTint = pow(max(0.0, NdotS) * 0.5 + 0.5, 3.0);
     vec3  color   = mix(uSkyColor, uSunColor, sunTint);
 
-    gl_FragColor = vec4(color * atm, atm);
+    if (hitsBody) {
+        // Compute the actual surface hit point and its normal
+        float tHit     = -dot(C, rd) - sqrt(max(0.0, uPlanetR * uPlanetR - dClose * dClose));
+        vec3  hitPoint = C + tHit * rd;
+        vec3  surfNorm = normalize(hitPoint);   // planet-centred unit normal at surface
+
+        // Day/night: NdotL on the actual surface — matches the planet's lit hemisphere exactly
+        float NdotL    = dot(surfNorm, uSunDir);
+        // innerDayMask: 1 on night/terminator side, 0 on fully-lit dayside
+        float innerDayMask = 1.0 - smoothstep(0.0, 0.3, NdotL);
+
+        float innerLimb = exp(-pow((1.0 - t) / 0.0875, 2.0)) * step(0.0, 1.0 - t);
+        float innerGlow = innerLimb * 0.4 * innerDayMask;
+        gl_FragColor = vec4(color * innerGlow, innerGlow);
+    } else {
+        // Outside the disc: outer halo glow only.
+        float atm = outerGlow * uIntensity * uFade;
+        gl_FragColor = vec4(color * atm, atm);
+    }
 }`;
 
 export class AtmosphereGlow {
