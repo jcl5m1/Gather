@@ -615,10 +615,10 @@ _bindLiveSlider('trp-sun-az',  'trp-sun-az-val',  0, v => { _sunAz = v; _applySu
 _bindLiveSlider('trp-sun-int', 'trp-sun-int-val', 2, v => daylightOverlay.setSunIntensity(v));
 _bindLiveSlider('trp-ambient', 'trp-ambient-val', 3, v => daylightOverlay.setAmbient(v));
 
-_bindLiveSlider('trp-rim-front',   'trp-rim-front-val',   1, v => atmosphere.setRimFront(v));
-_bindLiveSlider('trp-rim-back',    'trp-rim-back-val',    1, v  => atmosphere.setRimBack(v));
-_bindLiveSlider('trp-glow-front',    'trp-glow-front-val',    2, v => atmosphere.setGlowFront(v));
-_bindLiveSlider('trp-glow-back',     'trp-glow-back-val',     2, v  => atmosphere.setGlowBack(v));
+_bindLiveSlider('trp-day-width',   'trp-day-width-val',   1, v => atmosphere.setDayWidth(v));
+_bindLiveSlider('trp-night-width',    'trp-night-width-val',    1, v  => atmosphere.setNightWidth(v));
+_bindLiveSlider('trp-day-opacity',    'trp-day-opacity-val',    2, v => atmosphere.setDayOpacity(v));
+_bindLiveSlider('trp-night-opacity',     'trp-night-opacity-val',     2, v  => atmosphere.setNightOpacity(v));
 _bindLiveSlider('trp-inner-opacity', 'trp-inner-opacity-val', 2, v => atmosphere.setInnerOpacity(v));
 _bindLiveSlider('trp-inner-width',   'trp-inner-width-val',   2, v => atmosphere.setInnerWidth(v));
 _bindLiveSlider('trp-sun-mod',     'trp-sun-mod-val',     2, _v => {});  // removed
