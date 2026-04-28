@@ -42,7 +42,11 @@ export class ZoomController {
             { height:     350_000 },
             { height:   1_000_000 },
             { height:   5_000_000 },
-            { height:  35_000_000 },
+            { height:   35_000_000 },
+            { height:  150_000_000 },
+            { height:  500_000_000 },
+            { height: 1_500_000_000 },
+            { height: 3_500_000_000 },
         ];
 
         this.idx = Math.max(0, Math.min(this.levels.length - 1, startIdx));
