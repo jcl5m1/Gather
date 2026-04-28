@@ -444,7 +444,7 @@ export class OceanSpecular {
                 uShorelineLevel:{ value: 0.50 },
                 uDeepOceanLevel:{ value: 0.50 },
                 uSpecPower:     { value: 40.0 },
-                uSpecIntensity: { value: 0.6 },
+                uSpecIntensity: { value: 0.75 },
                 uSpecColor:     { value: new Color(0.85, 0.95, 1.0) },
             },
             transparent: true,
