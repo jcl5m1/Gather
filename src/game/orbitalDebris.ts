@@ -18,7 +18,7 @@
  *   aOrbit1 = (semi-major axis a, eccentricity e, inclination i, RAAN Ω)
  *   aOrbit2 = (arg-of-perigee ω, mean anomaly M0, unused, unused)
  *
- * Eccentricity range: 0.7 – 0.99  (highly elliptical debris)
+ * Eccentricity range: 0.00 – 0.60
  * Semi-major axis chosen so perigee stays above ~200 km.
  *
  * No CPU work per frame beyond uploading uTime.
@@ -39,7 +39,7 @@ const GM = 3.986004418e14;          // Earth gravitational parameter (m³/s²)
 
 // ── Eccentricity range ─────────────────────────────────────────────────────
 const ECC_MIN = 0.00;
-const ECC_MAX = 0.10;
+const ECC_MAX = 0.60;
 
 // ── Perigee altitude range (m) ─────────────────────────────────────────────
 const PERIGEE_MIN = R + 200_000;    // 200 km above surface
@@ -140,45 +140,15 @@ export class OrbitalDebris {
     private _simTime: number = 0.0;
 
     constructor(scene: Scene) {
-        const TOTAL_VERTS   = COUNT * VERTS_PER;                  // 110,000
-        const TOTAL_INDICES = COUNT * TAIL_STEPS * 2;             // 200,000 (10 segments × 2 endpoints each)
+        const TOTAL_VERTS   = COUNT * VERTS_PER;
+        const TOTAL_INDICES = COUNT * TAIL_STEPS * 2;
 
-        const orbit1  = new Float32Array(TOTAL_VERTS * 4);
-        const orbit2  = new Float32Array(TOTAL_VERTS * 4);
-        const role    = new Float32Array(TOTAL_VERTS);
-        const indices = new Uint32Array(TOTAL_INDICES);
-
-        for (let i = 0; i < COUNT; i++) {
-            // ── Randomise orbital elements ─────────────────────────────────
-            const e       = ECC_MIN + Math.random() * (ECC_MAX - ECC_MIN);
-            const rPeri   = PERIGEE_MIN + Math.random() * (PERIGEE_MAX - PERIGEE_MIN);
-            const a       = rPeri / (1 - e);
-            const incl    = Math.acos(1 - 2 * Math.random());
-            const raan    = Math.random() * Math.PI * 2;
-            const argPeri = Math.random() * Math.PI * 2;
-            const M0      = Math.random() * Math.PI * 2;
-
-            const vBase = i * VERTS_PER;   // first vertex index for this particle
-
-            // Write 11 vertices for this particle
-            for (let s = 0; s < VERTS_PER; s++) {
-                const vi  = vBase + s;
-                const vi4 = vi * 4;
-                orbit1[vi4+0] = a;       orbit1[vi4+1] = e;
-                orbit1[vi4+2] = incl;    orbit1[vi4+3] = raan;
-                orbit2[vi4+0] = argPeri; orbit2[vi4+1] = M0;
-                orbit2[vi4+2] = 0;       orbit2[vi4+3] = 0;
-                // role: 0/10, 1/10, 2/10 ... 10/10
-                role[vi] = s / TAIL_STEPS;
-            }
-
-            // Write 10 line segments as index pairs: (v0,v1), (v1,v2), ... (v9,v10)
-            for (let s = 0; s < TAIL_STEPS; s++) {
-                const ii = (i * TAIL_STEPS + s) * 2;
-                indices[ii+0] = vBase + s;
-                indices[ii+1] = vBase + s + 1;
-            }
-        }
+        const { orbit1, orbit2, role, indices } = OrbitalDebris._fillBuffers(
+            new Float32Array(TOTAL_VERTS * 4),
+            new Float32Array(TOTAL_VERTS * 4),
+            new Float32Array(TOTAL_VERTS),
+            new Uint32Array(TOTAL_INDICES),
+        );
 
         const geo = new BufferGeometry();
         geo.setAttribute('aOrbit1',   new BufferAttribute(orbit1, 4));
@@ -203,6 +173,65 @@ export class OrbitalDebris {
         this._mesh.frustumCulled = false;
         this._mesh.renderOrder   = 20;
         scene.add(this._mesh);
+    }
+
+    /** Re-randomise all particle orbital elements and re-upload to GPU. */
+    reinitParticles(): void {
+        const geo         = this._mesh.geometry;
+        const TOTAL_VERTS = COUNT * VERTS_PER;
+        const TOTAL_IDX   = COUNT * TAIL_STEPS * 2;
+
+        const o1 = (geo.getAttribute('aOrbit1') as BufferAttribute).array as Float32Array;
+        const o2 = (geo.getAttribute('aOrbit2') as BufferAttribute).array as Float32Array;
+        const ro = (geo.getAttribute('aVertRole') as BufferAttribute).array as Float32Array;
+        const ix = (geo.index as BufferAttribute).array as Uint32Array;
+
+        OrbitalDebris._fillBuffers(o1, o2, ro, ix);
+
+        (geo.getAttribute('aOrbit1')  as BufferAttribute).needsUpdate = true;
+        (geo.getAttribute('aOrbit2')  as BufferAttribute).needsUpdate = true;
+        (geo.getAttribute('aVertRole') as BufferAttribute).needsUpdate = true;
+        (geo.index as BufferAttribute).needsUpdate = true;
+
+        // Reset sim time so new orbits start from t=0
+        this._simTime = 0.0;
+    }
+
+    /** Fill orbit1, orbit2, role, and index buffers with fresh random particles. */
+    private static _fillBuffers(
+        orbit1:  Float32Array,
+        orbit2:  Float32Array,
+        role:    Float32Array,
+        indices: Uint32Array,
+    ): { orbit1: Float32Array; orbit2: Float32Array; role: Float32Array; indices: Uint32Array } {
+        for (let i = 0; i < COUNT; i++) {
+            const e       = ECC_MIN + Math.random() * (ECC_MAX - ECC_MIN);
+            const rPeri   = PERIGEE_MIN + Math.random() * (PERIGEE_MAX - PERIGEE_MIN);
+            const a       = rPeri / (1 - e);
+            const incl    = Math.acos(1 - 2 * Math.random());
+            const raan    = Math.random() * Math.PI * 2;
+            const argPeri = Math.random() * Math.PI * 2;
+            const M0      = Math.random() * Math.PI * 2;
+
+            const vBase = i * VERTS_PER;
+
+            for (let s = 0; s < VERTS_PER; s++) {
+                const vi  = vBase + s;
+                const vi4 = vi * 4;
+                orbit1[vi4+0] = a;       orbit1[vi4+1] = e;
+                orbit1[vi4+2] = incl;    orbit1[vi4+3] = raan;
+                orbit2[vi4+0] = argPeri; orbit2[vi4+1] = M0;
+                orbit2[vi4+2] = 0;       orbit2[vi4+3] = 0;
+                role[vi] = s / TAIL_STEPS;
+            }
+
+            for (let s = 0; s < TAIL_STEPS; s++) {
+                const ii = (i * TAIL_STEPS + s) * 2;
+                indices[ii+0] = vBase + s;
+                indices[ii+1] = vBase + s + 1;
+            }
+        }
+        return { orbit1, orbit2, role, indices };
     }
 
     /**

@@ -352,3 +352,43 @@ Implementation:
 ```
 
 Updated once per second: `fps = round(frames / elapsedSeconds)`.
+
+---
+
+## Orbital Debris — Eccentricity Range & reinitParticles()
+
+### Eccentricity history
+
+```
+┌────────────────────────────┬──────────┬──────────┐
+│ Change                     │ ECC_MIN  │ ECC_MAX  │
+├────────────────────────────┼──────────┼──────────┤
+│ Initial highly-elliptical  │  0.70    │  0.99    │
+│ Nearly circular LEO        │  0.00    │  0.10    │
+│ Slight spread              │  0.00    │  0.30    │
+│ Medium spread              │  0.00    │  0.50    │
+│ Current                    │  0.00    │  0.60    │
+└────────────────────────────┴──────────┴──────────┘
+```
+
+### reinitParticles() method
+
+Particle buffers are now re-uploadable at runtime without destroying the
+geometry object. Two helpers were extracted:
+
+```
+┌───────────────────────────────┬────────────────────────────────────────┐
+│ Method                        │ Purpose                                │
+├───────────────────────────────┼────────────────────────────────────────┤
+│ static _fillBuffers(...)      │ Fills orbit1, orbit2, role, indices    │
+│                               │ Float32Arrays with fresh random        │
+│                               │ Keplerian elements                     │
+│ reinitParticles()             │ Calls _fillBuffers in-place on the     │
+│                               │ existing GPU BufferAttributes, sets    │
+│                               │ needsUpdate=true on each, resets       │
+│                               │ _simTime to 0                          │
+└───────────────────────────────┴────────────────────────────────────────┘
+```
+
+ECC_MAX is read at fill-time so any future eccentricity change + a call to
+`reinitParticles()` immediately re-seeds all 10,000 particles.
