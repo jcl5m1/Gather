@@ -301,3 +301,54 @@ The streak tail is offset by `uStreakDM = 0.018 rad` in mean anomaly — so the
 streak appears **longer near perigee** (faster motion) and **shorter near apogee**
 (slower motion), matching real apparent angular velocity.
 
+
+---
+
+## Orbital Debris — Tail Length Reduction
+
+The curved tail arc has been progressively shortened to keep streaks visually tight:
+
+```
+┌──────────────────────────┬────────────────────────────────────────┐
+│ Change                   │ TAIL_TOTAL_DM value                    │
+├──────────────────────────┼────────────────────────────────────────┤
+│ Initial (10 segments)    │ 0.12 rad  (accidentally 10× too long)  │
+│ ÷10 correction           │ 0.012 rad                              │
+│ ÷5 first reduction       │ 0.0024 rad                             │
+│ ÷5 second reduction      │ 0.00048 rad  ← current                 │
+└──────────────────────────┴────────────────────────────────────────┘
+```
+
+Each of the 10 segments spans `TAIL_TOTAL_DM / 10` of mean anomaly.
+The Kepler solver is run independently per vertex so the polyline
+follows the true Keplerian arc even at this fine scale.
+
+---
+
+## Debug Overlay — FPS Counter
+
+The top-left debug text overlay (`dragOrbitHandler.ts`) now shows a live
+frame-rate counter updated once per second:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ build  12/25-10:30:00                                            │
+│ height 450.23 km                                                 │
+│ dist   6821.45 km                                                │
+│ fps    60                                                        │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+Implementation:
+
+```
+┌─────────────────┬──────────────────────────────────────────────────┐
+│ Field           │ Purpose                                          │
+├─────────────────┼──────────────────────────────────────────────────┤
+│ _fps            │ Last computed frame rate (integer)               │
+│ _fpsFrames      │ Frame accumulator since last fps update          │
+│ _fpsLastTime    │ performance.now() timestamp of last fps update   │
+└─────────────────┴──────────────────────────────────────────────────┘
+```
+
+Updated once per second: `fps = round(frames / elapsedSeconds)`.

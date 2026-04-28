@@ -63,6 +63,11 @@ export class DragOrbitHandler {
     private tapInfo:      string[] = [];
     private tileInfo = '';
 
+    // FPS tracking
+    private _fps          = 0;
+    private _fpsFrames    = 0;
+    private _fpsLastTime  = 0;
+
     private pinching      = false;
     private lastPinchDist = 0;
 
@@ -297,6 +302,15 @@ export class DragOrbitHandler {
 
     // Called every frame from the render loop (after render, so camera matrices are fresh).
     public update(): void {
+        // ── FPS counter ──────────────────────────────────────────────────────
+        const _now = performance.now() / 1000;
+        this._fpsFrames++;
+        if (_now - this._fpsLastTime >= 1.0) {
+            this._fps = Math.round(this._fpsFrames / (_now - this._fpsLastTime));
+            this._fpsFrames  = 0;
+            this._fpsLastTime = _now;
+        }
+
         const dist = this.camera.position.length();
         const distStr = dist >= 1e6
             ? `${(dist / 1e6).toFixed(3)} Mm`
@@ -313,7 +327,7 @@ export class DragOrbitHandler {
         if (!this.dragging) {
             const extra = this.tapInfo.length ? '\n\n' + this.tapInfo.join('\n') : '';
             const tile  = this.tileInfo ? '\n' + this.tileInfo : '';
-            this.debugLabel.textContent = `build  ${_buildTime}\nheight ${heightStr}\ndist   ${distStr}${tile}` + extra;
+            this.debugLabel.textContent = `build  ${_buildTime}\nheight ${heightStr}\ndist   ${distStr}\nfps    ${this._fps}${tile}` + extra;
             return;
         }
 

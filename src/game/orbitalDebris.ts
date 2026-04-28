@@ -50,7 +50,7 @@ const PERIGEE_MAX = R + 1_000_000;  // 1 Mm above surface
 //   TAIL_TOTAL_DM is the total mean-anomaly arc spanned by the full tail.
 const TAIL_STEPS    = 10;                     // number of line segments
 const VERTS_PER     = TAIL_STEPS + 1;         // 11 vertices per particle
-const TAIL_TOTAL_DM = 0.12;                   // total tail arc in mean anomaly (rad)
+const TAIL_TOTAL_DM = 0.0024;   // total tail arc in mean anomaly (rad)
 const STEP_DM       = TAIL_TOTAL_DM / TAIL_STEPS;  // per-step offset
 
 // ── Count ──────────────────────────────────────────────────────────────────
