@@ -167,6 +167,11 @@ const techPanel = new TechPanel(RESOURCES, TECH_TREE, () => {
 });
 document.getElementById('btn-tech')!.addEventListener('click', () => techPanel.toggle());
 
+// ── Time scale buttons ────────────────────────────────────────────────────────
+document.getElementById('btn-time-down')!.addEventListener('click', () => setTimeScale(timeScale * 0.1));
+document.getElementById('btn-time-up')!  .addEventListener('click', () => setTimeScale(timeScale * 10.0));
+
+
 // ── Terrain panel ─────────────────────────────────────────────────────────────
 
 const _terrainPanel = document.getElementById('terrain-panel')!;
@@ -820,6 +825,24 @@ function updateScaleBar(): void {
 let lastTime   = performance.now();
 let frameCount = 0;
 
+// ── Time scale (for orbital debris simulation) ──────────────────────────────
+let timeScale = 1.0;
+const TIME_STEP_UP   = 10.0;   // multiply on ▶▶
+const TIME_STEP_DOWN = 0.1;    // multiply on ◀◀
+const TIME_SCALE_MIN = 0.0001;
+const TIME_SCALE_MAX = 1_000_000;
+
+function setTimeScale(s: number): void {
+    timeScale = Math.max(TIME_SCALE_MIN, Math.min(TIME_SCALE_MAX, s));
+    const el = document.getElementById('time-scale-label');
+    if (el) {
+        const v = timeScale;
+        el.textContent = v >= 1
+            ? `${v >= 1000 ? (v >= 1e6 ? (v/1e6).toFixed(1)+'M' : (v/1000).toFixed(0)+'k') : v.toFixed(0)}×`
+            : `1/${Math.round(1/v)}×`;
+    }
+}
+
 function animate(): void {
     requestAnimationFrame(animate);
 
@@ -851,7 +874,7 @@ function animate(): void {
     atmosphere.update(camPos, renderer);
     oceanSpecular.update(camPos, renderer, camera.fov * Math.PI / 180);
     daylightOverlay.update(camPos);
-    orbitalDebris.update();
+    orbitalDebris.update(dt * timeScale);
     scene.position.set(-camPos.x, -camPos.y, -camPos.z);
     camera.position.set(0, 0, 0);
     renderer.render(scene, camera);

@@ -77,6 +77,27 @@
             transition: opacity 0.5s;
         }
 
+
+        /* ── Time controls ───────────────────────────────────────────────── */
+        #time-controls {
+            position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+            display: flex; align-items: center; gap: 6px; z-index: 10;
+            background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px; padding: 5px 10px;
+            font-family: -apple-system, sans-serif;
+            backdrop-filter: blur(6px);
+        }
+        .time-btn {
+            width: 36px; height: 36px; border-radius: 10px;
+            background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+            color: #fff; font-size: 16px; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
+        }
+        .time-btn:active { background: rgba(255,255,255,0.2); }
+        #time-scale-label {
+            min-width: 46px; text-align: center;
+            font-size: 12px; font-weight: 600; color: #ccd; letter-spacing: 0.5px;
+        }
         .ctrl-divider {
             width: 24px; height: 1px; background: rgba(255,255,255,0.1); margin: 2px 0;
         }
@@ -434,6 +455,14 @@
     <button class="zoom-btn" id="btn-tech"     style="font-size:20px;">🔬</button>
     <button class="zoom-btn" id="btn-settings" style="font-size:20px;">⚙</button>
     <button class="zoom-btn" id="btn-terrain"  style="font-size:18px;">⛰</button>
+</div>
+
+
+<!-- Time scale controls -->
+<div id="time-controls">
+    <button class="time-btn" id="btn-time-down" title="Slow down (÷10)">&#9664;&#9664;</button>
+    <span id="time-scale-label">1×</span>
+    <button class="time-btn" id="btn-time-up"   title="Speed up (×10)">&#9654;&#9654;</button>
 </div>
 
 <!-- Terrain shader parameter panel -->

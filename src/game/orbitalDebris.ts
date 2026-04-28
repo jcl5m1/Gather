@@ -99,7 +99,7 @@ void main() {
 export class OrbitalDebris {
     private _mat:  ShaderMaterial;
     private _mesh: LineSegments;
-    private _t0:   number;
+    private _simTime: number = 0.0;
 
     constructor(scene: Scene) {
         const VERTS = COUNT * 2;
@@ -159,11 +159,12 @@ export class OrbitalDebris {
         this._mesh.renderOrder   = 12;
 
         scene.add(this._mesh);
-        this._t0 = performance.now();
     }
 
-    update(): void {
-        this._mat.uniforms.uTime.value = (performance.now() - this._t0) * 1e-3;
+    /** Advance simulation by dt seconds (already scaled by timeScale). */
+    update(dt: number): void {
+        this._simTime += dt;
+        this._mat.uniforms.uTime.value = this._simTime;
     }
 
     dispose(): void {
