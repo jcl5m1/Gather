@@ -34,13 +34,14 @@ import {
     Vector3,
 } from 'three';
 import { R } from './constants';
+import { DEBRIS_ECC_MIN, DEBRIS_ECC_MAX, DEBRIS_TAIL_STEPS, DEBRIS_TAIL_REAL_SECONDS } from './uiDefaults';
 
 // ── Physics ────────────────────────────────────────────────────────────────
 const GM = 3.986004418e14;          // Earth gravitational parameter (m³/s²)
 
 // ── Eccentricity range ─────────────────────────────────────────────────────
-const ECC_MIN = 0.00;
-const ECC_MAX = 0.60;
+const ECC_MIN = DEBRIS_ECC_MIN;
+const ECC_MAX = DEBRIS_ECC_MAX;
 
 // ── Perigee altitude range (m) ─────────────────────────────────────────────
 const PERIGEE_MIN = R + 200_000;    // 200 km above surface
@@ -49,7 +50,7 @@ const PERIGEE_MAX = R + 1_000_000;  // 1 Mm above surface
 // ── Tail geometry ──────────────────────────────────────────────────────────
 //   TAIL_STEPS segments → TAIL_STEPS+1 vertices per particle (including head).
 //   Each vertex is offset by n * aVertRole * uTailDuration seconds behind the head.
-const TAIL_STEPS    = 10;                     // number of line segments
+const TAIL_STEPS    = DEBRIS_TAIL_STEPS;      // number of line segments
 const VERTS_PER     = TAIL_STEPS + 1;         // 11 vertices per particle
 
 // ── Count ──────────────────────────────────────────────────────────────────
@@ -271,7 +272,7 @@ export class OrbitalDebris {
         this._simTime += dt;
         (this._mat.uniforms['uTime']         as { value: number }).value = this._simTime;
         // Tail always covers 1 real-world second worth of orbit behind the head.
-        (this._mat.uniforms['uTailDuration'] as { value: number }).value = 1.0 * timeScale;
+        (this._mat.uniforms['uTailDuration'] as { value: number }).value = DEBRIS_TAIL_REAL_SECONDS * timeScale;
     }
 
     dispose(): void {

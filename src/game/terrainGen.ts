@@ -2,6 +2,15 @@ import {
     WebGLRenderer, WebGLRenderTarget, Scene, OrthographicCamera,
     Mesh, PlaneGeometry, ShaderMaterial, Color,
 } from 'three';
+import {
+    TERRAIN_FEATURE_SCALE, TERRAIN_PERSISTENCE, TERRAIN_LACUNARITY,
+    TERRAIN_L2_SCALE, TERRAIN_CONTINENTAL_BIAS,
+    TERRAIN_OCEAN_LEVEL, TERRAIN_SHORE_LEVEL, TERRAIN_LOWLAND_LEVEL,
+    TERRAIN_HIGHLAND_LEVEL, TERRAIN_SNOW_LEVEL,
+    ICE_SCALE, ICE_AZIMUTH, ICE_OPACITY, ICE_BLEND_MODE,
+    ICE_CLEAR_COLOR, ICE_CLEAR_ALPHA, ICE_ICE_COLOR, ICE_ICE_ALPHA,
+    ICE_CLEAR_LEVEL, ICE_ICE_LEVEL,
+} from './uiDefaults';
 
 export interface TerrainParams {
     featureScale:    number;
@@ -32,29 +41,29 @@ export interface TerrainParams {
 }
 
 export const DEFAULT_TERRAIN_PARAMS: TerrainParams = {
-    featureScale:    1.4,
-    lacunarity:      2.9,
-    persistence:     0.54,
+    featureScale:    TERRAIN_FEATURE_SCALE,
+    lacunarity:      TERRAIN_LACUNARITY,
+    persistence:     TERRAIN_PERSISTENCE,
     heightCurve:     1.0,
-    layer2Scale:     1.8,
-    continentalBias: 0.35,
-    deepOceanLevel:  0.50,
-    shorelineLevel:  0.50,
-    lowlandLevel:    0.54,
-    highlandLevel:   0.70,
-    snowlineLevel:   0.70,
+    layer2Scale:     TERRAIN_L2_SCALE,
+    continentalBias: TERRAIN_CONTINENTAL_BIAS,
+    deepOceanLevel:  TERRAIN_OCEAN_LEVEL,
+    shorelineLevel:  TERRAIN_SHORE_LEVEL,
+    lowlandLevel:    TERRAIN_LOWLAND_LEVEL,
+    highlandLevel:   TERRAIN_HIGHLAND_LEVEL,
+    snowlineLevel:   TERRAIN_SNOW_LEVEL,
     baseEnabled:     1,
     iceEnabled:      1,
-    iceScale:        9.5,
-    iceAzimuth:      10.0,
-    iceOpacity:      3.5,
-    iceBlendMode:    3,
-    iceClearColor:   '#b0cce0',
-    iceClearAlpha:   0.0,
-    iceIceColor:     '#d9edff',
-    iceIceAlpha:     1.0,
-    iceClearLevel:   0.39,
-    iceIceLevel:     0.86,
+    iceScale:        ICE_SCALE,
+    iceAzimuth:      ICE_AZIMUTH,
+    iceOpacity:      ICE_OPACITY,
+    iceBlendMode:    ICE_BLEND_MODE,
+    iceClearColor:   ICE_CLEAR_COLOR,
+    iceClearAlpha:   ICE_CLEAR_ALPHA,
+    iceIceColor:     ICE_ICE_COLOR,
+    iceIceAlpha:     ICE_ICE_ALPHA,
+    iceClearLevel:   ICE_CLEAR_LEVEL,
+    iceIceLevel:     ICE_ICE_LEVEL,
 };
 
 const VERT = /* glsl */`

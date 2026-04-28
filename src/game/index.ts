@@ -1,4 +1,17 @@
 import { Scene, Vector3 } from 'three';
+import {
+    SUN_ELEVATION, SUN_AZIMUTH, SUN_INTENSITY, AMBIENT,
+    ATM_DAY_WIDTH, ATM_NIGHT_WIDTH, ATM_DAY_OPACITY, ATM_NIGHT_OPACITY,
+    ATM_INNER_OPACITY, ATM_INNER_WIDTH,
+    ATM_SHADOW_COLOR, ATM_SUN_COLOR,
+    TERRAIN_FEATURE_SCALE, TERRAIN_PERSISTENCE, TERRAIN_LACUNARITY,
+    TERRAIN_L2_SCALE, TERRAIN_CONTINENTAL_BIAS,
+    TERRAIN_OCEAN_LEVEL, TERRAIN_SHORE_LEVEL, TERRAIN_LOWLAND_LEVEL,
+    TERRAIN_HIGHLAND_LEVEL, TERRAIN_SNOW_LEVEL,
+    ICE_SCALE, ICE_AZIMUTH, ICE_OPACITY, ICE_BLEND_MODE,
+    ICE_CLEAR_COLOR, ICE_CLEAR_ALPHA, ICE_ICE_COLOR, ICE_ICE_ALPHA,
+    ICE_CLEAR_LEVEL, ICE_ICE_LEVEL,
+} from './uiDefaults';
 import { log, installGlobalErrorHandlers } from './logger';
 import { RESOURCES } from './resource';
 import { saveGame, loadGame, clearSave } from './saveState';
@@ -278,12 +291,27 @@ function _bindIceStop(
     colorKey: 'iceClearColor' | 'iceIceColor',
     alphaKey: 'iceClearAlpha' | 'iceIceAlpha',
     levelKey: 'iceClearLevel' | 'iceIceLevel',
+    defaultColor: string, defaultAlpha: number, defaultLevel: number,
 ): void {
     const swatch     = document.getElementById(swatchId)!;
     const ed         = document.getElementById(edId)!;
     const colorInput = document.getElementById(colorId) as HTMLInputElement;
     const alphaInput = document.getElementById(alphaId) as HTMLInputElement;
     const alphaVal   = document.getElementById(alphaValId)!;
+    const levelInput = document.getElementById(levelId) as HTMLInputElement;
+
+    // Apply defaults from uiDefaults.ts on load
+    colorInput.value = defaultColor;
+    alphaInput.value = String(defaultAlpha);
+    alphaVal.textContent = defaultAlpha.toFixed(2);
+    levelInput.value = String(defaultLevel);
+    document.getElementById(levelValId)!.textContent = defaultLevel.toFixed(2);
+    earthTiles.setTerrainParams({
+        [colorKey]: defaultColor,
+        [alphaKey]: defaultAlpha,
+        [levelKey]: defaultLevel,
+    } as any);
+    _updateIceSwatch(swatchId, defaultColor, defaultAlpha);
 
     swatch.addEventListener('click', () => ed.classList.toggle('bm-hidden'));
 
@@ -329,11 +357,13 @@ function _bindIceStop(
 _bindIceStop('trp-ice-clear-swatch', 'trp-ice-clear-ed',
     'trp-ice-clear-color', 'trp-ice-clear-alpha', 'trp-ice-clear-alpha-val',
     'trp-ice-clear-level', 'trp-ice-clear-level-val',
-    'iceClearColor', 'iceClearAlpha', 'iceClearLevel');
+    'iceClearColor', 'iceClearAlpha', 'iceClearLevel',
+    ICE_CLEAR_COLOR, ICE_CLEAR_ALPHA, ICE_CLEAR_LEVEL);
 _bindIceStop('trp-ice-ice-swatch', 'trp-ice-ice-ed',
     'trp-ice-ice-color', 'trp-ice-ice-alpha', 'trp-ice-ice-alpha-val',
     'trp-ice-ice-level', 'trp-ice-ice-level-val',
-    'iceIceColor', 'iceIceAlpha', 'iceIceLevel');
+    'iceIceColor', 'iceIceAlpha', 'iceIceLevel',
+    ICE_ICE_COLOR, ICE_ICE_ALPHA, ICE_ICE_LEVEL);
 
 document.getElementById('btn-terrain')!.addEventListener('click', () => {
     _terrainPanel.classList.toggle('bm-hidden');
@@ -344,6 +374,7 @@ function _bindSlider(
     id: string, valId: string, decimals: number,
     apply: (v: number) => void,
     onDebounce?: () => void,
+    defaultVal?: number,
 ): void {
     const slider = document.getElementById(id) as HTMLInputElement;
     const label  = document.getElementById(valId)!;
@@ -355,6 +386,11 @@ function _bindSlider(
         clearTimeout(debounce);
         debounce = setTimeout(() => { earthTiles.regenerateTiles(); onDebounce?.(); }, 300);
     });
+    // If a default is provided from uiDefaults.ts, set the HTML value and label
+    if (defaultVal !== undefined) {
+        slider.value = String(defaultVal);
+        label.textContent = defaultVal.toFixed(decimals);
+    }
 }
 
 // ── Color map canvas ──────────────────────────────────────────────────────────
@@ -485,30 +521,30 @@ function _drawColorMap(recompute = false): void {
 
 _bindSlider('trp-feature-scale', 'trp-feature-scale-val', 1,
     v => earthTiles.setTerrainParams({ featureScale: v }),
-    () => _drawColorMap(true));
+    () => _drawColorMap(true), TERRAIN_FEATURE_SCALE);
 _bindSlider('trp-persistence',   'trp-persistence-val',   2,
     v => earthTiles.setTerrainParams({ persistence: v }),
-    () => _drawColorMap(true));
+    () => _drawColorMap(true), TERRAIN_PERSISTENCE);
 _bindSlider('trp-lacunarity',    'trp-lacunarity-val',    2,
     v => earthTiles.setTerrainParams({ lacunarity: v }),
-    () => _drawColorMap(true));
+    () => _drawColorMap(true), TERRAIN_LACUNARITY);
 _bindSlider('trp-l2scale',       'trp-l2scale-val',       2,
     v => earthTiles.setTerrainParams({ layer2Scale: v }),
-    () => _drawColorMap(true));
+    () => _drawColorMap(true), TERRAIN_L2_SCALE);
 _bindSlider('trp-continental',   'trp-continental-val',   2,
     v => earthTiles.setTerrainParams({ continentalBias: v }),
-    () => _drawColorMap(true));
+    () => _drawColorMap(true), TERRAIN_CONTINENTAL_BIAS);
 
 // ── Color-map sliders (ordinal coupling) ─────────────────────────────────────
 // Thresholds must satisfy ocean ≤ shore ≤ lowland ≤ highland ≤ snowline.
 // Moving one slider clamps its neighbours to maintain the invariant.
 
 const _CM_ORDER = [
-    { id: 'trp-ocean',    valId: 'trp-ocean-val',    key: 'deepOceanLevel' as const },
-    { id: 'trp-shore',    valId: 'trp-shore-val',    key: 'shorelineLevel' as const },
-    { id: 'trp-lowland',  valId: 'trp-lowland-val',  key: 'lowlandLevel'   as const },
-    { id: 'trp-highland', valId: 'trp-highland-val', key: 'highlandLevel'  as const },
-    { id: 'trp-snow',     valId: 'trp-snow-val',     key: 'snowlineLevel'  as const },
+    { id: 'trp-ocean',    valId: 'trp-ocean-val',    key: 'deepOceanLevel' as const, def: TERRAIN_OCEAN_LEVEL    },
+    { id: 'trp-shore',    valId: 'trp-shore-val',    key: 'shorelineLevel' as const, def: TERRAIN_SHORE_LEVEL    },
+    { id: 'trp-lowland',  valId: 'trp-lowland-val',  key: 'lowlandLevel'   as const, def: TERRAIN_LOWLAND_LEVEL  },
+    { id: 'trp-highland', valId: 'trp-highland-val', key: 'highlandLevel'  as const, def: TERRAIN_HIGHLAND_LEVEL },
+    { id: 'trp-snow',     valId: 'trp-snow-val',     key: 'snowlineLevel'  as const, def: TERRAIN_SNOW_LEVEL     },
 ];
 
 function _setCmEntry(idx: number, v: number): void {
@@ -545,6 +581,12 @@ function _setCmEntry(idx: number, v: number): void {
                 clearTimeout(debounce);
                 debounce = setTimeout(() => earthTiles.regenerateTiles(), 300);
             });
+    });
+    // Apply uiDefaults on load — set HTML value + label + terrain param
+    _CM_ORDER.forEach(entry => {
+        (document.getElementById(entry.id) as HTMLInputElement).value = String(entry.def);
+        document.getElementById(entry.valId)!.textContent = entry.def.toFixed(2);
+        earthTiles.setTerrainParams({ [entry.key]: entry.def });
     });
 })();
 
@@ -589,17 +631,17 @@ _iceEnBtn.addEventListener('click', () => {
 
 _bindSlider('trp-ice-scale',   'trp-ice-scale-val',   1,
     v => earthTiles.setTerrainParams({ iceScale:   v }),
-    () => { _cachedIceCounts = null; _drawIceCmap(true); });
+    () => { _cachedIceCounts = null; _drawIceCmap(true); }, ICE_SCALE);
 _bindSlider('trp-ice-azimuth', 'trp-ice-azimuth-val', 2,
     v => earthTiles.setTerrainParams({ iceAzimuth: v }),
-    () => { _cachedIceCounts = null; _drawIceCmap(true); });
+    () => { _cachedIceCounts = null; _drawIceCmap(true); }, ICE_AZIMUTH);
 _bindSlider('trp-ice-opacity', 'trp-ice-opacity-val', 2,
     v => earthTiles.setTerrainParams({ iceOpacity: v }),
-    () => { _cachedIceCounts = null; _drawIceCmap(true); });
+    () => { _cachedIceCounts = null; _drawIceCmap(true); }, ICE_OPACITY);
 
 // ── Lighting + Atmosphere live sliders (no tile regen needed) ─────────────────
 
-function _bindLiveSlider(id: string, valId: string, decimals: number, apply: (v: number) => void): void {
+function _bindLiveSlider(id: string, valId: string, decimals: number, apply: (v: number) => void, defaultVal?: number): void {
     const slider = document.getElementById(id) as HTMLInputElement;
     const label  = document.getElementById(valId)!;
     slider.addEventListener('input', () => {
@@ -607,14 +649,17 @@ function _bindLiveSlider(id: string, valId: string, decimals: number, apply: (v:
         label.textContent = v.toFixed(decimals);
         apply(v);
     });
-    // Apply the HTML default value immediately so GPU uniforms match on load
+    // If a default is provided from uiDefaults.ts, override the HTML value attribute
+    if (defaultVal !== undefined) {
+        slider.value = String(defaultVal);
+    }
     const initVal = parseFloat(slider.value);
     label.textContent = initVal.toFixed(decimals);
     apply(initVal);
 }
 
-let _sunEl = 5;
-let _sunAz = 0;
+let _sunEl = SUN_ELEVATION;
+let _sunAz = SUN_AZIMUTH;
 function _applySunAngles(): void {
     const dir = lighting.setSunAngles(_sunEl, _sunAz);
     atmosphere.setSunDir(dir);
@@ -623,24 +668,31 @@ function _applySunAngles(): void {
     orbitalDebris.setSunDir(dir);
 }
 
-_bindLiveSlider('trp-sun-el',  'trp-sun-el-val',  0, v => { _sunEl = v; _applySunAngles(); });
-_bindLiveSlider('trp-sun-az',  'trp-sun-az-val',  0, v => { _sunAz = v; _applySunAngles(); });
-_bindLiveSlider('trp-sun-int', 'trp-sun-int-val', 2, v => daylightOverlay.setSunIntensity(v));
-_bindLiveSlider('trp-ambient', 'trp-ambient-val', 3, v => daylightOverlay.setAmbient(v));
+_bindLiveSlider('trp-sun-el',  'trp-sun-el-val',  0, v => { _sunEl = v; _applySunAngles(); }, SUN_ELEVATION);
+_bindLiveSlider('trp-sun-az',  'trp-sun-az-val',  0, v => { _sunAz = v; _applySunAngles(); }, SUN_AZIMUTH);
+_bindLiveSlider('trp-sun-int', 'trp-sun-int-val', 2, v => daylightOverlay.setSunIntensity(v), SUN_INTENSITY);
+_bindLiveSlider('trp-ambient', 'trp-ambient-val', 3, v => daylightOverlay.setAmbient(v), AMBIENT);
 
-_bindLiveSlider('trp-day-width',   'trp-day-width-val',   1, v => atmosphere.setDayWidth(v));
-_bindLiveSlider('trp-night-width',    'trp-night-width-val',    1, v  => atmosphere.setNightWidth(v));
-_bindLiveSlider('trp-day-opacity',    'trp-day-opacity-val',    2, v => atmosphere.setDayOpacity(v));
-_bindLiveSlider('trp-night-opacity',     'trp-night-opacity-val',     2, v  => atmosphere.setNightOpacity(v));
-_bindLiveSlider('trp-inner-opacity', 'trp-inner-opacity-val', 2, v => atmosphere.setInnerOpacity(v));
-_bindLiveSlider('trp-inner-width',   'trp-inner-width-val',   2, v => atmosphere.setInnerWidth(v));
+_bindLiveSlider('trp-day-width',   'trp-day-width-val',   1, v => atmosphere.setDayWidth(v), ATM_DAY_WIDTH);
+_bindLiveSlider('trp-night-width',    'trp-night-width-val',    1, v  => atmosphere.setNightWidth(v), ATM_NIGHT_WIDTH);
+_bindLiveSlider('trp-day-opacity',    'trp-day-opacity-val',    2, v => atmosphere.setDayOpacity(v), ATM_DAY_OPACITY);
+_bindLiveSlider('trp-night-opacity',     'trp-night-opacity-val',     2, v  => atmosphere.setNightOpacity(v), ATM_NIGHT_OPACITY);
+_bindLiveSlider('trp-inner-opacity', 'trp-inner-opacity-val', 2, v => atmosphere.setInnerOpacity(v), ATM_INNER_OPACITY);
+_bindLiveSlider('trp-inner-width',   'trp-inner-width-val',   2, v => atmosphere.setInnerWidth(v), ATM_INNER_WIDTH);
 _bindLiveSlider('trp-sun-mod',     'trp-sun-mod-val',     2, _v => {});  // removed
 _bindLiveSlider('trp-night-floor', 'trp-night-floor-val', 2, _v => {});  // removed
 
-(document.getElementById('trp-atm-shadow-color') as HTMLInputElement)
-    .addEventListener('input', function() { atmosphere.setSkyColor(this.value); });
-(document.getElementById('trp-atm-sun-color') as HTMLInputElement)
-    .addEventListener('input', function() { atmosphere.setSunColor(this.value); });
+(function() {
+    const shadowPicker = document.getElementById('trp-atm-shadow-color') as HTMLInputElement;
+    shadowPicker.value = ATM_SHADOW_COLOR;
+    atmosphere.setSkyColor(ATM_SHADOW_COLOR);
+    shadowPicker.addEventListener('input', function() { atmosphere.setSkyColor(this.value); });
+
+    const sunPicker = document.getElementById('trp-atm-sun-color') as HTMLInputElement;
+    sunPicker.value = ATM_SUN_COLOR;
+    atmosphere.setSunColor(ATM_SUN_COLOR);
+    sunPicker.addEventListener('input', function() { atmosphere.setSunColor(this.value); });
+})();
 
 
 function _syncSliders(): void {
