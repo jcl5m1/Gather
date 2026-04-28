@@ -56,6 +56,7 @@ const atmosphere     = addAtmosphere(overlayScene);
 const oceanSpecular  = addOceanSpecular(overlayScene);
 const daylightOverlay = addDaylightOverlay(scene, lighting.sunDir);
 const orbitalDebris   = new OrbitalDebris(scene);
+orbitalDebris.setSunDir(lighting.sunDir);
 log.info('Earth added to scene');
 
 const { homebase, resourceNodes } = buildWorld(scene, RESOURCES);
@@ -615,6 +616,7 @@ function _applySunAngles(): void {
     atmosphere.setSunDir(dir);
     oceanSpecular.setSunDir(dir);
     daylightOverlay.setSunDir(dir);
+    orbitalDebris.setSunDir(dir);
 }
 
 _bindLiveSlider('trp-sun-el',  'trp-sun-el-val',  0, v => { _sunEl = v; _applySunAngles(); });

@@ -31,6 +31,7 @@ import {
     AdditiveBlending,
     LineSegments,
     Scene,
+    Vector3,
 } from 'three';
 import { R } from './constants';
 
@@ -63,11 +64,14 @@ attribute vec4 aOrbit2;
 // 0.0 = head, 1.0 = tail tip  (evenly spaced at 0.0, 0.1, 0.2, ... 1.0)
 attribute float aVertRole;
 
-uniform float uTime;        // simulation time (s)
-uniform float uGM;          // gravitational parameter (m³/s²)
-uniform float uTailDuration; // real sim-seconds the tail spans (= 2s * timeScale)
+uniform float uTime;          // simulation time (s)
+uniform float uGM;            // gravitational parameter (m³/s²)
+uniform float uTailDuration;  // real sim-seconds the tail spans (= 1s * timeScale)
+uniform vec3  uSunDir;        // unit vector toward the sun (world space)
+uniform float uEarthRadius;   // Earth radius in scene units (m)
 
 varying float vRole;
+varying float vInShadow;      // 1.0 = fully in shadow, 0.0 = sunlit
 
 // ── Kepler solver (Newton-Raphson, 6 iterations) ─────────────────────────
 float solveKepler(float M, float e) {
@@ -120,17 +124,33 @@ void main() {
 
     vec3 pos = r * (perigeeDir * cos(nu) + semilatDir * sin(nu));
 
+    // ── Earth shadow (cylindrical umbra approximation) ──────────────────
+    // Project pos onto the anti-sun axis.
+    // A point is in shadow when:
+    //   1. It is on the night side  (dot(pos, sunDir) < 0)
+    //   2. Its perpendicular distance from the sun-Earth axis < Earth radius
+    vec3  antiSun      = -uSunDir;
+    float alongAntiSun = dot(pos, antiSun);              // > 0 → behind Earth
+    vec3  axisPoint    = antiSun * alongAntiSun;         // nearest point on axis
+    float perpDist     = length(pos - axisPoint);        // distance from axis
+    float inShadow     = (alongAntiSun > 0.0 && perpDist < uEarthRadius) ? 1.0 : 0.0;
+
     vRole       = aVertRole;
+    vInShadow   = inShadow;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 }`;
 
 // ── Fragment shader ────────────────────────────────────────────────────────
 const DEBRIS_FRAG = /* glsl */`
-varying float vRole;   // 0.0 = head (bright white), 1.0 = tail tip (transparent)
+varying float vRole;
+varying float vInShadow;   // 1.0 = in Earth's shadow
 
 void main() {
-    float alpha = (1.0 - vRole) * (1.0 - vRole);   // quadratic fade to tail
-    gl_FragColor = vec4(1.0, 1.0, 1.0, alpha * 0.85);
+    float alpha      = (1.0 - vRole) * (1.0 - vRole);   // quadratic fade to tail
+    // Particles in shadow are invisible; add a tiny ambient so they're not
+    // completely black (earthshine / reflected light).
+    float brightness = mix(1.0, 0.0, vInShadow);
+    gl_FragColor = vec4(vec3(brightness), alpha * 0.85);
 }`;
 
 // ── Class ──────────────────────────────────────────────────────────────────
@@ -160,9 +180,11 @@ export class OrbitalDebris {
             vertexShader:   DEBRIS_VERT,
             fragmentShader: DEBRIS_FRAG,
             uniforms: {
-                uTime:        { value: 0.0 },
-                uGM:          { value: GM },
-                uTailDuration: { value: 1.0 },   // updated each frame
+                uTime:         { value: 0.0 },
+                uGM:           { value: GM },
+                uTailDuration: { value: 1.0 },          // updated each frame
+                uSunDir:       { value: new Vector3(1, 0, 0) },
+                uEarthRadius:  { value: R },
             },
             transparent: true,
             blending:    AdditiveBlending,
@@ -240,10 +262,15 @@ export class OrbitalDebris {
      * @param timeScale Current time multiplier — used to scale tail duration so the
      *                  tail always represents TAIL_REAL_SECONDS of real-world time.
      */
+    /** Update the sun direction used for shadow computation. */
+    setSunDir(dir: Vector3): void {
+        (this._mat.uniforms['uSunDir'].value as Vector3).copy(dir);
+    }
+
     update(dt: number, timeScale: number = 1.0): void {
         this._simTime += dt;
-        (this._mat.uniforms['uTime']        as { value: number }).value = this._simTime;
-        // Tail always covers 2 real-world seconds worth of orbit behind the head.
+        (this._mat.uniforms['uTime']         as { value: number }).value = this._simTime;
+        // Tail always covers 1 real-world second worth of orbit behind the head.
         (this._mat.uniforms['uTailDuration'] as { value: number }).value = 1.0 * timeScale;
     }
 
