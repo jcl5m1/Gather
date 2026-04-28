@@ -221,8 +221,8 @@ void main() {
 
         // Day/night: NdotL on the actual surface — matches the planet's lit hemisphere exactly
         float NdotL    = dot(surfNorm, uSunDir);
-        // innerDayMask: 1 on night/terminator side, 0 on fully-lit dayside
-        float innerDayMask = 1.0 - smoothstep(0.0, 0.3, NdotL);
+        // innerDayMask: 1 on fully-lit dayside, 0 on night side (inverted)
+        float innerDayMask = smoothstep(0.0, 0.3, NdotL);
 
         float innerLimb = exp(-pow((1.0 - t) / uInnerWidth, 2.0)) * step(0.0, 1.0 - t);
         float innerGlow = innerLimb * uInnerOpacity * innerDayMask;
@@ -255,8 +255,8 @@ export class AtmosphereGlow {
                 uFade:        { value: 1.0 },
                 uSkyColor:    { value: new Color(0.07, 0.20, 0.72) },
                 uSunColor:    { value: new Color(0.52, 0.76, 1.00) },
-                uInnerOpacity:{ value: 0.4 },
-                uInnerWidth:  { value: 0.0875 },
+                uInnerOpacity:{ value: 1.0 },
+                uInnerWidth:  { value: 0.25 },
             },
             transparent: true,
             blending:    AdditiveBlending,
