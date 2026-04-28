@@ -874,7 +874,7 @@ function animate(): void {
     atmosphere.update(camPos, renderer);
     oceanSpecular.update(camPos, renderer, camera.fov * Math.PI / 180);
     daylightOverlay.update(camPos);
-    orbitalDebris.update(dt * timeScale);
+    orbitalDebris.update(dt * timeScale, timeScale);
     scene.position.set(-camPos.x, -camPos.y, -camPos.z);
     camera.position.set(0, 0, 0);
     renderer.render(scene, camera);

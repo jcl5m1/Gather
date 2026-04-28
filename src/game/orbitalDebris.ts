@@ -47,11 +47,9 @@ const PERIGEE_MAX = R + 1_000_000;  // 1 Mm above surface
 
 // ── Tail geometry ──────────────────────────────────────────────────────────
 //   TAIL_STEPS segments → TAIL_STEPS+1 vertices per particle (including head).
-//   TAIL_TOTAL_DM is the total mean-anomaly arc spanned by the full tail.
+//   Each vertex is offset by n * aVertRole * uTailDuration seconds behind the head.
 const TAIL_STEPS    = 10;                     // number of line segments
 const VERTS_PER     = TAIL_STEPS + 1;         // 11 vertices per particle
-const TAIL_TOTAL_DM = 0.024;   // total tail arc in mean anomaly (rad)
-const STEP_DM       = TAIL_TOTAL_DM / TAIL_STEPS;  // per-step offset
 
 // ── Count ──────────────────────────────────────────────────────────────────
 const COUNT = 10_000;
@@ -67,7 +65,7 @@ attribute float aVertRole;
 
 uniform float uTime;        // simulation time (s)
 uniform float uGM;          // gravitational parameter (m³/s²)
-uniform float uTailTotalDM; // total mean-anomaly arc of the tail (rad)
+uniform float uTailDuration; // real sim-seconds the tail spans (= 2s * timeScale)
 
 varying float vRole;
 
@@ -100,7 +98,9 @@ void main() {
 
     // Each vertex sits at a different point along the tail arc.
     // aVertRole=0 → head (current position), aVertRole=1 → tail tip (furthest back).
-    float M = M0 + n * uTime - aVertRole * uTailTotalDM;
+    // Offset each tail vertex by aVertRole * uTailDuration seconds behind head.
+    // Using this particle's own mean motion n so arc length is physically correct.
+    float M = M0 + n * (uTime - aVertRole * uTailDuration);
 
     // Solve Kepler → eccentric anomaly
     float E = solveKepler(M, e);
@@ -192,7 +192,7 @@ export class OrbitalDebris {
             uniforms: {
                 uTime:        { value: 0.0 },
                 uGM:          { value: GM },
-                uTailTotalDM: { value: TAIL_TOTAL_DM },
+                uTailDuration: { value: 1.0 },   // updated each frame
             },
             transparent: true,
             blending:    AdditiveBlending,
@@ -205,10 +205,17 @@ export class OrbitalDebris {
         scene.add(this._mesh);
     }
 
-    /** Advance simulation by dt seconds (already scaled by timeScale). */
-    update(dt: number): void {
+    /**
+     * Advance simulation.
+     * @param dt        Frame delta already multiplied by timeScale (seconds of sim time)
+     * @param timeScale Current time multiplier — used to scale tail duration so the
+     *                  tail always represents TAIL_REAL_SECONDS of real-world time.
+     */
+    update(dt: number, timeScale: number = 1.0): void {
         this._simTime += dt;
-        (this._mat.uniforms['uTime'] as { value: number }).value = this._simTime;
+        (this._mat.uniforms['uTime']        as { value: number }).value = this._simTime;
+        // Tail always covers 2 real-world seconds worth of orbit behind the head.
+        (this._mat.uniforms['uTailDuration'] as { value: number }).value = 1.0 * timeScale;
     }
 
     dispose(): void {
