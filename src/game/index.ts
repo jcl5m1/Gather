@@ -4,7 +4,7 @@ import { RESOURCES } from './resource';
 import { saveGame, loadGame, clearSave } from './saveState';
 import { createRenderer, createCamera } from './scene';
 import { addLighting, addStars, addEarth, addAtmosphere, addDaylightOverlay, addOceanSpecular, OceanSpecular } from './earth';
-import { addOrbitalDebris, OrbitalDebris } from './orbitalDebris';
+import { OrbitalDebris } from './orbitalDebris';
 import type { EarthLOD } from './earthLOD';
 import { buildWorld } from './world';
 import { KSC_NORMAL } from './world';
@@ -55,7 +55,7 @@ const earthTiles: EarthLOD = addEarth(scene, renderer, () => {
 const atmosphere     = addAtmosphere(overlayScene);
 const oceanSpecular  = addOceanSpecular(overlayScene);
 const daylightOverlay = addDaylightOverlay(scene, lighting.sunDir);
-const orbitalDebris   = addOrbitalDebris(scene);
+const orbitalDebris   = new OrbitalDebris(scene);
 log.info('Earth added to scene');
 
 const { homebase, resourceNodes } = buildWorld(scene, RESOURCES);
