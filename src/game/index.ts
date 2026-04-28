@@ -3,7 +3,7 @@ import { log, installGlobalErrorHandlers } from './logger';
 import { RESOURCES } from './resource';
 import { saveGame, loadGame, clearSave } from './saveState';
 import { createRenderer, createCamera } from './scene';
-import { addLighting, addStars, addEarth } from './earth';
+import { addLighting, addStars, addEarth, addAtmosphere, addDaylightOverlay } from './earth';
 import type { EarthLOD } from './earthLOD';
 import { buildWorld } from './world';
 import { KSC_NORMAL } from './world';
@@ -31,10 +31,13 @@ const renderer = createRenderer();
 log.info('Renderer created');
 
 const scene  = new Scene();
+// Separate scene for fullscreen-quad overlays — never shifted by the
+// floating-origin trick, so clip-space shaders work correctly.
+const overlayScene = new Scene();
 const camera = createCamera();
 log.info('Scene + camera ready');
 
-addLighting(scene);
+const lighting = addLighting(scene);
 addStars(scene);
 
 function hideLoadingScreen(): void {
@@ -44,10 +47,12 @@ function hideLoadingScreen(): void {
     setTimeout(() => el.remove(), 500);
 }
 
-const earthTiles: EarthLOD = addEarth(scene, () => {
+const earthTiles: EarthLOD = addEarth(scene, renderer, () => {
     log.info('Earth textures loaded');
     hideLoadingScreen();
 });
+const atmosphere     = addAtmosphere(overlayScene);
+const daylightOverlay = addDaylightOverlay(scene, lighting.sunDir);
 log.info('Earth added to scene');
 
 const { homebase, resourceNodes } = buildWorld(scene, RESOURCES);
@@ -158,6 +163,523 @@ const techPanel = new TechPanel(RESOURCES, TECH_TREE, () => {
     save();
 });
 document.getElementById('btn-tech')!.addEventListener('click', () => techPanel.toggle());
+
+// ── Terrain panel ─────────────────────────────────────────────────────────────
+
+const _terrainPanel = document.getElementById('terrain-panel')!;
+// ── Ice colormap (mirrors base-terrain colormap) ──────────────────────────────
+
+let _cachedIceCounts: number[] | null = null;
+
+function _fbm(sx: number, sy: number, sz: number, lac: number, per: number): number {
+    let x = sx, y = sy, z = sz, h = 0, amp = 0.5;
+    for (let i = 0; i < 12; i++) {
+        h += amp * _gnoise(x, y, z);
+        const nx = (       -0.80*y -0.60*z) * lac;
+        const ny = (0.80*x +0.36*y -0.48*z) * lac;
+        const nz = (0.60*x -0.48*y +0.64*z) * lac;
+        x = nx; y = ny; z = nz;
+        amp *= per;
+    }
+    return h * 0.5 + 0.5;
+}
+
+function _sampleIceAlpha(sx: number, sy: number, sz: number): number {
+    const p = earthTiles.terrainParams;
+    const n = _fbm(sx*p.iceScale+53.7, sy*p.iceScale+12.3, sz*p.iceScale+87.4, p.lacunarity, p.persistence);
+    const lat = Math.pow(Math.abs(sy), Math.max(0.01, p.iceAzimuth));
+    return Math.max(0, Math.min(1, n * lat * p.iceOpacity));
+}
+
+function _computeIceHistogram(W: number): number[] {
+    const counts = new Array(W).fill(0);
+    const N = 2000, goldenAngle = 2.399963229;
+    for (let i = 0; i < N; i++) {
+        const cosT = 1 - 2*(i+0.5)/N;
+        const sinT = Math.sqrt(Math.max(0, 1-cosT*cosT));
+        const phi = i * goldenAngle;
+        const a = _sampleIceAlpha(Math.cos(phi)*sinT, cosT, Math.sin(phi)*sinT);
+        counts[Math.min(W-1, Math.floor(a * W))]++;
+    }
+    return counts;
+}
+
+function _iceGradRGB(t: number): [number, number, number] {
+    const p = earthTiles.terrainParams;
+    const gradT = Math.max(0, Math.min(1,
+        (t - p.iceClearLevel) / Math.max(0.001, p.iceIceLevel - p.iceClearLevel)));
+    const parse = (h: string) => {
+        const n = parseInt(h.replace('#',''), 16);
+        return [(n >> 16 & 0xff), (n >> 8 & 0xff), (n & 0xff)];
+    };
+    const [r0,g0,b0] = parse(p.iceClearColor);
+    const [r1,g1,b1] = parse(p.iceIceColor);
+    return [r0+(r1-r0)*gradT|0, g0+(g1-g0)*gradT|0, b0+(b1-b0)*gradT|0];
+}
+
+function _drawIceCmap(recompute = false): void {
+    const canvas = document.getElementById('trp-ice-cmap') as HTMLCanvasElement;
+    const ctx    = canvas.getContext('2d')!;
+    const W = canvas.width, H = canvas.height;
+    const HIST_H = 32;
+
+    if (recompute || !_cachedIceCounts) _cachedIceCounts = _computeIceHistogram(W);
+    const maxCount = Math.max(1, ..._cachedIceCounts);
+
+    const img = ctx.createImageData(W, H);
+    for (let x = 0; x < W; x++) {
+        const [r, g, b] = _iceGradRGB((x + 0.5) / W);
+        for (let y = HIST_H; y < H; y++) {
+            const i = (y*W+x)*4;
+            img.data[i]=r; img.data[i+1]=g; img.data[i+2]=b; img.data[i+3]=255;
+        }
+        const barH = Math.round((_cachedIceCounts[x] / maxCount) * HIST_H);
+        for (let y = 0; y < HIST_H; y++) {
+            const i = (y*W+x)*4;
+            if (y >= HIST_H - barH) {
+                img.data[i]=r; img.data[i+1]=g; img.data[i+2]=b; img.data[i+3]=210;
+            } else {
+                img.data[i]=14; img.data[i+1]=14; img.data[i+2]=18; img.data[i+3]=255;
+            }
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    const p = earthTiles.terrainParams;
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1;
+    for (const lv of [p.iceClearLevel, p.iceIceLevel]) {
+        const x = Math.round(lv * W) + 0.5;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+}
+
+function _updateIceSwatch(id: string, hexColor: string, alpha: number): void {
+    const btn = document.getElementById(id) as HTMLButtonElement;
+    const n = parseInt(hexColor.replace('#',''), 16);
+    const r = n >> 16 & 0xff, g = n >> 8 & 0xff, b = n & 0xff;
+    btn.style.backgroundColor = `rgba(${r},${g},${b},${alpha})`;
+    btn.style.borderColor = `rgba(255,255,255,${0.15 + alpha * 0.35})`;
+}
+
+function _bindIceStop(
+    swatchId: string, edId: string,
+    colorId: string, alphaId: string, alphaValId: string,
+    levelId: string, levelValId: string,
+    colorKey: 'iceClearColor' | 'iceIceColor',
+    alphaKey: 'iceClearAlpha' | 'iceIceAlpha',
+    levelKey: 'iceClearLevel' | 'iceIceLevel',
+): void {
+    const swatch     = document.getElementById(swatchId)!;
+    const ed         = document.getElementById(edId)!;
+    const colorInput = document.getElementById(colorId) as HTMLInputElement;
+    const alphaInput = document.getElementById(alphaId) as HTMLInputElement;
+    const alphaVal   = document.getElementById(alphaValId)!;
+
+    swatch.addEventListener('click', () => ed.classList.toggle('bm-hidden'));
+
+    let debounce: ReturnType<typeof setTimeout>;
+    function applyColor(): void {
+        const color = colorInput.value;
+        const alpha = parseFloat(alphaInput.value);
+        alphaVal.textContent = alpha.toFixed(2);
+        earthTiles.setTerrainParams({ [colorKey]: color, [alphaKey]: alpha } as any);
+        _updateIceSwatch(swatchId, color, alpha);
+        _drawIceCmap();
+        clearTimeout(debounce);
+        debounce = setTimeout(() => earthTiles.regenerateTiles(), 300);
+    }
+    colorInput.addEventListener('input', applyColor);
+    alphaInput.addEventListener('input', applyColor);
+
+    let debounceLevel: ReturnType<typeof setTimeout>;
+    (document.getElementById(levelId) as HTMLInputElement).addEventListener('input', function() {
+        const v = parseFloat(this.value);
+        document.getElementById(levelValId)!.textContent = v.toFixed(2);
+        earthTiles.setTerrainParams({ [levelKey]: v } as any);
+        if (levelKey === 'iceClearLevel') {
+            const peer = document.getElementById('trp-ice-ice-level') as HTMLInputElement;
+            if (parseFloat(peer.value) < v) {
+                peer.value = String(v);
+                document.getElementById('trp-ice-ice-level-val')!.textContent = v.toFixed(2);
+                earthTiles.setTerrainParams({ iceIceLevel: v });
+            }
+        } else {
+            const peer = document.getElementById('trp-ice-clear-level') as HTMLInputElement;
+            if (parseFloat(peer.value) > v) {
+                peer.value = String(v);
+                document.getElementById('trp-ice-clear-level-val')!.textContent = v.toFixed(2);
+                earthTiles.setTerrainParams({ iceClearLevel: v });
+            }
+        }
+        _drawIceCmap();
+        clearTimeout(debounceLevel);
+        debounceLevel = setTimeout(() => earthTiles.regenerateTiles(), 300);
+    });
+}
+_bindIceStop('trp-ice-clear-swatch', 'trp-ice-clear-ed',
+    'trp-ice-clear-color', 'trp-ice-clear-alpha', 'trp-ice-clear-alpha-val',
+    'trp-ice-clear-level', 'trp-ice-clear-level-val',
+    'iceClearColor', 'iceClearAlpha', 'iceClearLevel');
+_bindIceStop('trp-ice-ice-swatch', 'trp-ice-ice-ed',
+    'trp-ice-ice-color', 'trp-ice-ice-alpha', 'trp-ice-ice-alpha-val',
+    'trp-ice-ice-level', 'trp-ice-ice-level-val',
+    'iceIceColor', 'iceIceAlpha', 'iceIceLevel');
+
+document.getElementById('btn-terrain')!.addEventListener('click', () => {
+    _terrainPanel.classList.toggle('bm-hidden');
+    if (!_terrainPanel.classList.contains('bm-hidden')) { _drawColorMap(); _drawIceCmap(); }
+});
+
+function _bindSlider(
+    id: string, valId: string, decimals: number,
+    apply: (v: number) => void,
+    onDebounce?: () => void,
+): void {
+    const slider = document.getElementById(id) as HTMLInputElement;
+    const label  = document.getElementById(valId)!;
+    let debounce: ReturnType<typeof setTimeout>;
+    slider.addEventListener('input', () => {
+        const v = parseFloat(slider.value);
+        label.textContent = v.toFixed(decimals);
+        apply(v);
+        clearTimeout(debounce);
+        debounce = setTimeout(() => { earthTiles.regenerateTiles(); onDebounce?.(); }, 300);
+    });
+}
+
+// ── Color map canvas ──────────────────────────────────────────────────────────
+
+// TypeScript fBm port — mirrors the GLSL shader exactly for histogram sampling.
+let _cachedCounts: number[] | null = null;
+
+function _fract(x: number): number { return x - Math.floor(x); }
+
+function _ghash(px: number, py: number, pz: number): [number, number, number] {
+    let x = _fract(px * 0.1031), y = _fract(py * 0.1030), z = _fract(pz * 0.0973);
+    const d = x*(y+33.33) + y*(x+33.33) + z*(z+33.33);
+    x += d; y += d; z += d;
+    return [_fract((x+y)*z)*2-1, _fract((x+x)*y)*2-1, _fract((y+x)*x)*2-1];
+}
+
+function _gdot(px: number, py: number, pz: number, fx: number, fy: number, fz: number): number {
+    const [hx, hy, hz] = _ghash(px, py, pz);
+    return hx*fx + hy*fy + hz*fz;
+}
+
+function _mix(a: number, b: number, t: number): number { return a + (b-a)*t; }
+
+function _gnoise(px: number, py: number, pz: number): number {
+    const ix = Math.floor(px), iy = Math.floor(py), iz = Math.floor(pz);
+    const fx = px-ix, fy = py-iy, fz = pz-iz;
+    const ux = fx*fx*(3-2*fx), uy = fy*fy*(3-2*fy), uz = fz*fz*(3-2*fz);
+    return _mix(
+        _mix(_mix(_gdot(ix,   iy,   iz,   fx,   fy,   fz  ),
+                  _gdot(ix+1, iy,   iz,   fx-1, fy,   fz  ), ux),
+             _mix(_gdot(ix,   iy+1, iz,   fx,   fy-1, fz  ),
+                  _gdot(ix+1, iy+1, iz,   fx-1, fy-1, fz  ), ux), uy),
+        _mix(_mix(_gdot(ix,   iy,   iz+1, fx,   fy,   fz-1),
+                  _gdot(ix+1, iy,   iz+1, fx-1, fy,   fz-1), ux),
+             _mix(_gdot(ix,   iy+1, iz+1, fx,   fy-1, fz-1),
+                  _gdot(ix+1, iy+1, iz+1, fx-1, fy-1, fz-1), ux), uy),
+        uz);
+}
+
+function _sampleHeight(px: number, py: number, pz: number): number {
+    const p = earthTiles.terrainParams;
+    const l1 = _fbm(px*p.featureScale, py*p.featureScale, pz*p.featureScale, p.lacunarity, p.persistence);
+    const l2 = _fbm(px*p.featureScale*p.layer2Scale+17.31,
+                    py*p.featureScale*p.layer2Scale+43.27,
+                    pz*p.featureScale*p.layer2Scale+31.83, p.lacunarity, p.persistence);
+    const continental = _gnoise(px*0.8, py*0.8, pz*0.8) * p.continentalBias;
+    const combined = Math.max(0, Math.min(1, l1*l2*2 + continental));
+    return Math.pow(combined, p.heightCurve);
+}
+
+const CM_LO = 0.3, CM_HI = 0.7;
+
+function _computeHeightHistogram(W: number): number[] {
+    const counts = new Array(W).fill(0);
+    // Fibonacci spiral — uniform area distribution on the sphere.
+    const N = 2000;
+    const goldenAngle = 2.399963229;
+    for (let i = 0; i < N; i++) {
+        const cosT = 1 - 2*(i+0.5)/N;
+        const sinT = Math.sqrt(Math.max(0, 1 - cosT*cosT));
+        const phi  = i * goldenAngle;
+        const sx = Math.cos(phi)*sinT, sy = cosT, sz = Math.sin(phi)*sinT;
+        const h = _sampleHeight(sx, sy, sz);
+        if (h < CM_LO || h > CM_HI) continue;
+        counts[Math.min(W-1, Math.floor((h - CM_LO) / (CM_HI - CM_LO) * W))]++;
+    }
+    return counts;
+}
+
+function _cmRGB(h: number): [number, number, number] {
+    const p = earthTiles.terrainParams;
+    const t = (h: number, lo: number, hi: number) => hi > lo ? (h - lo) / (hi - lo) : 1;
+    const m = (a: number[], b: number[], t: number): [number,number,number] => {
+        const c = Math.max(0, Math.min(1, t));
+        return [(a[0]+(b[0]-a[0])*c)*255|0, (a[1]+(b[1]-a[1])*c)*255|0, (a[2]+(b[2]-a[2])*c)*255|0];
+    };
+    if (h < p.deepOceanLevel)  return m([0.03,0.06,0.20],[0.07,0.19,0.48], t(h,0,p.deepOceanLevel));
+    if (h < p.shorelineLevel)  return m([0.07,0.19,0.48],[0.68,0.60,0.40], t(h,p.deepOceanLevel,p.shorelineLevel));
+    if (h < p.lowlandLevel)    return m([0.22,0.44,0.14],[0.15,0.34,0.09], t(h,p.shorelineLevel,p.lowlandLevel));
+    if (h < p.highlandLevel)   return m([0.15,0.34,0.09],[0.42,0.36,0.26], t(h,p.lowlandLevel,p.highlandLevel));
+    if (h < p.snowlineLevel)   return m([0.42,0.36,0.26],[0.70,0.70,0.70], t(h,p.highlandLevel,p.snowlineLevel));
+    return                         m([0.70,0.70,0.70],[0.95,0.96,1.00],    t(h,p.snowlineLevel,1.0));
+}
+
+function _drawColorMap(recompute = false): void {
+    const canvas = document.getElementById('trp-colormap') as HTMLCanvasElement;
+    const ctx    = canvas.getContext('2d')!;
+    const W = canvas.width, H = canvas.height;  // 200 × 52
+    const HIST_H = 32, GRAD_H = H - HIST_H;     // histogram top 32px, gradient bottom 20px
+
+    if (recompute || !_cachedCounts) _cachedCounts = _computeHeightHistogram(W);
+    const maxCount = Math.max(1, ..._cachedCounts);
+
+    const img = ctx.createImageData(W, H);
+    for (let x = 0; x < W; x++) {
+        const [r, g, b] = _cmRGB(CM_LO + (x + 0.5) / W * (CM_HI - CM_LO));
+
+        // Bottom GRAD_H rows: color gradient
+        for (let y = HIST_H; y < H; y++) {
+            const i = (y*W+x)*4;
+            img.data[i]=r; img.data[i+1]=g; img.data[i+2]=b; img.data[i+3]=255;
+        }
+
+        // Top HIST_H rows: histogram bar (grows upward)
+        const barH = Math.round((_cachedCounts[x] / maxCount) * HIST_H);
+        for (let y = 0; y < HIST_H; y++) {
+            const i = (y*W+x)*4;
+            if (y >= HIST_H - barH) {
+                img.data[i]=r; img.data[i+1]=g; img.data[i+2]=b; img.data[i+3]=210;
+            } else {
+                img.data[i]=14; img.data[i+1]=14; img.data[i+2]=18; img.data[i+3]=255;
+            }
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    // Threshold tick marks spanning full height
+    const p = earthTiles.terrainParams;
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 1;
+    for (const lv of [p.deepOceanLevel, p.shorelineLevel, p.lowlandLevel, p.highlandLevel, p.snowlineLevel]) {
+        const x = Math.round((lv - CM_LO) / (CM_HI - CM_LO) * W) + 0.5;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+}
+
+// ── Slider bindings ───────────────────────────────────────────────────────────
+
+_bindSlider('trp-feature-scale', 'trp-feature-scale-val', 1,
+    v => earthTiles.setTerrainParams({ featureScale: v }),
+    () => _drawColorMap(true));
+_bindSlider('trp-persistence',   'trp-persistence-val',   2,
+    v => earthTiles.setTerrainParams({ persistence: v }),
+    () => _drawColorMap(true));
+_bindSlider('trp-lacunarity',    'trp-lacunarity-val',    2,
+    v => earthTiles.setTerrainParams({ lacunarity: v }),
+    () => _drawColorMap(true));
+_bindSlider('trp-l2scale',       'trp-l2scale-val',       2,
+    v => earthTiles.setTerrainParams({ layer2Scale: v }),
+    () => _drawColorMap(true));
+_bindSlider('trp-continental',   'trp-continental-val',   2,
+    v => earthTiles.setTerrainParams({ continentalBias: v }),
+    () => _drawColorMap(true));
+
+// ── Color-map sliders (ordinal coupling) ─────────────────────────────────────
+// Thresholds must satisfy ocean ≤ shore ≤ lowland ≤ highland ≤ snowline.
+// Moving one slider clamps its neighbours to maintain the invariant.
+
+const _CM_ORDER = [
+    { id: 'trp-ocean',    valId: 'trp-ocean-val',    key: 'deepOceanLevel' as const },
+    { id: 'trp-shore',    valId: 'trp-shore-val',    key: 'shorelineLevel' as const },
+    { id: 'trp-lowland',  valId: 'trp-lowland-val',  key: 'lowlandLevel'   as const },
+    { id: 'trp-highland', valId: 'trp-highland-val', key: 'highlandLevel'  as const },
+    { id: 'trp-snow',     valId: 'trp-snow-val',     key: 'snowlineLevel'  as const },
+];
+
+function _setCmEntry(idx: number, v: number): void {
+    const e = _CM_ORDER[idx];
+    (document.getElementById(e.id) as HTMLInputElement).value = String(v);
+    document.getElementById(e.valId)!.textContent = v.toFixed(2);
+    earthTiles.setTerrainParams({ [e.key]: v });
+}
+
+(function _bindCmSliders() {
+    _CM_ORDER.forEach((entry, i) => {
+        let debounce: ReturnType<typeof setTimeout>;
+        (document.getElementById(entry.id) as HTMLInputElement)
+            .addEventListener('input', function () {
+                const v = parseFloat(this.value);
+                document.getElementById(entry.valId)!.textContent = v.toFixed(2);
+                earthTiles.setTerrainParams({ [entry.key]: v });
+
+                // Moving right: push higher sliders up so they stay ≥ v
+                for (let j = i + 1; j < _CM_ORDER.length; j++) {
+                    const s = document.getElementById(_CM_ORDER[j].id) as HTMLInputElement;
+                    if (parseFloat(s.value) < v) _setCmEntry(j, v); else break;
+                }
+                // Moving left: push lower sliders down so they stay ≤ v
+                for (let j = i - 1; j >= 0; j--) {
+                    const s = document.getElementById(_CM_ORDER[j].id) as HTMLInputElement;
+                    if (parseFloat(s.value) > v) _setCmEntry(j, v); else break;
+                }
+
+                _drawColorMap();
+                clearTimeout(debounce);
+                debounce = setTimeout(() => earthTiles.regenerateTiles(), 300);
+            });
+    });
+})();
+
+// ── Layer toggle + Polar Ice controls ────────────────────────────────────────
+
+function _setupLayerToggle(hdId: string, bdId: string, chId: string): void {
+    document.getElementById(hdId)!.addEventListener('click', (e) => {
+        const t = e.target as HTMLElement;
+        if (t.closest?.('button') || t.tagName === 'SELECT') return;
+        const bd = document.getElementById(bdId)!;
+        const ch = document.getElementById(chId)!;
+        bd.classList.toggle('collapsed');
+        ch.classList.toggle('open', !bd.classList.contains('collapsed'));
+    });
+}
+_setupLayerToggle('trp-base-hd',     'trp-base-bd',     'trp-base-chevron');
+_setupLayerToggle('trp-ice-hd',      'trp-ice-bd',      'trp-ice-chevron');
+_setupLayerToggle('trp-lighting-hd', 'trp-lighting-bd', 'trp-lighting-chevron');
+_setupLayerToggle('trp-atm-hd',      'trp-atm-bd',      'trp-atm-chevron');
+
+const _baseEnBtn = document.getElementById('trp-base-en')!;
+_baseEnBtn.addEventListener('click', () => {
+    const enabled = !_baseEnBtn.classList.contains('enabled');
+    _baseEnBtn.classList.toggle('enabled', enabled);
+    earthTiles.setTerrainParams({ baseEnabled: enabled ? 1 : 0 });
+    earthTiles.regenerateTiles();
+});
+
+const _iceEnBtn = document.getElementById('trp-ice-en')!;
+_iceEnBtn.addEventListener('click', () => {
+    const enabled = !_iceEnBtn.classList.contains('enabled');
+    _iceEnBtn.classList.toggle('enabled', enabled);
+    earthTiles.setTerrainParams({ iceEnabled: enabled ? 1 : 0 });
+    earthTiles.regenerateTiles();
+});
+
+(document.getElementById('trp-ice-blend') as HTMLSelectElement)
+    .addEventListener('change', function() {
+        earthTiles.setTerrainParams({ iceBlendMode: parseFloat(this.value) });
+        earthTiles.regenerateTiles();
+    });
+
+_bindSlider('trp-ice-scale',   'trp-ice-scale-val',   1,
+    v => earthTiles.setTerrainParams({ iceScale:   v }),
+    () => { _cachedIceCounts = null; _drawIceCmap(true); });
+_bindSlider('trp-ice-azimuth', 'trp-ice-azimuth-val', 2,
+    v => earthTiles.setTerrainParams({ iceAzimuth: v }),
+    () => { _cachedIceCounts = null; _drawIceCmap(true); });
+_bindSlider('trp-ice-opacity', 'trp-ice-opacity-val', 2,
+    v => earthTiles.setTerrainParams({ iceOpacity: v }),
+    () => { _cachedIceCounts = null; _drawIceCmap(true); });
+
+// ── Lighting + Atmosphere live sliders (no tile regen needed) ─────────────────
+
+function _bindLiveSlider(id: string, valId: string, decimals: number, apply: (v: number) => void): void {
+    const slider = document.getElementById(id) as HTMLInputElement;
+    const label  = document.getElementById(valId)!;
+    slider.addEventListener('input', () => {
+        const v = parseFloat(slider.value);
+        label.textContent = v.toFixed(decimals);
+        apply(v);
+    });
+}
+
+let _sunEl = 5;
+let _sunAz = 0;
+function _applySunAngles(): void {
+    const dir = lighting.setSunAngles(_sunEl, _sunAz);
+    atmosphere.setSunDir(dir);
+    daylightOverlay.setSunDir(dir);
+}
+
+_bindLiveSlider('trp-sun-el',  'trp-sun-el-val',  0, v => { _sunEl = v; _applySunAngles(); });
+_bindLiveSlider('trp-sun-az',  'trp-sun-az-val',  0, v => { _sunAz = v; _applySunAngles(); });
+_bindLiveSlider('trp-sun-int', 'trp-sun-int-val', 2, v => daylightOverlay.setSunIntensity(v));
+_bindLiveSlider('trp-ambient', 'trp-ambient-val', 3, v => daylightOverlay.setAmbient(v));
+
+_bindLiveSlider('trp-rim-front',   'trp-rim-front-val',   1, v => {});
+_bindLiveSlider('trp-rim-back',    'trp-rim-back-val',    1, _v => {});  // removed
+_bindLiveSlider('trp-glow-front',  'trp-glow-front-val',  2, v => atmosphere.setIntensity(v));
+_bindLiveSlider('trp-glow-back',   'trp-glow-back-val',   2, _v => {});  // removed
+_bindLiveSlider('trp-sun-mod',     'trp-sun-mod-val',     2, _v => {});  // removed
+_bindLiveSlider('trp-night-floor', 'trp-night-floor-val', 2, _v => {});  // removed
+
+(document.getElementById('trp-atm-shadow-color') as HTMLInputElement)
+    .addEventListener('input', function() { atmosphere.setSkyColor(this.value); });
+(document.getElementById('trp-atm-sun-color') as HTMLInputElement)
+    .addEventListener('input', function() { atmosphere.setSunColor(this.value); });
+
+
+function _syncSliders(): void {
+    const p = earthTiles.terrainParams;
+    const set = (sliderId: string, valId: string, v: number, dec: number) => {
+        (document.getElementById(sliderId) as HTMLInputElement).value = String(v);
+        document.getElementById(valId)!.textContent = v.toFixed(dec);
+    };
+    set('trp-feature-scale', 'trp-feature-scale-val', p.featureScale,   1);
+    set('trp-persistence',   'trp-persistence-val',   p.persistence,    2);
+    set('trp-lacunarity',    'trp-lacunarity-val',    p.lacunarity,    2);
+    set('trp-l2scale',       'trp-l2scale-val',       p.layer2Scale,     2);
+    set('trp-continental',   'trp-continental-val',   p.continentalBias, 2);
+    set('trp-ocean',         'trp-ocean-val',         p.deepOceanLevel, 2);
+    set('trp-shore',         'trp-shore-val',         p.shorelineLevel,  2);
+    set('trp-lowland',       'trp-lowland-val',       p.lowlandLevel,    2);
+    set('trp-highland',      'trp-highland-val',      p.highlandLevel,  2);
+    set('trp-snow',          'trp-snow-val',          p.snowlineLevel,  2);
+    set('trp-ice-scale',   'trp-ice-scale-val',   p.iceScale,   1);
+    set('trp-ice-azimuth', 'trp-ice-azimuth-val', p.iceAzimuth, 2);
+    set('trp-ice-opacity', 'trp-ice-opacity-val', p.iceOpacity, 2);
+    _baseEnBtn.classList.toggle('enabled', p.baseEnabled > 0.5);
+    _iceEnBtn.classList.toggle('enabled', p.iceEnabled > 0.5);
+    (document.getElementById('trp-ice-blend') as HTMLSelectElement).value = String(p.iceBlendMode);
+    // Ice colormap stops
+    (document.getElementById('trp-ice-clear-level') as HTMLInputElement).value = String(p.iceClearLevel);
+    document.getElementById('trp-ice-clear-level-val')!.textContent = p.iceClearLevel.toFixed(2);
+    (document.getElementById('trp-ice-ice-level') as HTMLInputElement).value = String(p.iceIceLevel);
+    document.getElementById('trp-ice-ice-level-val')!.textContent = p.iceIceLevel.toFixed(2);
+    (document.getElementById('trp-ice-clear-color') as HTMLInputElement).value = p.iceClearColor;
+    (document.getElementById('trp-ice-clear-alpha') as HTMLInputElement).value = String(p.iceClearAlpha);
+    document.getElementById('trp-ice-clear-alpha-val')!.textContent = p.iceClearAlpha.toFixed(2);
+    (document.getElementById('trp-ice-ice-color') as HTMLInputElement).value = p.iceIceColor;
+    (document.getElementById('trp-ice-ice-alpha') as HTMLInputElement).value = String(p.iceIceAlpha);
+    document.getElementById('trp-ice-ice-alpha-val')!.textContent = p.iceIceAlpha.toFixed(2);
+    _updateIceSwatch('trp-ice-clear-swatch', p.iceClearColor, p.iceClearAlpha);
+    _updateIceSwatch('trp-ice-ice-swatch',   p.iceIceColor,   p.iceIceAlpha);
+    _drawColorMap(true);
+    _drawIceCmap();
+}
+
+// Load saved terrain params from previous session
+const _savedTerrain = localStorage.getItem('terrainParams');
+if (_savedTerrain) {
+    try {
+        earthTiles.setTerrainParams(JSON.parse(_savedTerrain));
+        _syncSliders();
+    } catch (_) {}
+}
+
+// Save to localStorage + copy JSON to clipboard
+const _trpSaveBtn = document.getElementById('trp-save-btn') as HTMLButtonElement;
+_trpSaveBtn.addEventListener('click', () => {
+    const json = JSON.stringify(earthTiles.terrainParams, null, 2);
+    localStorage.setItem('terrainParams', json);
+    navigator.clipboard?.writeText(json).catch(() => {});
+    _trpSaveBtn.textContent = 'Saved ✓';
+    setTimeout(() => { _trpSaveBtn.textContent = 'Save & Copy to Clipboard'; }, 1500);
+});
 
 // ── Settings modal ────────────────────────────────────────────────────────────
 
@@ -317,9 +839,18 @@ function animate(): void {
     camera.lookAt(zoom.currentLook);
 
     const camPos = camera.position.clone();
+    atmosphere.update(camPos, renderer);
+    daylightOverlay.update(camPos);
     scene.position.set(-camPos.x, -camPos.y, -camPos.z);
     camera.position.set(0, 0, 0);
     renderer.render(scene, camera);
+    // Render overlay (fullscreen-quad effects) without clearing
+    renderer.autoClearDepth = false;
+    renderer.autoClearColor = false;
+    renderer.render(overlayScene, camera);
+    renderer.autoClearDepth = true;
+    renderer.autoClearColor = true;
+
 
     camera.position.copy(camPos);
     scene.position.set(0, 0, 0);
@@ -387,4 +918,5 @@ function animate(): void {
 
     if (++frameCount === 1) log.info('First frame rendered');
 }
+
 animate();
