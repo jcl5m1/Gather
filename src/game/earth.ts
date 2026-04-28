@@ -266,10 +266,10 @@ export class AtmosphereGlow {
                 uCamDist:     { value: R * 2 },
                 uPlanetR:     { value: R },
                 uSunDir:      { value: new Vector3(0.9962, 0.0872, 0) },
-                uGlowFront:   { value: 0.7 },
+                uGlowFront:   { value: 1.0 },
                 uGlowBack:    { value: 0.4 },
-                uRimFront:    { value: 11.1 },  // 1/0.09 — half of old 0.18
-                uRimBack:     { value: 11.1 },
+                uRimFront:    { value: 20.0 },
+                uRimBack:     { value: 20.0 },
                 uFade:        { value: 1.0 },
                 uSkyColor:    { value: new Color(0.07, 0.20, 0.72) },
                 uSunColor:    { value: new Color(0.52, 0.76, 1.00) },
