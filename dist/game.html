@@ -77,6 +77,27 @@
             transition: opacity 0.5s;
         }
 
+
+        /* ── Time controls ───────────────────────────────────────────────── */
+        #time-controls {
+            position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+            display: flex; align-items: center; gap: 6px; z-index: 10;
+            background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px; padding: 5px 10px;
+            font-family: -apple-system, sans-serif;
+            backdrop-filter: blur(6px);
+        }
+        .time-btn {
+            width: 36px; height: 36px; border-radius: 10px;
+            background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+            color: #fff; font-size: 16px; display: flex; align-items: center; justify-content: center;
+            cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
+        }
+        .time-btn:active { background: rgba(255,255,255,0.2); }
+        #time-scale-label {
+            min-width: 46px; text-align: center;
+            font-size: 12px; font-weight: 600; color: #ccd; letter-spacing: 0.5px;
+        }
         .ctrl-divider {
             width: 24px; height: 1px; background: rgba(255,255,255,0.1); margin: 2px 0;
         }
@@ -436,6 +457,14 @@
     <button class="zoom-btn" id="btn-terrain"  style="font-size:18px;">⛰</button>
 </div>
 
+
+<!-- Time scale controls -->
+<div id="time-controls">
+    <button class="time-btn" id="btn-time-down" title="Slow down (÷10)">&#9664;&#9664;</button>
+    <span id="time-scale-label">1×</span>
+    <button class="time-btn" id="btn-time-up"   title="Speed up (×10)">&#9654;&#9654;</button>
+</div>
+
 <!-- Terrain shader parameter panel -->
 <div id="terrain-panel" class="bm-hidden">
     <div class="trp-title">Terrain</div>
@@ -594,25 +623,25 @@
             <span class="trp-layer-name">Atmosphere</span>
         </div>
         <div class="trp-layer-bd collapsed" id="trp-atm-bd">
-            <div class="trp-section-label">Glow Shape</div>
+            <div class="trp-section-label">Outer Glow</div>
             <div class="trp-row">
-                <div class="trp-label"><span>Rim Front</span><span class="trp-val" id="trp-rim-front-val">20.0</span></div>
-                <input class="trp-slider" type="range" id="trp-rim-front" min="1" max="30" step="0.1" value="20.0">
+                <div class="trp-label"><span>Day Width</span><span class="trp-val" id="trp-day-width-val">20.0</span></div>
+                <input class="trp-slider" type="range" id="trp-day-width" min="1" max="30" step="0.1" value="20.0">
             </div>
             <div class="trp-row">
-                <div class="trp-label"><span>Rim Back</span><span class="trp-val" id="trp-rim-back-val">20.0</span></div>
-                <input class="trp-slider" type="range" id="trp-rim-back" min="1" max="30" step="0.1" value="20.0">
+                <div class="trp-label"><span>Night Width</span><span class="trp-val" id="trp-night-width-val">20.0</span></div>
+                <input class="trp-slider" type="range" id="trp-night-width" min="1" max="30" step="0.1" value="20.0">
             </div>
             <div class="trp-row">
-                <div class="trp-label"><span>Glow Front</span><span class="trp-val" id="trp-glow-front-val">1.00</span></div>
-                <input class="trp-slider" type="range" id="trp-glow-front" min="0" max="2" step="0.05" value="1.00">
+                <div class="trp-label"><span>Day Opacity</span><span class="trp-val" id="trp-day-opacity-val">1.00</span></div>
+                <input class="trp-slider" type="range" id="trp-day-opacity" min="0" max="2" step="0.05" value="1.00">
             </div>
             <div class="trp-row">
-                <div class="trp-label"><span>Glow Back</span><span class="trp-val" id="trp-glow-back-val">0.40</span></div>
-                <input class="trp-slider" type="range" id="trp-glow-back" min="0" max="2" step="0.05" value="0.40">
+                <div class="trp-label"><span>Night Opacity</span><span class="trp-val" id="trp-night-opacity-val">0.40</span></div>
+                <input class="trp-slider" type="range" id="trp-night-opacity" min="0" max="2" step="0.05" value="0.40">
             </div>
             <div class="trp-divider"></div>
-            <div class="trp-section-label">Inner Limb Glow</div>
+            <div class="trp-section-label">Inner Glow</div>
             <div class="trp-row">
                 <div class="trp-label"><span>Opacity</span><span class="trp-val" id="trp-inner-opacity-val">0.40</span></div>
                 <input class="trp-slider" type="range" id="trp-inner-opacity" min="0" max="2" step="0.01" value="0.40">
