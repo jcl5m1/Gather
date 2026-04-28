@@ -3,7 +3,7 @@ import { log, installGlobalErrorHandlers } from './logger';
 import { RESOURCES } from './resource';
 import { saveGame, loadGame, clearSave } from './saveState';
 import { createRenderer, createCamera } from './scene';
-import { addLighting, addStars, addEarth, addAtmosphere, addDaylightOverlay } from './earth';
+import { addLighting, addStars, addEarth, addAtmosphere, addDaylightOverlay, addOceanSpecular, OceanSpecular } from './earth';
 import type { EarthLOD } from './earthLOD';
 import { buildWorld } from './world';
 import { KSC_NORMAL } from './world';
@@ -52,6 +52,7 @@ const earthTiles: EarthLOD = addEarth(scene, renderer, () => {
     hideLoadingScreen();
 });
 const atmosphere     = addAtmosphere(overlayScene);
+const oceanSpecular  = addOceanSpecular(overlayScene);
 const daylightOverlay = addDaylightOverlay(scene, lighting.sunDir);
 log.info('Earth added to scene');
 
@@ -507,6 +508,9 @@ function _setCmEntry(idx: number, v: number): void {
     (document.getElementById(e.id) as HTMLInputElement).value = String(v);
     document.getElementById(e.valId)!.textContent = v.toFixed(2);
     earthTiles.setTerrainParams({ [e.key]: v });
+    // Keep ocean specular shader in sync with terrain thresholds
+    if (e.key === 'deepOceanLevel')  oceanSpecular.setDeepOceanLevel(v);
+    if (e.key === 'shorelineLevel')  oceanSpecular.setShorelineLevel(v);
 }
 
 (function _bindCmSliders() {
@@ -602,6 +606,7 @@ let _sunAz = 0;
 function _applySunAngles(): void {
     const dir = lighting.setSunAngles(_sunEl, _sunAz);
     atmosphere.setSunDir(dir);
+    oceanSpecular.setSunDir(dir);
     daylightOverlay.setSunDir(dir);
 }
 
@@ -842,6 +847,7 @@ function animate(): void {
 
     const camPos = camera.position.clone();
     atmosphere.update(camPos, renderer);
+    oceanSpecular.update(camPos, renderer, camera.fov * Math.PI / 180);
     daylightOverlay.update(camPos);
     scene.position.set(-camPos.x, -camPos.y, -camPos.z);
     camera.position.set(0, 0, 0);

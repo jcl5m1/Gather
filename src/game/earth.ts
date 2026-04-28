@@ -314,3 +314,166 @@ export function addAtmosphere(overlayScene: Scene): AtmosphereGlow {
     return new AtmosphereGlow(overlayScene);
 }
 
+
+// ── Ocean Specular reflection (fullscreen-quad, overlayScene) ─────────────────
+// Reconstructs the ray for each pixel, intersects the planet sphere, evaluates
+// the same procedural height field to find ocean pixels (height < shorelineLevel),
+// then computes a Blinn-Phong specular highlight using the true view direction.
+// Drawn additively on top of the terrain tiles.
+
+const OCEAN_SPEC_VERT = /* glsl */`
+void main() {
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+}`;
+
+const OCEAN_SPEC_FRAG = /* glsl */`
+precision highp float;
+
+uniform vec2  uResolution;
+uniform float uFov;
+uniform vec3  uCamDir;
+uniform float uCamDist;
+uniform vec3  uSunDir;
+uniform float uPlanetR;
+uniform float uShorelineLevel;
+uniform float uDeepOceanLevel;
+uniform float uSpecPower;       // shininess exponent (default 80)
+uniform float uSpecIntensity;   // overall brightness (default 0.6)
+uniform vec3  uSpecColor;       // highlight colour (default near-white)
+
+// ── Noise / height field (mirrors terrainGen.ts) ──────────────────────────────
+const int   OCTAVE_COUNT = 8;   // fewer octaves for perf (ocean is smooth)
+const float FEATURE_SCALE    = 1.4;
+const float LACUNARITY       = 2.9;
+const float PERSISTENCE      = 0.54;
+const float HEIGHT_CURVE     = 1.0;
+const float LAYER2_SCALE     = 1.8;
+const float CONTINENTAL_BIAS = 0.35;
+const mat3 OCT_ROT = mat3(
+     0.00,  0.80,  0.60,
+    -0.80,  0.36, -0.48,
+    -0.60, -0.48,  0.64);
+
+vec3 ghash(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.xxy + p.yxx) * p.zyx) * 2.0 - 1.0;
+}
+float gnoise(vec3 p) {
+    vec3 i = floor(p); vec3 f = fract(p);
+    vec3 u = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(mix(dot(ghash(i),             f),             dot(ghash(i+vec3(1,0,0)), f-vec3(1,0,0)), u.x),
+            mix(dot(ghash(i+vec3(0,1,0)), f-vec3(0,1,0)),dot(ghash(i+vec3(1,1,0)), f-vec3(1,1,0)), u.x), u.y),
+        mix(mix(dot(ghash(i+vec3(0,0,1)), f-vec3(0,0,1)),dot(ghash(i+vec3(1,0,1)), f-vec3(1,0,1)), u.x),
+            mix(dot(ghash(i+vec3(0,1,1)), f-vec3(0,1,1)),dot(ghash(i+vec3(1,1,1)), f-vec3(1,1,1)), u.x), u.y),
+        u.z);
+}
+float fbm(vec3 p) {
+    float h = 0.0, a = 0.5;
+    for (int i = 0; i < OCTAVE_COUNT; i++) {
+        h += a * gnoise(p);
+        p  = OCT_ROT * p * LACUNARITY;
+        a *= PERSISTENCE;
+    }
+    return h * 0.5 + 0.5;
+}
+float oceanHeight(vec3 p) {
+    float l1 = fbm(p * FEATURE_SCALE);
+    float l2 = fbm(p * FEATURE_SCALE * LAYER2_SCALE + vec3(17.31, 43.27, 31.83));
+    float cont = gnoise(p * 0.8) * CONTINENTAL_BIAS;
+    return pow(clamp(l1 * l2 * 2.0 + cont, 0.0, 1.0), HEIGHT_CURVE);
+}
+
+void main() {
+    // ── Reconstruct camera ray ────────────────────────────────────────────
+    vec2 ndc    = (gl_FragCoord.xy / uResolution) * 2.0 - 1.0;
+    float aspect = uResolution.x / uResolution.y;
+    float tanHFov = tan(uFov * 0.5);
+    vec3 forward = -uCamDir;
+    vec3 worldUp = abs(forward.y) < 0.999 ? vec3(0,1,0) : vec3(1,0,0);
+    vec3 right   = normalize(cross(forward, worldUp));
+    vec3 up      = cross(right, forward);
+    vec3 rd      = normalize(forward + right*(ndc.x*aspect*tanHFov) + up*(ndc.y*tanHFov));
+
+    // ── Ray–sphere intersection ───────────────────────────────────────────
+    vec3  C   = uCamDir * uCamDist;          // camera world pos (planet at origin)
+    float b   = dot(C, rd);
+    float det = b*b - dot(C,C) + uPlanetR*uPlanetR;
+    if (det < 0.0) { gl_FragColor = vec4(0.0); return; }
+
+    float sqrtDet = sqrt(det);
+    float t0 = -b - sqrtDet;
+    float t1 = -b + sqrtDet;
+    float t  = (t0 > 0.0) ? t0 : t1;
+    if (t < 0.0) { gl_FragColor = vec4(0.0); return; }
+
+    // ── Surface point & ocean mask ────────────────────────────────────────
+    vec3 hitPos  = normalize(C + t * rd);   // unit-sphere surface point
+    float h      = oceanHeight(hitPos);
+    float oceanMask = 1.0 - smoothstep(uDeepOceanLevel, uShorelineLevel, h);
+    if (oceanMask < 0.001) { gl_FragColor = vec4(0.0); return; }
+
+    // ── Blinn-Phong specular ──────────────────────────────────────────────
+    vec3  N      = hitPos;                          // ocean normal = sphere normal
+    vec3  V      = normalize(-rd);                  // view direction (toward camera)
+    vec3  H      = normalize(uSunDir + V);          // half-vector
+    float NdotH  = max(0.0, dot(N, H));
+    float NdotL  = max(0.0, dot(N, uSunDir));
+    float spec   = pow(NdotH, uSpecPower) * NdotL;  // NdotL kills spec on night side
+
+    float alpha  = spec * uSpecIntensity * oceanMask;
+    gl_FragColor = vec4(uSpecColor * alpha, alpha);
+}`;
+
+export class OceanSpecular {
+    private _mat:  ShaderMaterial;
+    private _mesh: Mesh;
+
+    constructor(overlayScene: Scene) {
+        this._mat = new ShaderMaterial({
+            vertexShader:   OCEAN_SPEC_VERT,
+            fragmentShader: OCEAN_SPEC_FRAG,
+            uniforms: {
+                uResolution:    { value: [window.innerWidth, window.innerHeight] },
+                uFov:           { value: 45 * Math.PI / 180 },
+                uCamDir:        { value: new Vector3(0, 1, 0) },
+                uCamDist:       { value: R * 2 },
+                uSunDir:        { value: new Vector3(0.9962, 0.0872, 0) },
+                uPlanetR:       { value: R },
+                uShorelineLevel:{ value: 0.50 },
+                uDeepOceanLevel:{ value: 0.50 },
+                uSpecPower:     { value: 80.0 },
+                uSpecIntensity: { value: 0.6 },
+                uSpecColor:     { value: new Color(0.85, 0.95, 1.0) },
+            },
+            transparent: true,
+            blending:    AdditiveBlending,
+            depthWrite:  false,
+            depthTest:   false,
+        });
+        const geo = new PlaneGeometry(2, 2);
+        this._mesh = new Mesh(geo, this._mat);
+        this._mesh.frustumCulled = false;
+        this._mesh.renderOrder = 18;   // above terrain (1-9), below atmosphere (20)
+        overlayScene.add(this._mesh);
+    }
+
+    update(camPos: Vector3, renderer: WebGLRenderer, fovRad: number): void {
+        (this._mat.uniforms.uCamDir.value as Vector3).copy(camPos).normalize();
+        this._mat.uniforms.uCamDist.value = camPos.length();
+        this._mat.uniforms.uFov.value     = fovRad;
+        const dpr = renderer.getPixelRatio();
+        this._mat.uniforms.uResolution.value = [window.innerWidth * dpr, window.innerHeight * dpr];
+    }
+
+    setSunDir(dir: Vector3):        void { (this._mat.uniforms.uSunDir.value as Vector3).copy(dir); }
+    setShorelineLevel(v: number):   void { this._mat.uniforms.uShorelineLevel.value = v; }
+    setDeepOceanLevel(v: number):   void { this._mat.uniforms.uDeepOceanLevel.value = v; }
+    setSpecPower(v: number):        void { this._mat.uniforms.uSpecPower.value      = v; }
+    setSpecIntensity(v: number):    void { this._mat.uniforms.uSpecIntensity.value  = v; }
+}
+
+export function addOceanSpecular(overlayScene: Scene): OceanSpecular {
+    return new OceanSpecular(overlayScene);
+}
