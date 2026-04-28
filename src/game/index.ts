@@ -607,6 +607,10 @@ function _bindLiveSlider(id: string, valId: string, decimals: number, apply: (v:
         label.textContent = v.toFixed(decimals);
         apply(v);
     });
+    // Apply the HTML default value immediately so GPU uniforms match on load
+    const initVal = parseFloat(slider.value);
+    label.textContent = initVal.toFixed(decimals);
+    apply(initVal);
 }
 
 let _sunEl = 5;
