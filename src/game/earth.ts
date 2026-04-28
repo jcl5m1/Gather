@@ -150,8 +150,10 @@ uniform vec3  uCamDir;       // unit vector from planet to camera
 uniform float uCamDist;      // camera distance from planet centre (metres)
 uniform vec3  uSunDir;       // unit vector toward sun (planet-centred)
 uniform float uPlanetR;      // planet radius (metres)
-uniform float uGlowFront;   // outer glow intensity on sun-facing limb
-uniform float uGlowBack;    // outer glow intensity on anti-sun limb
+uniform float uGlowFront;    // outer glow intensity on sun-facing limb
+uniform float uGlowBack;     // outer glow intensity on anti-sun limb
+uniform float uRimFront;     // outer glow width on sun-facing limb (higher = tighter)
+uniform float uRimBack;      // outer glow width on anti-sun limb (higher = tighter)
 uniform float uFade;         // 0 at surface, 1 above ~1 Mm
 uniform vec3  uSkyColor;
 uniform vec3  uSunColor;
@@ -194,8 +196,13 @@ void main() {
     float t = sinRay / max(sinSil, 0.0001);
 
     // ── Outer glow: Gaussian bell peaked at t=1 (outside the disc, t>1) ──
-    float atmWidth = 0.18;
-    float outerGlow = exp(-pow((t - 1.0) / atmWidth, 2.0));
+    // Rim uniforms are sharpness (higher = narrower). Convert to width: width = 1/uRim.
+    float rimWidthFront = 1.0 / max(uRimFront, 0.1);
+    float rimWidthBack  = 1.0 / max(uRimBack,  0.1);
+    // We'll compute per-pixel rim width after we know sun side (below).
+    // Pre-compute both and blend:
+    float outerGlowFront = exp(-pow((t - 1.0) / rimWidthFront, 2.0));
+    float outerGlowBack  = exp(-pow((t - 1.0) / rimWidthBack,  2.0));
 
     // ── Inner limb: thin atmospheric tint inside the silhouette edge ──────
     // Decays from the silhouette inward, only on the planet-facing side.
@@ -233,9 +240,10 @@ void main() {
         // Split intensity by sun direction at the silhouette point:
         //   qNorm is the normalised silhouette point direction.
         //   NdotS > 0 = sun-facing limb (front), < 0 = back-lit limb (back).
-        float NdotS_outer  = dot(normalize(qClose), uSunDir);
-        float frontWeight  = smoothstep(-0.3, 0.3, NdotS_outer);   // 0=back, 1=front
+        float NdotS_outer   = dot(normalize(qClose), uSunDir);
+        float frontWeight   = smoothstep(-0.3, 0.3, NdotS_outer);   // 0=back, 1=front
         float glowIntensity = mix(uGlowBack, uGlowFront, frontWeight);
+        float outerGlow     = mix(outerGlowBack, outerGlowFront, frontWeight);
         float atm = outerGlow * glowIntensity * uFade;
         gl_FragColor = vec4(color * atm, atm);
     }
@@ -258,8 +266,10 @@ export class AtmosphereGlow {
                 uCamDist:     { value: R * 2 },
                 uPlanetR:     { value: R },
                 uSunDir:      { value: new Vector3(0.9962, 0.0872, 0) },
-                uGlowFront:   { value: 1.2 },
-                uGlowBack:    { value: 0.45 },
+                uGlowFront:   { value: 0.7 },
+                uGlowBack:    { value: 0.4 },
+                uRimFront:    { value: 11.1 },  // 1/0.09 — half of old 0.18
+                uRimBack:     { value: 11.1 },
                 uFade:        { value: 1.0 },
                 uSkyColor:    { value: new Color(0.07, 0.20, 0.72) },
                 uSunColor:    { value: new Color(0.52, 0.76, 1.00) },
@@ -292,6 +302,8 @@ export class AtmosphereGlow {
     setSunDir(dir: Vector3):      void { (this._mat.uniforms.uSunDir.value as Vector3).copy(dir); }
     setGlowFront(v: number):      void { this._mat.uniforms.uGlowFront.value  = v; }
     setGlowBack(v: number):       void { this._mat.uniforms.uGlowBack.value   = v; }
+    setRimFront(v: number):       void { this._mat.uniforms.uRimFront.value   = v; }
+    setRimBack(v: number):        void { this._mat.uniforms.uRimBack.value    = v; }
     setSkyColor(hex: string):     void { (this._mat.uniforms.uSkyColor.value as Color).set(hex); }
     setSunColor(hex: string):     void { (this._mat.uniforms.uSunColor.value as Color).set(hex); }
     setInnerOpacity(v: number):   void { this._mat.uniforms.uInnerOpacity.value = v; }
