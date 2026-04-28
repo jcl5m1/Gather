@@ -246,3 +246,58 @@ other game logic are unaffected.
 │ setGlowBack()       │ setNightOpacity()                                      │
 └─────────────────────┴────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Orbital Debris — Elliptical Keplerian Orbits
+
+Upgraded from circular to full **6-element Keplerian elliptical orbits**, solved
+analytically on the GPU each frame via Newton-Raphson iteration on Kepler's equation.
+
+### Orbital mechanics
+
+```
+┌──────────────────────┬──────────────────────────────────────────────────────────┐
+│ Step                 │ Formula                                                  │
+├──────────────────────┼──────────────────────────────────────────────────────────┤
+│ Mean motion          │ n = sqrt(GM / a³)                                        │
+│ Mean anomaly         │ M = M0 + n·t   (linear in time)                          │
+│ Eccentric anomaly    │ M = E − e·sin(E)  → solved by Newton-Raphson (6 iters)   │
+│ True anomaly         │ ν = 2·atan(sqrt((1+e)/(1−e)) · tan(E/2))                │
+│ Orbital radius       │ r = a·(1 − e·cos(E))                                    │
+│ 3-D position         │ r·(perigeeDir·cos(ν) + semilatDir·sin(ν))               │
+└──────────────────────┴──────────────────────────────────────────────────────────┘
+```
+
+### Orbital element ranges
+
+```
+┌────────────────────┬────────────────────────────┬──────────────────────────────┐
+│ Element            │ Range                      │ Notes                        │
+├────────────────────┼────────────────────────────┼──────────────────────────────┤
+│ Eccentricity (e)   │ 0.70 – 0.99               │ Highly elliptical only       │
+│ Perigee altitude   │ 200 km – 1,000 km          │ Perigee above surface        │
+│ Semi-major axis    │ rPeri / (1 − e)            │ Derived from perigee + e     │
+│ Inclination        │ Uniform spherical dist.    │ acos(1 − 2·rand)             │
+│ RAAN               │ 0 – 2π  (uniform)          │                              │
+│ Arg of perigee     │ 0 – 2π  (uniform)          │                              │
+│ Mean anomaly M0    │ 0 – 2π  (uniform)          │ Initial phase                │
+└────────────────────┴────────────────────────────┴──────────────────────────────┘
+```
+
+### GPU attribute layout
+
+```
+┌──────────────┬─────────────────────────────────────────┬────────────┐
+│ Attribute    │ Components                              │ itemSize   │
+├──────────────┼─────────────────────────────────────────┼────────────┤
+│ aOrbit1      │ (a, e, inclination, RAAN)               │ 4          │
+│ aOrbit2      │ (argPeri, M0, unused, unused)           │ 4          │
+│ aVertRole    │ 0 = head vertex, 1 = tail vertex        │ 1          │
+└──────────────┴─────────────────────────────────────────┴────────────┘
+```
+
+The streak tail is offset by `uStreakDM = 0.018 rad` in mean anomaly — so the
+streak appears **longer near perigee** (faster motion) and **shorter near apogee**
+(slower motion), matching real apparent angular velocity.
+

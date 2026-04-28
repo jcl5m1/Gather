@@ -1,16 +1,21 @@
 /**
- * OrbitalDebris — 10,000 GPU-simulated particles in random low-Earth orbits.
+ * OrbitalDebris — 10,000 GPU-simulated particles in random elliptical orbits.
  *
- * Each particle is rendered as a short streak: a line segment with two vertices
- * — the head (current position) and the tail (a fixed arc behind it).  The
- * fragment shader fades alpha from 1.0 at the head to 0.0 at the tail.
+ * Full Keplerian two-body solution evaluated analytically per vertex:
+ *   1. Mean anomaly  M = M0 + n·t           (linear in time)
+ *   2. Eccentric anomaly E solved via 6-iteration Newton-Raphson on GPU
+ *   3. True anomaly  ν from E and e
+ *   4. Radius        r = a(1 − e·cos E)
+ *   5. 3-D position via Rodrigues rotation into the tilted orbital plane
  *
- * All orbital mechanics run entirely on the GPU:
- *   • aOrbit.xyz = (inclination, RAAN, M0)
- *   • aOrbit.w   = altFrac ∈ [-1, +1]  → radius = R + BASE_ALT + altFrac * ALT_SPREAD
- *   • Per-particle omega is derived from vis-viva in the vertex shader so
- *     every particle orbits at the correct speed for its altitude.
- *   • No CPU work per-frame beyond uploading uTime.
+ * Orbital elements per particle (packed into two attributes):
+ *   aOrbit1 = (semi-major axis a, eccentricity e, inclination i, RAAN Ω)
+ *   aOrbit2 = (arg-of-perigee ω, mean anomaly M0, _, _)   [zw unused]
+ *
+ * Eccentricity range: 0.7 – 0.99  (highly elliptical debris)
+ * Semi-major axis chosen so perigee stays above ~200 km.
+ *
+ * No CPU work per frame beyond uploading uTime.
  */
 
 import {
@@ -23,63 +28,100 @@ import {
 } from 'three';
 import { R } from './constants';
 
-// ── Altitude range ─────────────────────────────────────────────────────────
-//   Bottom : R + BASE_ALT - ALT_SPREAD  ≈  R + 100 km
-//   Top    : R + BASE_ALT + ALT_SPREAD  ≈  R + 4100 km
-const BASE_ALT   = 2_100_000;   // centre of range (m)
-const ALT_SPREAD = 2_000_000;   // ± spread (m)  → total band = 4 Mm
-
 // ── Physics ────────────────────────────────────────────────────────────────
-const GM         = 3.986004418e14;  // Earth gravitational parameter (m³/s²)
+const GM = 3.986004418e14;   // Earth gravitational parameter (m³/s²)
 
-// Streak arc length (radians) — same for all particles
-const STREAK_ARC = 0.012;   // ~0.69°
+// ── Eccentricity range ─────────────────────────────────────────────────────
+const ECC_MIN = 0.70;
+const ECC_MAX = 0.99;
 
-// ── Particle count ─────────────────────────────────────────────────────────
+// ── Perigee altitude range (m) ─────────────────────────────────────────────
+//   Perigee randomly placed between 200 km and 1000 km above surface.
+//   Semi-major axis derived from: a = r_perigee / (1 - e)
+const PERIGEE_MIN = R + 200_000;    // 200 km above surface
+const PERIGEE_MAX = R + 1_000_000;  // 1 Mm above surface
+
+// ── Streak ─────────────────────────────────────────────────────────────────
+//   Streak is expressed as a fixed Δ in mean anomaly (radians).
+//   At perigee the particle moves faster → streak appears longer there.
+const STREAK_DM = 0.018;   // mean-anomaly offset for tail vertex
+
+// ── Count ──────────────────────────────────────────────────────────────────
 const COUNT = 10_000;
 
 // ── Vertex shader ──────────────────────────────────────────────────────────
 const DEBRIS_VERT = /* glsl */`
-attribute vec4  aOrbit;      // (inclination, RAAN, M0, altFrac)
-attribute float aVertRole;   // 0 = head, 1 = tail
+// Element set 1: (a, e, incl, raan)
+attribute vec4 aOrbit1;
+// Element set 2: (argPeri, M0, unused, unused)
+attribute vec4 aOrbit2;
+// 0 = head vertex, 1 = tail vertex
+attribute float aVertRole;
 
-uniform float uTime;         // elapsed seconds (float)
-uniform float uEarthR;       // Earth radius (m) in scene units
-uniform float uBaseAlt;      // centre altitude above surface (m)
-uniform float uAltSpread;    // ± altitude spread (m)
-uniform float uGM;           // gravitational parameter (m³/s²)
-uniform float uStreakArc;    // tail angular offset (rad)
+uniform float uTime;       // simulation time (s)
+uniform float uGM;         // gravitational parameter (m³/s²)
+uniform float uStreakDM;   // mean-anomaly offset for tail (rad)
 
 varying float vRole;
 
-// Rodrigues rotation
+// ── Kepler solver (Newton-Raphson, 6 iterations) ──────────────────────────
+float solveKepler(float M, float e) {
+    // Reduce M to [0, 2π)
+    M = mod(M, 6.28318530718);
+    float E = M;    // initial guess
+    for (int i = 0; i < 6; i++) {
+        float dE = (E - e * sin(E) - M) / (1.0 - e * cos(E));
+        E -= dE;
+    }
+    return E;
+}
+
+// ── Rodrigues rotation ────────────────────────────────────────────────────
 vec3 rotateAxis(vec3 v, vec3 k, float theta) {
     float c = cos(theta), s = sin(theta);
     return v * c + cross(k, v) * s + k * dot(k, v) * (1.0 - c);
 }
 
 void main() {
-    float incl    = aOrbit.x;
-    float raan    = aOrbit.y;
-    float M0      = aOrbit.z;
-    float altFrac = aOrbit.w;   // ∈ [-1, +1]
+    float a        = aOrbit1.x;   // semi-major axis (m, scene units)
+    float e        = aOrbit1.y;   // eccentricity
+    float incl     = aOrbit1.z;   // inclination (rad)
+    float raan     = aOrbit1.w;   // right ascension of ascending node (rad)
+    float argPeri  = aOrbit2.x;   // argument of perigee (rad)
+    float M0       = aOrbit2.y;   // initial mean anomaly (rad)
 
-    // Per-particle orbital radius and angular velocity
-    float r     = uEarthR + uBaseAlt + altFrac * uAltSpread;
-    float omega = sqrt(uGM / (r * r * r));   // rad/s  (vis-viva: v=sqrt(GM/r), ω=v/r)
+    // Mean motion n = sqrt(GM / a³)
+    float n = sqrt(uGM / (a * a * a));
 
-    // Current angle (head) and tail angle
-    float theta = M0 + omega * uTime;
-    float angle = theta - aVertRole * uStreakArc;
+    // Mean anomaly at current time — offset tail by uStreakDM
+    float M = M0 + n * uTime - aVertRole * uStreakDM;
 
-    // Build tilted orbital frame via Rodrigues
-    vec3 nodeDir = vec3(cos(raan), 0.0, sin(raan));   // ascending node
+    // Solve Kepler's equation for eccentric anomaly E
+    float E = solveKepler(M, e);
+
+    // True anomaly ν
+    float sinHalf = sqrt((1.0 + e) / (1.0 - e)) * tan(E * 0.5);
+    float nu      = 2.0 * atan(sinHalf);
+
+    // Orbital radius at this true anomaly
+    float r = a * (1.0 - e * cos(E));
+
+    // Position in orbital plane (perifocal frame)
+    float cosNu = cos(nu);
+    float sinNu = sin(nu);
+
+    // Build 3-D orbital frame via Rodrigues:
+    //   nodeDir = ascending node direction
+    //   orbitY  = normal direction tilted by inclination
+    //   perigeeDir = rotated into orbital plane by argPeri
     vec3 north   = vec3(0.0, 1.0, 0.0);
-    vec3 orbitY  = rotateAxis(north, nodeDir, incl);   // tilted polar axis
-    vec3 orbitX  = nodeDir;
+    vec3 nodeDir = vec3(cos(raan), 0.0, sin(raan));
+    vec3 orbitZ  = rotateAxis(north, nodeDir, incl);   // orbital plane normal
+    vec3 perigeeDir = rotateAxis(nodeDir, orbitZ, argPeri);
+    vec3 semilatDir = cross(orbitZ, perigeeDir);        // 90° from perigee in plane
 
-    // Position on the orbital circle at radius r
-    vec3 pos = r * (orbitX * cos(angle) + orbitY * sin(angle));
+    // Final world position
+    vec3 pos = r * (perigeeDir * cosNu + semilatDir * sinNu);
 
     vRole       = aVertRole;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
@@ -87,66 +129,66 @@ void main() {
 
 // ── Fragment shader ────────────────────────────────────────────────────────
 const DEBRIS_FRAG = /* glsl */`
-varying float vRole;    // 0 = head (bright), 1 = tail (transparent)
+varying float vRole;   // 0 = head (bright), 1 = tail (transparent)
 
 void main() {
     float alpha = 1.0 - vRole;
-    alpha = alpha * alpha;              // quadratic fade toward tail
+    alpha = alpha * alpha;                         // quadratic fade
     gl_FragColor = vec4(1.0, 1.0, 1.0, alpha * 0.85);
 }`;
 
 // ── Class ──────────────────────────────────────────────────────────────────
 export class OrbitalDebris {
-    private _mat:  ShaderMaterial;
-    private _mesh: LineSegments;
+    private _mat:     ShaderMaterial;
+    private _mesh:    LineSegments;
     private _simTime: number = 0.0;
 
     constructor(scene: Scene) {
         const VERTS = COUNT * 2;
 
-        // 4 floats per vertex: (incl, raan, M0, altFrac)
-        const orbit   = new Float32Array(VERTS * 4);
+        const orbit1  = new Float32Array(VERTS * 4);   // (a, e, incl, raan)
+        const orbit2  = new Float32Array(VERTS * 4);   // (argPeri, M0, 0, 0)
         const role    = new Float32Array(VERTS);
         const indices = new Uint32Array(COUNT * 2);
 
         for (let i = 0; i < COUNT; i++) {
-            // Uniform spherical distribution for inclination
-            const incl    = Math.acos(1 - 2 * Math.random());
-            const raan    = Math.random() * Math.PI * 2;
-            const M0      = Math.random() * Math.PI * 2;
-            const altFrac = Math.random() * 2 - 1;   // ∈ [-1, +1]
+            // ── Randomise orbital elements ─────────────────────────────────
+            const e        = ECC_MIN + Math.random() * (ECC_MAX - ECC_MIN);
+            const rPeri    = PERIGEE_MIN + Math.random() * (PERIGEE_MAX - PERIGEE_MIN);
+            const a        = rPeri / (1 - e);           // semi-major axis (m)
+            const incl     = Math.acos(1 - 2 * Math.random());  // uniform sphere
+            const raan     = Math.random() * Math.PI * 2;
+            const argPeri  = Math.random() * Math.PI * 2;
+            const M0       = Math.random() * Math.PI * 2;
 
             const vi = i * 2;   // head vertex index
 
-            // Head
-            orbit[vi*4+0] = incl;  orbit[vi*4+1] = raan;
-            orbit[vi*4+2] = M0;    orbit[vi*4+3] = altFrac;
-            role[vi]      = 0.0;
-
-            // Tail — same orbital parameters, role = 1 offsets angle in shader
-            orbit[(vi+1)*4+0] = incl;  orbit[(vi+1)*4+1] = raan;
-            orbit[(vi+1)*4+2] = M0;    orbit[(vi+1)*4+3] = altFrac;
-            role[vi+1]         = 1.0;
+            for (let v = 0; v < 2; v++) {
+                const idx = (vi + v) * 4;
+                orbit1[idx+0] = a;     orbit1[idx+1] = e;
+                orbit1[idx+2] = incl;  orbit1[idx+3] = raan;
+                orbit2[idx+0] = argPeri; orbit2[idx+1] = M0;
+                orbit2[idx+2] = 0;     orbit2[idx+3] = 0;
+                role[vi + v] = v === 0 ? 0.0 : 1.0;
+            }
 
             indices[i*2+0] = vi;
             indices[i*2+1] = vi + 1;
         }
 
         const geo = new BufferGeometry();
-        geo.setAttribute('aOrbit',    new BufferAttribute(orbit, 4));  // itemSize=4
-        geo.setAttribute('aVertRole', new BufferAttribute(role,  1));
+        geo.setAttribute('aOrbit1',   new BufferAttribute(orbit1, 4));
+        geo.setAttribute('aOrbit2',   new BufferAttribute(orbit2, 4));
+        geo.setAttribute('aVertRole', new BufferAttribute(role,   1));
         geo.setIndex(new BufferAttribute(indices, 1));
 
         this._mat = new ShaderMaterial({
             vertexShader:   DEBRIS_VERT,
             fragmentShader: DEBRIS_FRAG,
             uniforms: {
-                uTime:      { value: 0.0 },
-                uEarthR:    { value: R },
-                uBaseAlt:   { value: BASE_ALT },
-                uAltSpread: { value: ALT_SPREAD },
-                uGM:        { value: GM },
-                uStreakArc: { value: STREAK_ARC },
+                uTime:     { value: 0.0 },
+                uGM:       { value: GM },
+                uStreakDM: { value: STREAK_DM },
             },
             transparent: true,
             blending:    AdditiveBlending,
