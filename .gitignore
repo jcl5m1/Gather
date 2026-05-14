@@ -79,3 +79,10 @@ crashlytics-build.properties
 *.env
 bundle.*
 node_modules/*
+
+# Webpack build artifacts (dist/tiles/ kept as source asset)
+dist/*.bundle.js
+dist/*.bundle.js.map
+dist/game.html
+dist/testTruck.html
+dist/index.html
