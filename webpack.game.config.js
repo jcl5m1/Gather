@@ -23,7 +23,7 @@ module.exports = {
   plugins: [
     new CopyWebpackPlugin({
       patterns: [
-        { from: 'src/game/index.html',     to: 'game.html'      },
+        { from: 'src/game/index.html',     to: 'index.html'     },
         { from: 'src/game/testTruck.html', to: 'testTruck.html' },
       ],
     }),
@@ -39,7 +39,7 @@ module.exports = {
       watch: false,   // don't watch dist/ — bundle writes were triggering live reloads
     },
     compress: true,
-    port: 9000,
+    port: 9010,
     hot: false,
     liveReload: true,
     client: {
