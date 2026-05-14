@@ -62,6 +62,7 @@ export class DragOrbitHandler {
     private currentCy     = 0;
     private tapInfo:      string[] = [];
     private tileInfo = '';
+    private perfInfo  = '';
 
     // FPS tracking
     private _fps          = 0;
@@ -177,6 +178,7 @@ export class DragOrbitHandler {
 
     setTapInfo(lines: string[]): void { this.tapInfo = lines; }
     setTileInfo(text: string): void { this.tileInfo = text; }
+    setPerfInfo(text: string): void { this.perfInfo  = text; }
 
     private rayDir(pos: Vector3, cx: number, cy: number): Vector3 {
         _backward.copy(pos).normalize();
@@ -327,7 +329,8 @@ export class DragOrbitHandler {
         if (!this.dragging) {
             const extra = this.tapInfo.length ? '\n\n' + this.tapInfo.join('\n') : '';
             const tile  = this.tileInfo ? '\n' + this.tileInfo : '';
-            this.debugLabel.textContent = `build  ${_buildTime}\nheight ${heightStr}\ndist   ${distStr}\nfps    ${this._fps}${tile}` + extra;
+            const perf = this.perfInfo ? '\n' + this.perfInfo : '';
+            this.debugLabel.textContent = `build  ${_buildTime}\nheight ${heightStr}\ndist   ${distStr}\nfps    ${this._fps}${tile}${perf}` + extra;
             return;
         }
 

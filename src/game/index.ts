@@ -17,7 +17,7 @@ import { RESOURCES } from './resource';
 import { saveGame, loadGame, clearSave } from './saveState';
 import { createRenderer, createCamera } from './scene';
 import { addLighting, addStars, addEarth, addAtmosphere, addDaylightOverlay, addOceanSpecular, OceanSpecular } from './earth';
-import { OrbitalDebris } from './orbitalDebris';
+// import { OrbitalDebris } from './orbitalDebris'; // DISABLED
 import type { EarthLOD } from './earthLOD';
 import { buildWorld } from './world';
 import { KSC_NORMAL } from './world';
@@ -52,7 +52,7 @@ const camera = createCamera();
 log.info('Scene + camera ready');
 
 const lighting = addLighting(scene);
-addStars(scene);
+// addStars(scene);
 
 function hideLoadingScreen(): void {
     const el = document.getElementById('loading');
@@ -68,8 +68,8 @@ const earthTiles: EarthLOD = addEarth(scene, renderer, () => {
 const atmosphere     = addAtmosphere(overlayScene);
 const oceanSpecular  = addOceanSpecular(overlayScene);
 const daylightOverlay = addDaylightOverlay(scene, lighting.sunDir);
-const orbitalDebris   = new OrbitalDebris(scene);
-orbitalDebris.setSunDir(lighting.sunDir);
+// const orbitalDebris   = new OrbitalDebris(scene); // DISABLED
+// orbitalDebris.setSunDir(lighting.sunDir); // DISABLED
 log.info('Earth added to scene');
 
 const { homebase, resourceNodes } = buildWorld(scene, RESOURCES);
@@ -665,7 +665,7 @@ function _applySunAngles(): void {
     atmosphere.setSunDir(dir);
     oceanSpecular.setSunDir(dir);
     daylightOverlay.setSunDir(dir);
-    orbitalDebris.setSunDir(dir);
+    // orbitalDebris.setSunDir(dir); // DISABLED
 }
 
 _bindLiveSlider('trp-sun-el',  'trp-sun-el-val',  0, v => { _sunEl = v; _applySunAngles(); }, SUN_ELEVATION);
@@ -901,6 +901,12 @@ function setTimeScale(s: number): void {
     }
 }
 
+// ── Per-frame perf timing (EMA α=0.1, in ms) ─────────────────────────────
+let _tCamera   = 0;   // camera lerp + near-plane
+let _tRender   = 0;   // three.js render (scene + overlay)
+let _tTiles    = 0;   // earthTiles.update (LOD / texture streaming)
+let _tLogic    = 0;   // transports, refineries, power-plants
+const _EMA_A   = 0.1; // smoothing factor (higher = more responsive)
 function animate(): void {
     requestAnimationFrame(animate);
 
@@ -912,6 +918,7 @@ function animate(): void {
     // and drag rotation never alters the orbital distance.
     // Direction: instant during drag (camera tracks cursor exactly), smooth otherwise.
     // Radius:    always lerps at 0.07 so clicking +/- zooms with a smooth fly-in.
+    const _t0 = performance.now();
     _camDir.copy(camera.position).normalize();
     _targetDir.copy(zoom.targetPos).normalize();
     _camDir.lerp(_targetDir, dragOrbit.isDragging ? 1.0 : 0.07).normalize();
@@ -927,14 +934,16 @@ function animate(): void {
     camera.updateProjectionMatrix();
     updateCameraUp();
     camera.lookAt(zoom.currentLook);
+    _tCamera = _tCamera * (1-_EMA_A) + (performance.now() - _t0) * _EMA_A;
 
     const camPos = camera.position.clone();
     atmosphere.update(camPos, renderer);
     oceanSpecular.update(camPos, renderer, camera.fov * Math.PI / 180);
     daylightOverlay.update(camPos);
-    orbitalDebris.update(dt * timeScale, timeScale);
+    // orbitalDebris.update(dt * timeScale, timeScale); // DISABLED
     scene.position.set(-camPos.x, -camPos.y, -camPos.z);
     camera.position.set(0, 0, 0);
+    const _t1 = performance.now();
     renderer.render(scene, camera);
     // Render overlay (fullscreen-quad effects) without clearing
     renderer.autoClearDepth = false;
@@ -942,6 +951,7 @@ function animate(): void {
     renderer.render(overlayScene, camera);
     renderer.autoClearDepth = true;
     renderer.autoClearColor = true;
+    _tRender = _tRender * (1-_EMA_A) + (performance.now() - _t1) * _EMA_A;
 
 
     camera.position.copy(camPos);
@@ -952,7 +962,9 @@ function animate(): void {
     dragOrbit.update();
     inputHandler.update();
     icon.update(camera);
+    const _t2 = performance.now();
     earthTiles.update(camPos, camera);
+    _tTiles = _tTiles * (1-_EMA_A) + (performance.now() - _t2) * _EMA_A;
     const _fov    = earthTiles.activeTileFovDeg;
     const _fovStr = _fov < 10 ? _fov.toFixed(1) : Math.round(_fov).toString();
     const _tiles  = earthTiles.visibleTileCount;
@@ -960,6 +972,7 @@ function animate(): void {
     dragOrbit.setTileInfo(`tile   z${earthTiles.activeLevel}  ${_fovStr}°\ntex    ${_tiles} tiles  ${_memStr} MB`);
     updateScaleBar();
 
+    const _t3 = performance.now();
     // ── Transport tick ────────────────────────────────────────────────────────
     buildMenu.tick();
     techPanel.tick();
@@ -1007,6 +1020,15 @@ function animate(): void {
     }
 
     if (inventoryDirty) save();
+    _tLogic = _tLogic * (1-_EMA_A) + (performance.now() - _t3) * _EMA_A;
+
+    // ── Perf readout ─────────────────────────────────────────────────────────
+    dragOrbit.setPerfInfo(
+        `cam    ${_tCamera.toFixed(1)} ms\n`
+      + `render ${_tRender.toFixed(1)} ms\n`
+      + `tiles  ${_tTiles.toFixed(1)} ms\n`
+      + `logic  ${_tLogic.toFixed(1)} ms`
+    );
 
     if (++frameCount === 1) log.info('First frame rendered');
 }

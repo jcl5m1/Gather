@@ -60,7 +60,7 @@ export const ATM_SUN_MOD        = 0.75;
 export const ATM_NIGHT_FLOOR    = 0.25;
 
 // ── Orbital debris ────────────────────────────────────────────────────────────
-export const DEBRIS_ECC_MIN     = 0.00;
-export const DEBRIS_ECC_MAX     = 0.60;
-export const DEBRIS_TAIL_STEPS  = 10;
-export const DEBRIS_TAIL_REAL_SECONDS = 1.0;  // real seconds the tail spans at timeScale=1
+export const DEBRIS_ECC_MIN           = 0.00;
+export const DEBRIS_ECC_MAX           = 0.60;
+export const DEBRIS_TAIL_STEPS        = 5;    // line segments per tail (was 10)
+export const DEBRIS_TAIL_REAL_SECONDS = 2.0;  // real seconds the tail spans at timeScale=1 (was 1.0)
