@@ -437,17 +437,15 @@ export abstract class Transport {
     protected _placeMesh(from: Vector3, to: Vector3): void {
         const n = from.clone().lerp(to, this.t).normalize();
 
-        // Great-circle tangent at n toward `to`: component of `to` in the tangent plane at n.
-        // This is exact at every point on the arc, unlike projecting the chord (to−from).
-        let fwd = to.clone().addScaledVector(n, -to.dot(n));
-        if (fwd.lengthSq() < 1e-10) {
-            // n ≈ to (arrived): use the tangent at `from` pointing toward `to`.
-            // Great-circle tangent direction is consistent along the path, so do NOT negate.
-            fwd = to.clone().addScaledVector(from, -from.dot(to));
-        }
-        if (fwd.lengthSq() < 1e-10) fwd.set(1, 0, 0);
-        fwd.normalize();
-
+        // Great-circle tangent via rotation axis. axis = from × to is perpendicular
+        // to the orbital plane; fwd = axis × n is the planar tangent at n pointing
+        // toward `to`. Robust for any non-zero arc — the prior project-and-clamp
+        // approach degenerated for sub-metre arcs (|fwd|² ~ θ²) and produced a
+        // garbage quaternion, leaving the truck pointed straight up.
+        const axis = new Vector3().crossVectors(from, to);
+        if (axis.lengthSq() < 1e-20) axis.set(0, 0, 1);   // from ≈ ±to: zero-arc, won't render motion
+        axis.normalize();
+        const fwd = new Vector3().crossVectors(axis, n).normalize();
         const right = new Vector3().crossVectors(n, fwd).normalize();
 
         // Lane offset clears the homebase cylinder (radius HOUSE_R=6m).
