@@ -28,7 +28,7 @@ export class ZoomController {
     private levels: ZoomLevel[];
     private idx: number;
 
-    constructor(startIdx = 9) {
+    constructor(startIdx = 1) {
         this.homeNormal = KSC_NORMAL.clone();
 
         // Heights in metres above surface; 45° FOV → visible span ≈ height × 0.83.

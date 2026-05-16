@@ -1,4 +1,4 @@
-import { Resource } from './resource';
+import { Resource, formatScaled } from './resource';
 import { TECH_DEFS, TechTree } from './tech';
 
 export class TechPanel {
@@ -42,7 +42,7 @@ export class TechPanel {
 
     private _refresh(): void {
         this.content.innerHTML = '';
-        const fmt = (n: number) => n >= 1_000 ? `${(n / 1_000).toFixed(1)} t` : `${n} kg`;
+        const fmt = (n: number) => formatScaled(n, 'kg');
 
         for (const def of TECH_DEFS) {
             const researched  = this.techTree.isResearched(def.id);

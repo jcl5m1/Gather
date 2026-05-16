@@ -2,8 +2,8 @@ import {
     Scene, Mesh, Vector3, Matrix4,
     BoxGeometry, MeshStandardMaterial, MeshBasicMaterial,
 } from 'three';
-import { R, SURFACE_RISE, HOUSE_R } from './constants';
-import { Resource } from './resource';
+import { R, SURFACE_RISE, HOUSE_R, SAME_NORMAL_DOT } from './constants';
+import { Resource, formatScaled } from './resource';
 import { Structure } from './structure';
 
 // Returns the surface normal of the closest structure that can PROVIDE `resource`
@@ -17,12 +17,19 @@ export function resolveSourceNormal(
     fromNormal: Vector3,
     destNormal?: Vector3,
 ): Vector3 {
-    const providers = structures.filter(s => {
-        const role = s.getResourceRole(resource);
-        if (role !== 'output' && role !== 'both') return false;
-        if (destNormal && s.surfaceNormal.dot(destNormal) > 0.9999) return false;
-        return true;
-    });
+    const isDest = (s: Structure) =>
+        !!destNormal && s.surfaceNormal.dot(destNormal) > SAME_NORMAL_DOT;
+
+    // Prefer dedicated output providers (ResourceNode, OilWell, Refinery, PowerPlant).
+    // 'both'-role structures (Homebase) are only fallback so a truck never collects from itself.
+    const outputs = structures.filter(s =>
+        s.getResourceRole(resource) === 'output' && !isDest(s),
+    );
+    const fallback = structures.filter(s =>
+        s.getResourceRole(resource) === 'both' && !isDest(s),
+    );
+    const providers = outputs.length ? outputs : fallback;
+
     if (!providers.length) return fromNormal.clone();
     let best = providers[0];
     let bestDot = fromNormal.dot(best.surfaceNormal);
@@ -49,6 +56,8 @@ export interface TransportSave {
     destName?: string;
     // source surface normal (optional for backward compat; falls back to resource hitMesh position)
     snx?: number; sny?: number; snz?: number;
+    // ms epoch when the truck was built. Used to derive cycle position on load.
+    buildTime?: number;
 }
 
 // ─── Spec ─────────────────────────────────────────────────────────────────────
@@ -102,6 +111,8 @@ export abstract class Transport {
 
     stopped = false;
 
+    buildTime = Date.now();   // ms epoch — used to derive cycle position on load
+
     protected state:      TripState = 'to_resource';
     protected t           = 0;     // 0→1 along current arc segment
     protected speed       = 0;     // m/s
@@ -116,8 +127,15 @@ export abstract class Transport {
     get destinationName():   string  { return this.destName; }
     get srcNormal():         Vector3 { return this.sourceNormal; }
 
+    // Debug accessors
+    get tripState():      TripState { return this.state; }
+    get tripT():          number    { return this.t; }
+    get currentSpeed():   number    { return this.speed; }
+    get pauseRemaining(): number    { return this.pauseTimer; }
+    get arcLengthM():     number    { return this.arcLength; }
+
     resolveDestName(structures: Structure[]): string {
-        const match = structures.find(s => s.surfaceNormal.dot(this.homeNormal) > 0.9999);
+        const match = structures.find(s => s.surfaceNormal.dot(this.homeNormal) > SAME_NORMAL_DOT);
         return match ? match.label : this.destName;
     }
 
@@ -160,7 +178,7 @@ export abstract class Transport {
 
     getStatsLines(): string[] {
         const cargoLabel = (this.state === 'to_home' || this.state === 'pause_at_home')
-            ? `${(this.spec.payloadKg / 1000).toFixed(0)} t ${this.sourceResource.name}`
+            ? `${formatScaled(this.spec.payloadKg, 'kg')} ${this.sourceResource.name}`
             : 'Empty';
 
         const stateLabel: Record<string, string> = {
@@ -288,19 +306,111 @@ export abstract class Transport {
             snx: this.sourceNormal.x,
             sny: this.sourceNormal.y,
             snz: this.sourceNormal.z,
+            buildTime: this.buildTime,
         };
     }
 
     restoreFrom(save: TransportSave): void {
+        this.stopped = save.stopped ?? false;
+        if (save.destName) this.destName = save.destName;
+
+        if (this.stopped) {
+            this.parkAtHome();
+            return;
+        }
+
+        if (typeof save.buildTime === 'number') {
+            // Recompute cycle position from elapsed wall-clock since the truck was built.
+            this.buildTime = save.buildTime;
+            const elapsedSec = (Date.now() - this.buildTime) / 1000;
+            this.setFromCyclePosition(elapsedSec);
+            return;
+        }
+
+        // Legacy save: restore raw state fields.
         this.state      = save.state as TripState;
         this.t          = save.t;
         this.speed      = save.speed;
         this.pauseTimer = save.pauseTimer;
-        this.stopped    = save.stopped;
-        if (save.destName) this.destName = save.destName;
         if (this.state === 'to_resource' || this.state === 'pause_at_resource') {
             this._placeMesh(this.homeNormal, this.sourceNormal);
         } else {
+            this._placeMesh(this.sourceNormal, this.homeNormal);
+        }
+    }
+
+    // Trapezoid/triangle kinematics: distance + speed at trip-elapsed τ.
+    private _trip(): { tripTime: number; trapezoid: boolean; tAccel: number; tCruise: number; dAccel: number } {
+        const a = this.spec.acceleration;
+        const v = this.spec.maxSpeed;
+        const L = this.arcLength;
+        const dAccel = (v * v) / (2 * a);
+        if (L > 2 * dAccel) {
+            const tAccel  = v / a;
+            const tCruise = (L - 2 * dAccel) / v;
+            return { tripTime: 2 * tAccel + tCruise, trapezoid: true, tAccel, tCruise, dAccel };
+        }
+        const vPeak = Math.sqrt(a * L);
+        const tHalf = vPeak / a;
+        return { tripTime: 2 * tHalf, trapezoid: false, tAccel: tHalf, tCruise: 0, dAccel: L / 2 };
+    }
+
+    private _positionInTrip(tau: number): { t: number; speed: number } {
+        const a = this.spec.acceleration;
+        const v = this.spec.maxSpeed;
+        const L = this.arcLength;
+        const trip = this._trip();
+        tau = Math.max(0, Math.min(trip.tripTime, tau));
+        let d: number, sp: number;
+        if (trip.trapezoid) {
+            if (tau < trip.tAccel)                       { d = 0.5 * a * tau * tau;                                 sp = a * tau; }
+            else if (tau < trip.tAccel + trip.tCruise)   { d = trip.dAccel + v * (tau - trip.tAccel);               sp = v; }
+            else { const taup = trip.tripTime - tau;       d = L - 0.5 * a * taup * taup;                            sp = a * taup; }
+        } else {
+            const tHalf = trip.tripTime / 2;
+            if (tau < tHalf)                              { d = 0.5 * a * tau * tau;                                 sp = a * tau; }
+            else { const taup = trip.tripTime - tau;       d = L - 0.5 * a * taup * taup;                            sp = a * taup; }
+        }
+        return { t: Math.max(0, Math.min(1, d / L)), speed: sp };
+    }
+
+    // Park at home — used when stopped (no fuel / source exhausted). Idle visual.
+    parkAtHome(): void {
+        this.state      = 'pause_at_home';
+        this.t          = 1;
+        this.speed      = 0;
+        this.pauseTimer = 0;
+        this._placeMesh(this.sourceNormal, this.homeNormal);
+    }
+
+    setFromCyclePosition(elapsedSec: number): void {
+        const trip  = this._trip().tripTime;
+        const pause = this.spec.pauseTime;
+        const cycle = 2 * trip + 2 * pause;
+        if (cycle <= 0) return;
+        let p = elapsedSec % cycle;
+        if (p < 0) p += cycle;
+
+        if (p < trip) {
+            this.state = 'to_resource';
+            const { t, speed } = this._positionInTrip(p);
+            this.t = t; this.speed = speed; this.pauseTimer = 0;
+            this._placeMesh(this.homeNormal, this.sourceNormal);
+        } else if (p < trip + pause) {
+            this.state = 'pause_at_resource';
+            this.t = 1; this.speed = 0;
+            this.pauseTimer = Math.max(0, pause - (p - trip));
+            this._placeMesh(this.homeNormal, this.sourceNormal);
+        } else if (p < 2 * trip + pause) {
+            this.state = 'to_home';
+            const tau = p - trip - pause;
+            const { t, speed } = this._positionInTrip(tau);
+            this.t = t; this.speed = speed; this.pauseTimer = 0;
+            this._placeMesh(this.sourceNormal, this.homeNormal);
+        } else {
+            this.state = 'pause_at_home';
+            this.t = 1; this.speed = 0;
+            this.pauseTimer = Math.max(0, pause - (p - 2 * trip - pause));
             this._placeMesh(this.sourceNormal, this.homeNormal);
         }
     }
@@ -333,17 +443,18 @@ export abstract class Transport {
         // This is exact at every point on the arc, unlike projecting the chord (to−from).
         let fwd = to.clone().addScaledVector(n, -to.dot(n));
         if (fwd.lengthSq() < 1e-10) {
-            // n ≈ to (arrived): fall back to the reverse approach from `from` side
-            fwd = n.clone().addScaledVector(from, -n.dot(from)).negate();
+            // n ≈ to (arrived): use the tangent at `from` pointing toward `to`.
+            // Great-circle tangent direction is consistent along the path, so do NOT negate.
+            fwd = to.clone().addScaledVector(from, -from.dot(to));
         }
         if (fwd.lengthSq() < 1e-10) fwd.set(1, 0, 0);
         fwd.normalize();
 
         const right = new Vector3().crossVectors(n, fwd).normalize();
 
-        // Lane offset must clear the homebase cylinder (radius HOUSE_R=6m):
-        // inner truck edge = offset − spec.width/2 must exceed HOUSE_R.
-        const laneOffset = HOUSE_R + this.spec.width;  // 6 + 2.6 = 8.6 m
+        // Lane offset clears the homebase cylinder (radius HOUSE_R=6m).
+        // Reduced 50% — inner truck edge sits closer to centreline now.
+        const laneOffset = (HOUSE_R + this.spec.width) * 0.25;
         this.mesh.position
             .copy(n).multiplyScalar(R + this.spec.height / 2 + SURFACE_RISE)
             .addScaledVector(right, laneOffset);
@@ -382,6 +493,20 @@ export class TruckTransport extends Transport {
     );
 
     readonly spec: TransportSpec = TruckTransport.SPEC;
+
+    constructor(
+        scene:          Scene,
+        homeNormal:     Vector3,
+        sourceResource: Resource,
+        fuelResource:   Resource,
+        sourceNormal:   Vector3,
+        destName?:      string,
+    ) {
+        super(scene, homeNormal, sourceResource, fuelResource, sourceNormal, destName);
+        // Place at cycle position 0 = at destination, about to leave.
+        // Subclass `spec` field is initialized by the time this runs, so _placeMesh is safe.
+        this.setFromCyclePosition(0);
+    }
 
     protected makeMesh(): Mesh {
         return new Mesh(

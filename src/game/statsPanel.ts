@@ -1,5 +1,5 @@
 import { Vector3 } from 'three';
-import { Resource } from './resource';
+import { Resource, formatScaled } from './resource';
 import { Transport, resolveSourceNormal } from './transport';
 import { Structure } from './structure';
 import { Homebase } from './homebase';
@@ -828,11 +828,7 @@ export class StatsPanel {
                 const g = this.history[i].gathered;
                 return this.resources.map(r => ({ name: r.name, color: r.hex, value: g[r.name] ?? 0 }));
             },
-            (v) => v >= 1e12 ? `${(v/1e12).toFixed(1)}Gt`
-                 : v >= 1e9  ? `${(v/1e9).toFixed(1)}Mt`
-                 : v >= 1e6  ? `${(v/1e6).toFixed(1)}kt`
-                 : v >= 1e3  ? `${(v/1e3).toFixed(0)}t`
-                 : `${v.toFixed(0)}kg`,
+            (v) => formatScaled(v, 'kg'),
         );
 
         this._drawSubChart(ctx, W, pad.l, pad.r, y2, h1, 'Rate  kg/min',

@@ -64,6 +64,9 @@ export class EarthLOD {
     private _lastAlpha   = LODS.map(() => 0);
     private _lastHeight  = 1;
     private _visibleCount = 0;
+    private _bakesThisFrame = 0;
+    private _lastBakesPerFrame = 0;
+    private _bakesPeak = 0;
     private _frustum     = new Frustum();
     private _vpMatrix    = new Matrix4();
     private _tileSphere  = new Sphere();
@@ -76,6 +79,9 @@ export class EarthLOD {
     }
 
     get visibleTileCount(): number { return this._visibleCount; }
+    get bakesPerFrame(): number { return this._lastBakesPerFrame; }
+    get bakesPeak(): number { return this._bakesPeak; }
+    resetBakesPeak(): void { this._bakesPeak = 0; }
 
     get textureMemoryMB(): number {
         return this._visibleCount * TEX * TEX * 4 / (1024 * 1024);
@@ -122,6 +128,7 @@ export class EarthLOD {
     }
 
     update(camPos: Vector3, camera: PerspectiveCamera): void {
+        this._bakesThisFrame = 0;
         const height = Math.max(1, camPos.length() - R);
         this._lastHeight = height;
         this._camDir.copy(camPos).normalize();
@@ -148,7 +155,10 @@ export class EarthLOD {
         this._visibleCount = wanted.size;
 
         for (const k of wanted)
-            if (!this.pool.has(k)) this._spawn(k);
+            if (!this.pool.has(k)) { this._spawn(k); this._bakesThisFrame++; }
+
+        this._lastBakesPerFrame = this._bakesThisFrame;
+        if (this._bakesThisFrame > this._bakesPeak) this._bakesPeak = this._bakesThisFrame;
 
         for (const [k, e] of this.pool) {
             const target = wanted.has(k) ? levelAlpha[e.level] : 0;

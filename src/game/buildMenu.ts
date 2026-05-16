@@ -1,10 +1,11 @@
 import { Scene, Vector3, Mesh, BoxGeometry, MeshStandardMaterial } from 'three';
-import { R, SURFACE_RISE } from './constants';
-import { Resource } from './resource';
+import { R, SURFACE_RISE, PAD_W } from './constants';
+import { Resource, formatScaled } from './resource';
 import { Transport, TruckTransport, resolveSourceNormal } from './transport';
 import { TECH_TREE } from './tech';
 import { Structure, InventoryRole } from './structure';
 import { Homebase } from './homebase';
+import { ResourceNode } from './resourceNode';
 import { Refinery, RefineryRecipe, REFINERY_RECIPES, REFINERY_W, REFINERY_H, REFINERY_D, REFINERY_IRON_COST, REFINERY_STONE_COST } from './refinery';
 import { OilWell, OIL_WELL_W, OIL_WELL_H, OIL_WELL_D, OIL_WELL_STEEL_COST } from './oilWell';
 import { PowerPlant, POWER_PLANT_W, POWER_PLANT_H, POWER_PLANT_D, POWER_PLANT_IRON_COST, POWER_PLANT_STONE_COST } from './powerPlant';
@@ -49,6 +50,8 @@ export class BuildMenu {
         ghost:    Mesh,
         rise:     number,
         callback: (normal: Vector3) => void,
+        validator?: (normal: Vector3) => boolean,
+        invalidMessage?: string,
     ) => void = () => {};
 
     constructor(
@@ -66,7 +69,9 @@ export class BuildMenu {
         this._refreshPanel();
     }
 
-    setPlacementHandler(fn: (ghost: Mesh, rise: number, cb: (n: Vector3) => void) => void): void {
+    setPlacementHandler(
+        fn: (ghost: Mesh, rise: number, cb: (n: Vector3) => void, validator?: (n: Vector3) => boolean, invalidMessage?: string) => void,
+    ): void {
         this.onRequestPlacement = fn;
     }
 
@@ -250,14 +255,14 @@ export class BuildMenu {
                     ? (recipe.energyMJPerBatch / fuel.energyDensityMJkg).toFixed(1)
                     : null;
                 const inputDesc = recipe.fixedInputs
-                    .map(i => `${i.kgPerBatch} kg ${i.resourceName}`)
+                    .map(i => `${formatScaled(i.kgPerBatch, 'kg')} ${i.resourceName}`)
                     .join(', ');
                 const fuelDesc = fuelKg
-                    ? `  ·  fuel: ${fuel!.name} ${fuelKg} kg (auto)`
+                    ? `  ·  fuel: ${fuel!.name} ${formatScaled(Number(fuelKg), 'kg')} (auto)`
                     : '  ·  self-fueled';
                 const outputRes = this.resources.find(r => r.name === recipe.outputName);
                 return {
-                    label:    `${recipe.outputName}  ×  ${recipe.outputKgPerBatch} kg / ${recipe.batchSeconds}s`,
+                    label:    `${recipe.outputName}  ×  ${formatScaled(recipe.outputKgPerBatch, 'kg')} / ${recipe.batchSeconds}s`,
                     sub:      `inputs: ${inputDesc}${fuelDesc}`,
                     color:    outputRes?.hex ?? '#888888',
                     disabled: false,
@@ -324,6 +329,16 @@ export class BuildMenu {
 
         const rise = SURFACE_RISE + OIL_WELL_H / 2;
 
+        // Find natural Oil resource node — placement must be on top of it.
+        const oilNode = this.structures.find(
+            s => s instanceof ResourceNode && (s as ResourceNode).providesResource.name === 'Oil',
+        ) as ResourceNode | undefined;
+        const validator = (n: Vector3) => {
+            if (!oilNode) return false;
+            const dot = Math.min(1, Math.max(-1, oilNode.surfaceNormal.dot(n)));
+            return Math.acos(dot) * R < PAD_W;
+        };
+
         this.onRequestPlacement(ghost, rise, (normal: Vector3) => {
             const steel = this._steel();
             const oil   = this.resources.find(r => r.name === 'Oil')!;
@@ -331,7 +346,7 @@ export class BuildMenu {
             this.onHudDirty(steel);
             this.onBuildOilWell(new OilWell(this.scene, normal, oil));
             this.step = 'closed';
-        });
+        }, validator, 'Oil well must be placed over an oil deposit');
     }
 
     // ── Power Plant build flow ────────────────────────────────────────────────
@@ -390,7 +405,7 @@ export class BuildMenu {
 
     private _refreshPanel(): void {
         const have    = this._iron().gathered;
-        const fmt     = (n: number) => n >= 1000 ? `${(n/1000).toFixed(1)} t` : `${n} kg`;
+        const fmt     = (n: number) => formatScaled(n, 'kg');
 
         const truckOk  = have >= TruckTransport.IRON_COST;
         const autoFuel = this._autoFuel();

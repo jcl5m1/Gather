@@ -57,12 +57,12 @@
         }
         .zoom-btn {
             width: 48px; height: 48px; border-radius: 14px;
-            background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.18);
             color: #fff; font-size: 26px; display: flex; align-items: center; justify-content: center;
             cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
             font-family: -apple-system, sans-serif;
         }
-        .zoom-btn:active { background: rgba(255,255,255,0.18); }
+        .zoom-btn:active { background: rgba(0,0,0,0.45); }
 
         #flash {
             position: fixed; pointer-events: none;
@@ -80,7 +80,7 @@
 
         /* ── Time controls ───────────────────────────────────────────────── */
         #time-controls {
-            position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+            position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
             display: flex; align-items: center; gap: 6px; z-index: 10;
             background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.1);
             border-radius: 16px; padding: 5px 10px;
@@ -422,21 +422,9 @@
             cursor: pointer; background: none; flex-shrink: 0;
         }
 
-        #reload-btn {
-            position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
-            z-index: 100;
-            background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18);
-            color: #fff; font-size: 12px; font-family: -apple-system, sans-serif;
-            padding: 5px 14px; border-radius: 20px;
-            cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none;
-            letter-spacing: 0.5px;
-        }
-        #reload-btn:active { background: rgba(255,255,255,0.22); }
     </style>
 </head>
 <body>
-
-<button id="reload-btn" onclick="location.href=location.pathname+'?v='+Date.now()">↺ Reload</button>
 
 
 <div id="loading">Loading Earth…</div>
@@ -446,15 +434,15 @@
 </div>
 
 <div id="zoom-controls">
-    <button class="zoom-btn" id="btn-in">+</button>
-    <button class="zoom-btn" id="btn-out">−</button>
-    <button class="zoom-btn" id="btn-home" style="font-size:18px;">⌂</button>
+    <button class="zoom-btn" id="btn-home" style="font-size:18px;" title="Center on home">⌂</button>
+    <button class="zoom-btn" id="btn-in" title="Zoom in">+</button>
+    <button class="zoom-btn" id="btn-out" title="Zoom out">−</button>
     <div class="ctrl-divider"></div>
-    <button class="zoom-btn" id="btn-build" style="font-size:20px;">🏗</button>
-    <button class="zoom-btn" id="btn-stats" style="font-size:20px;">📈</button>
-    <button class="zoom-btn" id="btn-tech"     style="font-size:20px;">🔬</button>
-    <button class="zoom-btn" id="btn-settings" style="font-size:20px;">⚙</button>
-    <button class="zoom-btn" id="btn-terrain"  style="font-size:18px;">⛰</button>
+    <button class="zoom-btn" id="btn-build"    style="font-size:20px;" title="Build">🏗</button>
+    <button class="zoom-btn" id="btn-stats"    style="font-size:20px;" title="Stats">📈</button>
+    <button class="zoom-btn" id="btn-tech"     style="font-size:20px;" title="Tech tree">🔬</button>
+    <button class="zoom-btn" id="btn-settings" style="font-size:20px;" title="Settings">⚙</button>
+    <button class="zoom-btn" id="btn-terrain"  style="font-size:18px;" title="Terrain panel">⛰</button>
 </div>
 
 

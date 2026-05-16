@@ -11,6 +11,7 @@ export class HomebaseIcon {
     constructor(
         private homebasePos: Vector3,
         private onTap: () => void,
+        canvas?: HTMLCanvasElement,
     ) {
         // Outer element is the tap target (2× visual size)
         this.el = document.createElement('div');
@@ -47,6 +48,18 @@ export class HomebaseIcon {
             e.preventDefault();
             onTap();
         }, { passive: false });
+
+        // Forward wheel-zoom to canvas — icon's pointerEvents:'auto' otherwise swallows it
+        if (canvas) {
+            this.el.addEventListener('wheel', e => {
+                e.preventDefault();
+                canvas.dispatchEvent(new WheelEvent('wheel', {
+                    deltaY: e.deltaY, deltaX: e.deltaX, deltaMode: e.deltaMode,
+                    clientX: e.clientX, clientY: e.clientY,
+                    bubbles: true, cancelable: true,
+                }));
+            }, { passive: false });
+        }
     }
 
     // Call once per frame. Shows/hides icon and moves it to the projected screen position.

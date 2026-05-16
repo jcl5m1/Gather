@@ -3,7 +3,7 @@ import {
     BoxGeometry, MeshStandardMaterial, MeshBasicMaterial,
 } from 'three';
 import { R, SURFACE_RISE, PAD_W, PAD_H } from './constants';
-import { Resource } from './resource';
+import { Resource, formatScaled } from './resource';
 import { Structure, InventoryRole } from './structure';
 
 export class ResourceNode extends Structure {
@@ -42,22 +42,19 @@ export class ResourceNode extends Structure {
     }
 
     getResourceRole(resource: Resource): InventoryRole | null {
-        return resource === this.providesResource ? 'output' : null;
+        if (resource !== this.providesResource) return null;
+        // Resources requiring extraction (e.g. Oil) are not direct truck sources;
+        // only dedicated extractor structures (OilWell) provide them.
+        if (resource.requiresExtraction) return null;
+        return 'output';
     }
 
     getStatsLines(truckCount: number): string[] {
         const res = this.providesResource;
-        const remaining = res.total - res.gathered;
-        const fmt = (n: number) =>
-            n >= 1_000_000_000_000 ? `${(n / 1_000_000_000_000).toFixed(2)} Gt`
-          : n >= 1_000_000_000     ? `${(n / 1_000_000_000).toFixed(2)} Mt`
-          : n >= 1_000_000         ? `${(n / 1_000_000).toFixed(2)} kt`
-          : n >= 1_000             ? `${(n / 1_000).toFixed(1)} t`
-          : `${n} kg`;
         const lines = [
             res.name,
-            `remaining  ${fmt(remaining)} / ${fmt(res.total)}`,
-            `tap yield  ${res.gatherAmount} kg`,
+            `remaining  ${formatScaled(res.deposit, res.unit)} / ${formatScaled(res.depositInitial, res.unit)}`,
+            `tap yield  ${formatScaled(res.gatherAmount, 'kg')}`,
         ];
         if (truckCount > 0) lines.push(`trucks  ${truckCount}`);
         return lines;

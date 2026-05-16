@@ -3,7 +3,7 @@ import {
     BoxGeometry, MeshStandardMaterial, MeshBasicMaterial,
 } from 'three';
 import { R, SURFACE_RISE } from './constants';
-import { Resource } from './resource';
+import { Resource, formatScaled } from './resource';
 import { Structure, InventoryRole } from './structure';
 
 // ── Geometry ──────────────────────────────────────────────────────────────────
@@ -174,7 +174,7 @@ export class Refinery extends Structure {
 
         for (const inp of this.fixedInputs) inp.resource.consume(inp.kgPerBatch);
         if (fuelNeeded > 0 && this.fuelResource) this.fuelResource.consume(fuelNeeded);
-        this.providesResource.deposit(this.recipe.outputKgPerBatch);
+        this.providesResource.produce(this.recipe.outputKgPerBatch);
         return { produced: true };
     }
 
@@ -196,13 +196,13 @@ export class Refinery extends Structure {
     getStatsLines(truckCount: number): string[] {
         const lines: string[] = [
             this.label,
-            `Output: ${this.recipe.outputKgPerBatch} kg ${this.recipe.outputName} / ${this.recipe.batchSeconds}s`,
+            `Output: ${formatScaled(this.recipe.outputKgPerBatch, 'kg')} ${this.recipe.outputName} / ${this.recipe.batchSeconds}s`,
         ];
         for (const inp of this.fixedInputs) {
-            lines.push(`${inp.resource.name}:  ${inp.kgPerBatch} kg/batch`);
+            lines.push(`${inp.resource.name}:  ${formatScaled(inp.kgPerBatch, 'kg')}/batch`);
         }
         if (this.fuelResource) {
-            lines.push(`Fuel (auto):  ${this.fuelResource.name}  ${this.fuelKgPerBatch().toFixed(1)} kg/batch`);
+            lines.push(`Fuel (auto):  ${this.fuelResource.name}  ${formatScaled(this.fuelKgPerBatch(), 'kg')}/batch`);
         } else {
             lines.push('Fuel:  self-fueled');
         }

@@ -13,7 +13,7 @@ import {
     ICE_CLEAR_LEVEL, ICE_ICE_LEVEL,
 } from './uiDefaults';
 import { log, installGlobalErrorHandlers } from './logger';
-import { RESOURCES } from './resource';
+import { RESOURCES, formatScaled } from './resource';
 import { saveGame, loadGame, clearSave } from './saveState';
 import { createRenderer, createCamera } from './scene';
 import { addLighting, addStars, addEarth, addAtmosphere, addDaylightOverlay, addOceanSpecular, OceanSpecular } from './earth';
@@ -24,10 +24,11 @@ import { KSC_NORMAL } from './world';
 import { ZoomController } from './zoomController';
 import { HUD } from './hud';
 import { Flash } from './flash';
+import { Notify } from './notify';
 import { InputHandler } from './inputHandler';
 import { HomebaseIcon } from './homebaseIcon';
 import { DragOrbitHandler } from './dragOrbitHandler';
-import { Transport } from './transport';
+import { Transport, TruckTransport, resolveSourceNormal } from './transport';
 import { Refinery } from './refinery';
 import { OilWell } from './oilWell';
 import { PowerPlant } from './powerPlant';
@@ -36,7 +37,7 @@ import { BuildMenu } from './buildMenu';
 import { StatsPanel } from './statsPanel';
 import { TechPanel } from './techPanel';
 import { TECH_TREE } from './tech';
-import { R } from './constants';
+import { R, SAME_NORMAL_DOT } from './constants';
 
 installGlobalErrorHandlers();
 log.info('Game init start');
@@ -82,19 +83,6 @@ const hud  = new HUD(RESOURCES);
 
 // ── Restore saved state ───────────────────────────────────────────────────────
 
-function staggerByRoute(transports: Transport[]): void {
-    const groups = new Map<string, Transport[]>();
-    for (const t of transports) {
-        const dn  = t.destinationNormal;
-        const key = `${t.sourceResource.name}|${dn.x.toFixed(3)},${dn.y.toFixed(3)},${dn.z.toFixed(3)}`;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key)!.push(t);
-    }
-    for (const group of groups.values()) {
-        for (let i = 0; i < group.length; i++) group[i].stagger(i / group.length);
-    }
-}
-
 const saved = loadGame(zoom, RESOURCES, scene, KSC_NORMAL, TECH_TREE);
 const transports:  Transport[]  = saved.transports;
 const refineries:  Refinery[]   = saved.refineries;
@@ -106,7 +94,6 @@ for (const ref  of refineries)  structures.push(ref);
 for (const well of oilWells)    structures.push(well);
 for (const pp   of powerPlants) structures.push(pp);
 
-staggerByRoute(transports);
 hud.refreshAll(RESOURCES);
 log.info(`Loaded ${transports.length} transport(s), ${refineries.length} refiner(ies), ${oilWells.length} oil well(s), ${powerPlants.length} power plant(s) from save`);
 
@@ -117,6 +104,7 @@ setInterval(save, 60_000);
 // ── Input ─────────────────────────────────────────────────────────────────────
 
 const flash     = new Flash();
+const notify    = new Notify();
 const dragOrbit = new DragOrbitHandler(camera, zoom, scene, renderer.domElement, save);
 const inputHandler = new InputHandler(
     camera, scene, RESOURCES, transports, hud, flash, renderer.domElement,
@@ -125,6 +113,32 @@ const inputHandler = new InputHandler(
 );
 inputHandler.setStructures(structures);
 inputHandler.setSaveCallback(save);
+inputHandler.setNotifyCallback(msg => notify.show(msg));
+inputHandler.setCursorInfoCallback(text => dragOrbit.setCursorInfo(text));
+
+// Build-truck shortcut from the assign dialog: dest = tapped structure.
+inputHandler.setBuildTruckCallback((destNormal, destName, resource) => {
+    const iron = RESOURCES.find(r => r.name === 'Iron')!;
+    if (iron.gathered < TruckTransport.IRON_COST) return false;
+
+    const unlockedNames = TECH_TREE.unlockedFuelNames();
+    const unlocked = RESOURCES.filter(r => r.isFuel && unlockedNames.includes(r.name));
+    if (!unlocked.length) return false;
+    const withStock = unlocked.filter(f => f.gathered > 0);
+    const fuelPool  = withStock.length ? withStock : unlocked;
+    const fuel = fuelPool.reduce((best, f) => f.energyDensityMJkg > best.energyDensityMJkg ? f : best);
+
+    const sourceNormal = resolveSourceNormal(resource, structures, destNormal, destNormal);
+    iron.consume(TruckTransport.IRON_COST);
+    hud.update(iron);
+
+    const truck = new TruckTransport(scene, destNormal, resource, fuel, sourceNormal, destName);
+    transports.push(truck);
+    hud.refreshAll(RESOURCES);
+    log.info(`Built ${truck.spec.name} #${truck.id} via assign dialog: ${resource.name} → ${destName}`);
+    return true;
+});
+
 inputHandler.setDeleteCallback((structure) => {
     // Remove from scene
     structure.dispose();
@@ -138,7 +152,7 @@ inputHandler.setDeleteCallback((structure) => {
         // Stop trucks delivering to this refinery
         const n = structure.surfaceNormal;
         for (const t of transports) {
-            if (t.destinationNormal.dot(n) > 0.9999) t.stopped = true;
+            if (t.destinationNormal.dot(n) > SAME_NORMAL_DOT) t.stopped = true;
         }
     } else if (structure instanceof OilWell) {
         oilWells.splice(oilWells.indexOf(structure), 1);
@@ -146,7 +160,7 @@ inputHandler.setDeleteCallback((structure) => {
         const n = structure.surfaceNormal;
         for (const t of transports) {
             if (t.sourceResource === structure.providesResource &&
-                t.srcNormal.dot(n) > 0.9999) {
+                t.srcNormal.dot(n) > SAME_NORMAL_DOT) {
                 t.stopped = true;
             }
         }
@@ -155,7 +169,7 @@ inputHandler.setDeleteCallback((structure) => {
         // Stop trucks delivering to this power plant
         const n = structure.surfaceNormal;
         for (const t of transports) {
-            if (t.destinationNormal.dot(n) > 0.9999) t.stopped = true;
+            if (t.destinationNormal.dot(n) > SAME_NORMAL_DOT) t.stopped = true;
         }
     }
 
@@ -166,7 +180,7 @@ inputHandler.setDeleteCallback((structure) => {
 zoom.onLevelChange = save;
 log.info('Controllers ready');
 
-const icon = new HomebaseIcon(homebase.position, () => { zoom.zoomTo(0); zoom.centerOnHome(); });
+const icon = new HomebaseIcon(homebase.position, () => { zoom.zoomTo(0); zoom.centerOnHome(); }, renderer.domElement);
 
 document.getElementById('btn-home')!.addEventListener('click', () => zoom.centerOnHome());
 
@@ -793,8 +807,7 @@ const buildMenu = new BuildMenu(
     scene,
     structures,    // live array — stays current as structures are added/removed
     (transport) => {
-        const sameRoute = transports.filter(t => t.sourceResource.name === transport.sourceResource.name);
-        if (sameRoute.length > 0) transport.stagger(sameRoute.length / (sameRoute.length + 1));
+        // New trucks always start at the destination (set in TruckTransport constructor).
         transports.push(transport);
         hud.refreshAll(RESOURCES);
         save();
@@ -825,7 +838,7 @@ const buildMenu = new BuildMenu(
 );
 
 buildMenu.setPlacementHandler(
-    (ghost, rise, cb) => inputHandler.startPlacement(ghost, rise, cb),
+    (ghost, rise, cb, validator, invalidMessage) => inputHandler.startPlacement(ghost, rise, cb, validator, invalidMessage),
 );
 
 // ── Camera init ───────────────────────────────────────────────────────────────
@@ -883,6 +896,50 @@ function updateScaleBar(): void {
 let lastTime   = performance.now();
 let frameCount = 0;
 
+// ── Truck debug HUD ─────────────────────────────────────────────────────────
+function normalToLatLon(n: Vector3): string {
+    const lat = Math.asin(Math.max(-1, Math.min(1, n.y))) * 180 / Math.PI;
+    const lon = Math.atan2(n.x, n.z) * 180 / Math.PI;
+    return `${lat.toFixed(2)},${lon.toFixed(2)}`;
+}
+function findStructureByNormal(structs: Structure[], n: Vector3): Structure | undefined {
+    return structs.find(s => s.surfaceNormal.dot(n) > SAME_NORMAL_DOT);
+}
+function buildTruckDebugInfo(ts: Transport[], structs: Structure[]): string {
+    if (!ts.length) return 'trucks: none';
+    const lines: string[] = [`trucks ${ts.length}`];
+    const N = Math.min(ts.length, 3);
+    for (let i = 0; i < N; i++) {
+        const t = ts[i];
+        const dn = t.destinationNormal;
+        const sn = t.srcNormal;
+        const srcStruct = findStructureByNormal(structs, sn);
+        const srcName   = srcStruct ? srcStruct.label : t.sourceResource.name;
+        const dstName   = t.destinationName;
+        const pos       = t.mesh.position;
+        const alt       = pos.length() - R;
+        const cargo     = (t.tripState === 'to_home' || t.tripState === 'pause_at_home')
+            ? `${formatScaled(t.spec.payloadKg, 'kg')} ${t.sourceResource.name}`
+            : 'empty';
+        const stopFlag  = t.stopped ? ' STOPPED' : '';
+        const fuelKgTrip = t.fuelKgPerRoundTrip;
+        const fuelStock  = t.fuelResource.gathered;
+        const tripsLeft  = fuelKgTrip > 0 ? Math.floor(fuelStock / fuelKgTrip) : Infinity;
+        const fuelLabel  = `${formatScaled(fuelKgTrip, 'kg')}/trip  stock ${formatScaled(fuelStock, 'kg')}  (${isFinite(tripsLeft) ? tripsLeft : '∞'} trips)`;
+        lines.push(
+            `#${t.id} ${t.spec.name} ${t.tripState}${stopFlag}`,
+            `  src ${srcName} (${t.sourceResource.name}) ll ${normalToLatLon(sn)}`,
+            `  dst ${dstName} ll ${normalToLatLon(dn)}`,
+            `  pos (${pos.x.toFixed(0)},${pos.y.toFixed(0)},${pos.z.toFixed(0)}) alt ${alt.toFixed(0)}m`,
+            `  t ${t.tripT.toFixed(3)} v ${t.currentSpeed.toFixed(2)} m/s arc ${(t.arcLengthM/1000).toFixed(2)} km`,
+            `  cargo ${cargo} pause ${t.pauseRemaining.toFixed(1)}s`,
+            `  fuel ${t.fuelResource.name}: ${fuelLabel}`,
+        );
+    }
+    if (ts.length > N) lines.push(`... +${ts.length - N} more`);
+    return lines.join('\n');
+}
+
 // ── Time scale (for orbital debris simulation) ──────────────────────────────
 let timeScale = 1.0;
 const TIME_STEP_UP   = 10.0;   // multiply on ▶▶
@@ -906,19 +963,73 @@ let _tCamera   = 0;   // camera lerp + near-plane
 let _tRender   = 0;   // three.js render (scene + overlay)
 let _tTiles    = 0;   // earthTiles.update (LOD / texture streaming)
 let _tLogic    = 0;   // transports, refineries, power-plants
+let _tGpuSync  = 0;   // gl.finish() stall after render — true GPU-bound time
+let _tFrame    = 0;   // total rAF-to-rAF gap (EMA)
+let _frameMin  = Infinity;
+let _frameMax  = 0;
+let _frameWindowStart = 0;
 const _EMA_A   = 0.1; // smoothing factor (higher = more responsive)
+
+// Press G to toggle the GPU-sync probe.  gl.finish() blocks until the GPU
+// drains its queue, exposing GPU-bound stalls that CPU timers never see.
+// Heavy when on — only turn on for diagnosis.
+// Master perf-instrumentation flag. When OFF, every per-frame measurement,
+// HUD-update, and lat/lon raycast is skipped — full game performance.
+// Press F to toggle.  G (GPU sync) and the lat/lon readout are gated under it.
+let _perfEnabled    = false;
+let _gpuSyncEnabled = false;
+let _vsyncEnabled   = true;
+function scheduleNext(): void {
+    if (_vsyncEnabled) requestAnimationFrame(animate);
+    else setTimeout(animate, 0);
+}
+
+window.addEventListener('keydown', e => {
+    if (e.key === 'f' || e.key === 'F') {
+        _perfEnabled = !_perfEnabled;
+        dragOrbit.setDebugVisible(_perfEnabled);
+        inputHandler.setCursorReadoutEnabled(_perfEnabled);
+        if (!_perfEnabled) {
+            _tCamera = _tRender = _tTiles = _tLogic = _tGpuSync = _tFrame = 0;
+            _frameMin = Infinity; _frameMax = 0;
+            _gpuSyncEnabled = false;
+        }
+        earthTiles.resetBakesPeak();
+    }
+    if (!_perfEnabled) return;
+    if (e.key === 'g' || e.key === 'G') {
+        _gpuSyncEnabled = !_gpuSyncEnabled;
+        if (!_gpuSyncEnabled) _tGpuSync = 0;
+        earthTiles.resetBakesPeak();
+    }
+    if (e.key === 'v' || e.key === 'V') {
+        _vsyncEnabled = !_vsyncEnabled;
+    }
+});
 function animate(): void {
-    requestAnimationFrame(animate);
+    scheduleNext();
 
     const now = performance.now();
-    const dt  = Math.min((now - lastTime) / 1000, 0.1);
+    const _dtMs = now - lastTime;
+    const dt  = Math.min(_dtMs / 1000, 0.1);
     lastTime  = now;
+
+    if (_perfEnabled) {
+        _tFrame = _tFrame * (1 - _EMA_A) + _dtMs * _EMA_A;
+        if (_dtMs < _frameMin) _frameMin = _dtMs;
+        if (_dtMs > _frameMax) _frameMax = _dtMs;
+        if (now - _frameWindowStart > 1000) {
+            _frameWindowStart = now;
+            _frameMin = _dtMs;
+            _frameMax = _dtMs;
+        }
+    }
 
     // Separate direction and radius so zoom-level transitions animate smoothly
     // and drag rotation never alters the orbital distance.
     // Direction: instant during drag (camera tracks cursor exactly), smooth otherwise.
     // Radius:    always lerps at 0.07 so clicking +/- zooms with a smooth fly-in.
-    const _t0 = performance.now();
+    const _t0 = _perfEnabled ? performance.now() : 0;
     _camDir.copy(camera.position).normalize();
     _targetDir.copy(zoom.targetPos).normalize();
     _camDir.lerp(_targetDir, dragOrbit.isDragging ? 1.0 : 0.07).normalize();
@@ -934,7 +1045,7 @@ function animate(): void {
     camera.updateProjectionMatrix();
     updateCameraUp();
     camera.lookAt(zoom.currentLook);
-    _tCamera = _tCamera * (1-_EMA_A) + (performance.now() - _t0) * _EMA_A;
+    if (_perfEnabled) _tCamera = _tCamera * (1-_EMA_A) + (performance.now() - _t0) * _EMA_A;
 
     const camPos = camera.position.clone();
     atmosphere.update(camPos, renderer);
@@ -943,7 +1054,7 @@ function animate(): void {
     // orbitalDebris.update(dt * timeScale, timeScale); // DISABLED
     scene.position.set(-camPos.x, -camPos.y, -camPos.z);
     camera.position.set(0, 0, 0);
-    const _t1 = performance.now();
+    const _t1 = _perfEnabled ? performance.now() : 0;
     renderer.render(scene, camera);
     // Render overlay (fullscreen-quad effects) without clearing
     renderer.autoClearDepth = false;
@@ -951,7 +1062,14 @@ function animate(): void {
     renderer.render(overlayScene, camera);
     renderer.autoClearDepth = true;
     renderer.autoClearColor = true;
-    _tRender = _tRender * (1-_EMA_A) + (performance.now() - _t1) * _EMA_A;
+    if (_perfEnabled) _tRender = _tRender * (1-_EMA_A) + (performance.now() - _t1) * _EMA_A;
+
+    // GPU-sync probe: wait for GPU to finish all queued work and measure stall.
+    if (_perfEnabled && _gpuSyncEnabled) {
+        const _tg = performance.now();
+        renderer.getContext().finish();
+        _tGpuSync = _tGpuSync * (1-_EMA_A) + (performance.now() - _tg) * _EMA_A;
+    }
 
 
     camera.position.copy(camPos);
@@ -961,74 +1079,135 @@ function animate(): void {
 
     dragOrbit.update();
     inputHandler.update();
+    inputHandler.refreshTooltip();
+    inputHandler.refreshAssignDialog();
     icon.update(camera);
-    const _t2 = performance.now();
+    const _t2 = _perfEnabled ? performance.now() : 0;
     earthTiles.update(camPos, camera);
-    _tTiles = _tTiles * (1-_EMA_A) + (performance.now() - _t2) * _EMA_A;
-    const _fov    = earthTiles.activeTileFovDeg;
-    const _fovStr = _fov < 10 ? _fov.toFixed(1) : Math.round(_fov).toString();
-    const _tiles  = earthTiles.visibleTileCount;
-    const _memStr = earthTiles.textureMemoryMB.toFixed(1);
-    dragOrbit.setTileInfo(`tile   z${earthTiles.activeLevel}  ${_fovStr}°\ntex    ${_tiles} tiles  ${_memStr} MB`);
+    if (_perfEnabled) {
+        _tTiles = _tTiles * (1-_EMA_A) + (performance.now() - _t2) * _EMA_A;
+        const _fov    = earthTiles.activeTileFovDeg;
+        const _fovStr = _fov < 10 ? _fov.toFixed(1) : Math.round(_fov).toString();
+        const _tiles  = earthTiles.visibleTileCount;
+        const _memStr = earthTiles.textureMemoryMB.toFixed(1);
+        const _bakes     = earthTiles.bakesPerFrame;
+        const _bakesPeak = earthTiles.bakesPeak;
+        dragOrbit.setTileInfo(
+            `tile   z${earthTiles.activeLevel}  ${_fovStr}°\n`
+          + `tex    ${_tiles} tiles  ${_memStr} MB\n`
+          + `bake   ${_bakes}/f (peak ${_bakesPeak})`,
+        );
+    }
     updateScaleBar();
 
-    const _t3 = performance.now();
+    const _t3 = _perfEnabled ? performance.now() : 0;
     // ── Transport tick ────────────────────────────────────────────────────────
     buildMenu.tick();
     techPanel.tick();
 
-    let inventoryDirty = false;
+    // Apply time multiplier to all game-state ticks. Sub-step so each truck
+    // advances at most ~1 sim-second per iteration; otherwise large timeScale
+    // produces coarse arcs and refineries miss queued batches.
+    const SIM_MAX_STEP = 1.0;
+    const gameDt = dt * timeScale;
+    const subSteps = Math.max(1, Math.ceil(gameDt / SIM_MAX_STEP));
+    const stepDt   = gameDt / subSteps;
+
+    // Auto-resume stopped trucks when both fuel and source are available again.
     for (const t of transports) {
-        const { pickup, fuelConsumed } = t.update(dt);
-        if (pickup) {
-            const gathered = t.sourceResource.gather(t.spec.payloadKg);
-            hud.update(t.sourceResource);
-            inventoryDirty = true;
-            if (!gathered) {
-                t.stopped = true;
-                log.info(`${t.spec.name}: source ${t.sourceResource.name} exhausted — stopping`);
-            }
-        }
-        if (fuelConsumed) {
-            const ok = t.fuelResource.consume(t.fuelKgPerRoundTrip);
-            hud.update(t.fuelResource);
-            inventoryDirty = true;
-            if (!ok) {
-                t.stopped = true;
-                log.info(`${t.spec.name}: out of ${t.fuelResource.name} — stopping`);
-            }
+        if (!t.stopped) continue;
+        const fuelOk   = t.fuelResource.gathered >= t.fuelKgPerRoundTrip;
+        const sourceOk = t.sourceResource.isManufactured || t.sourceResource.deposit > 0;
+        if (fuelOk && sourceOk) {
+            t.stopped   = false;
+            t.buildTime = Date.now();
+            t.setFromCyclePosition(0);
+            log.info(`${t.spec.name} #${t.id}: resuming`);
         }
     }
 
-    // ── Refinery tick ─────────────────────────────────────────────────────────
-    for (const ref of refineries) {
-        const { produced } = ref.tick(dt);
-        if (produced) {
-            hud.update(ref.providesResource!);
-            inventoryDirty = true;
+    let inventoryDirty = false;
+    for (let s = 0; s < subSteps; s++) {
+        for (const t of transports) {
+            const { pickup, fuelConsumed } = t.update(stepDt);
+            if (pickup) {
+                const gathered = t.sourceResource.gather(t.spec.payloadKg);
+                hud.update(t.sourceResource);
+                inventoryDirty = true;
+                if (!gathered) {
+                    t.stopped = true;
+                    t.parkAtHome();
+                    const msg = `${t.spec.name} #${t.id}: ${t.sourceResource.name} deposit exhausted`;
+                    log.info(msg);
+                    notify.show(msg, t.sourceResource.hex);
+                }
+            }
+            if (fuelConsumed) {
+                const ok = t.fuelResource.consume(t.fuelKgPerRoundTrip);
+                hud.update(t.fuelResource);
+                inventoryDirty = true;
+                if (!ok) {
+                    t.stopped = true;
+                    t.parkAtHome();
+                    const msg = `${t.spec.name} #${t.id}: out of ${t.fuelResource.name}`;
+                    log.info(msg);
+                    notify.show(msg, t.fuelResource.hex);
+                }
+            }
         }
-    }
 
-    // ── Power plant tick ──────────────────────────────────────────────────────
-    for (const pp of powerPlants) {
-        const { produced } = pp.tick(dt);
-        if (produced) {
-            hud.update(pp.providesResource);
-            hud.update(pp.fuelResource);
-            inventoryDirty = true;
+        // ── Refinery tick ─────────────────────────────────────────────────────
+        for (const ref of refineries) {
+            const { produced } = ref.tick(stepDt);
+            if (produced) {
+                hud.update(ref.providesResource!);
+                inventoryDirty = true;
+            }
+        }
+
+        // ── Power plant tick ──────────────────────────────────────────────────
+        for (const pp of powerPlants) {
+            const { produced } = pp.tick(stepDt);
+            if (produced) {
+                hud.update(pp.providesResource);
+                hud.update(pp.fuelResource);
+                inventoryDirty = true;
+            }
+        }
+
+        // ── Oil well auto-extraction ──────────────────────────────────────────
+        for (const well of oilWells) {
+            const { produced } = well.tick(stepDt);
+            if (produced) {
+                hud.update(well.providesResource);
+                inventoryDirty = true;
+            }
         }
     }
 
     if (inventoryDirty) save();
-    _tLogic = _tLogic * (1-_EMA_A) + (performance.now() - _t3) * _EMA_A;
 
-    // ── Perf readout ─────────────────────────────────────────────────────────
-    dragOrbit.setPerfInfo(
-        `cam    ${_tCamera.toFixed(1)} ms\n`
-      + `render ${_tRender.toFixed(1)} ms\n`
-      + `tiles  ${_tTiles.toFixed(1)} ms\n`
-      + `logic  ${_tLogic.toFixed(1)} ms`
-    );
+    if (_perfEnabled) {
+        _tLogic = _tLogic * (1-_EMA_A) + (performance.now() - _t3) * _EMA_A;
+        const _gpuLine = _gpuSyncEnabled
+            ? `\ngpu*   ${_tGpuSync.toFixed(1)} ms  (G to disable)`
+            : `\ngpu    off  (G to probe)`;
+        const _busy = _tCamera + _tRender + _tTiles + _tLogic + (_gpuSyncEnabled ? _tGpuSync : 0);
+        const _idle = Math.max(0, _tFrame - _busy);
+        dragOrbit.setPerfInfo(
+            `cam    ${_tCamera.toFixed(1)} ms\n`
+          + `render ${_tRender.toFixed(1)} ms\n`
+          + `tiles  ${_tTiles.toFixed(1)} ms\n`
+          + `logic  ${_tLogic.toFixed(1)} ms`
+          + _gpuLine
+          + `\nframe  ${_tFrame.toFixed(1)} ms  [${_frameMin.toFixed(1)}–${_frameMax.toFixed(1)}]`
+          + `\nidle   ${_idle.toFixed(1)} ms  (vsync wait)`
+          + `\nvsync  ${_vsyncEnabled ? 'on' : 'OFF'}  (V to toggle)`
+        );
+
+        // ── Truck debug stats ────────────────────────────────────────────
+        dragOrbit.setTruckInfo(buildTruckDebugInfo(transports, structures));
+    }
 
     if (++frameCount === 1) log.info('First frame rendered');
 }

@@ -7,22 +7,24 @@ import { OilWell, OilWellSave } from './oilWell';
 import { PowerPlant, PowerPlantSave } from './powerPlant';
 import { TechTree } from './tech';
 
-const SAVE_KEY   = 'gather_save_v6';
+const SAVE_KEY   = 'gather_save_v7';
+const V6_KEY     = 'gather_save_v6';
 const V5_KEY     = 'gather_save_v5';
 const V4_KEY     = 'gather_save_v4';
 const V3_KEY     = 'gather_save_v3';
 const V2_KEY     = 'gather_save_v2';
 const LEGACY_KEY = 'gather_inventory_v1';
 
-const ALL_KEYS = [SAVE_KEY, V5_KEY, V4_KEY, V3_KEY, V2_KEY, LEGACY_KEY];
+const ALL_KEYS = [SAVE_KEY, V6_KEY, V5_KEY, V4_KEY, V3_KEY, V2_KEY, LEGACY_KEY];
 
 export function clearSave(): void {
     for (const key of ALL_KEYS) localStorage.removeItem(key);
 }
 
 interface GameSave {
-    version:     6;
+    version:     7;
     inventory:   Record<string, number>;
+    deposits:    Record<string, number>;
     camera:      ZoomSave;
     transports:  TransportSave[];
     refineries:  RefinerySave[];
@@ -41,8 +43,9 @@ export function saveGame(
     techTree:    TechTree,
 ): void {
     const data: GameSave = {
-        version:     6,
+        version:     7,
         inventory:   Object.fromEntries(resources.map(r => [r.name, r.gathered])),
+        deposits:    Object.fromEntries(resources.filter(r => !r.isManufactured).map(r => [r.name, r.deposit])),
         camera:      zoom.toJSON(),
         transports:  transports.map(t => t.toJSON()),
         refineries:  refineries.map(r => r.toJSON()),
@@ -61,11 +64,26 @@ export function loadGame(
     techTree:   TechTree,
 ): { transports: Transport[]; refineries: Refinery[]; oilWells: OilWell[]; powerPlants: PowerPlant[] } {
     try {
-        // v6 save
-        const raw6 = localStorage.getItem(SAVE_KEY);
+        // v7 save (adds deposits)
+        const raw7 = localStorage.getItem(SAVE_KEY);
+        if (raw7) {
+            const data = JSON.parse(raw7) as Partial<GameSave>;
+            if (data.version === 7) return _applyV7(data as GameSave, zoom, resources, scene, homeNormal, techTree);
+        }
+        // v6 save (no deposits — leave at full)
+        const raw6 = localStorage.getItem(V6_KEY);
         if (raw6) {
-            const data = JSON.parse(raw6) as Partial<GameSave>;
-            if (data.version === 6) return _applyV6(data as GameSave, zoom, resources, scene, homeNormal, techTree);
+            const data = JSON.parse(raw6) as { version?: number; inventory?: Record<string, number>; camera?: ZoomSave; transports?: TransportSave[]; refineries?: RefinerySave[]; oilWells?: OilWellSave[]; powerPlants?: PowerPlantSave[]; techs?: string[] };
+            if (data.version === 6) {
+                _applyInventory(data.inventory ?? {}, resources);
+                for (const id of (data.techs ?? [])) techTree.research(id);
+                return {
+                    transports:  _loadTransports(data.transports ?? [], scene, resources, homeNormal),
+                    refineries:  (data.refineries  ?? []).map(rs => Refinery.fromJSON(rs, scene, resources)),
+                    oilWells:    (data.oilWells    ?? []).map(ws => OilWell.fromJSON(ws, scene, resources)),
+                    powerPlants: (data.powerPlants ?? []).map(ps => PowerPlant.fromJSON(ps, scene, resources)),
+                };
+            }
         }
         // v5 save (no techs)
         const raw5 = localStorage.getItem(V5_KEY);
@@ -124,14 +142,15 @@ export function loadGame(
             _applyInventory(JSON.parse(legacy) as Record<string, number>, resources);
         }
     } catch { /* ignore malformed save */ }
-    // No save found — seed one starter tap of each base resource.
+    // No save / cleared data: inventory zero, deposits full, no trucks.
     for (const r of resources) {
-        if (!r.isManufactured && r.gatherAmount > 0) r.gathered = r.gatherAmount;
+        r.gathered = 0;
+        r.deposit  = r.depositInitial;
     }
     return { transports: [], refineries: [], oilWells: [], powerPlants: [] };
 }
 
-function _applyV6(
+function _applyV7(
     data:       GameSave,
     zoom:       ZoomController,
     resources:  Resource[],
@@ -140,6 +159,7 @@ function _applyV6(
     techTree:   TechTree,
 ): { transports: Transport[]; refineries: Refinery[]; oilWells: OilWell[]; powerPlants: PowerPlant[] } {
     _applyInventory(data.inventory ?? {}, resources);
+    _applyDeposits(data.deposits ?? {}, resources);
 
     for (const id of (data.techs ?? [])) techTree.research(id);
     const transports  = _loadTransports(data.transports ?? [], scene, resources, homeNormal);
@@ -152,9 +172,15 @@ function _applyV6(
 function _applyInventory(inv: Record<string, number>, resources: Resource[]): void {
     for (const r of resources) {
         const v = inv[r.name];
-        if (typeof v === 'number') {
-            r.gathered = r.isManufactured ? v : Math.min(v, r.total);
-        }
+        if (typeof v === 'number') r.gathered = v;
+    }
+}
+
+function _applyDeposits(dep: Record<string, number>, resources: Resource[]): void {
+    for (const r of resources) {
+        if (r.isManufactured) continue;
+        const v = dep[r.name];
+        if (typeof v === 'number') r.deposit = v;
     }
 }
 

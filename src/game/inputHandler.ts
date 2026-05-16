@@ -1,10 +1,12 @@
 import {
-    Raycaster, Vector2, Vector3, PerspectiveCamera, Mesh, Scene,
-    MeshStandardMaterial, Sphere,
+    Raycaster, Vector2, Vector3, PerspectiveCamera, Mesh, Scene, Sphere,
+    EdgesGeometry, LineSegments, LineBasicMaterial, LineDashedMaterial,
+    Line, BufferGeometry, Float32BufferAttribute,
+    Material, MeshBasicMaterial, DoubleSide,
 } from 'three';
-import { R, SURFACE_RISE } from './constants';
-import { Resource } from './resource';
-import { Transport, resolveSourceNormal } from './transport';
+import { R, SURFACE_RISE, SAME_NORMAL_DOT } from './constants';
+import { Resource, formatScaled } from './resource';
+import { Transport, TruckTransport, resolveSourceNormal } from './transport';
 import { Structure } from './structure';
 import { Homebase } from './homebase';
 import { ResourceNode } from './resourceNode';
@@ -12,7 +14,8 @@ import { Refinery } from './refinery';
 import { OilWell } from './oilWell';
 import { PowerPlant } from './powerPlant';
 import { HUD } from './hud';
-import { Flash } from './flash';
+import { Flash, splitTwoLines } from './flash';
+import { Tooltip, buildTooltipBody, TooltipRow } from './tooltip';
 
 const TAP_SLOP_PX = 10;
 
@@ -28,12 +31,28 @@ export class InputHandler {
     private lastCursorX  = 0;
     private lastCursorY  = 0;
     private selectedMesh:   Mesh | null = null;
-    private savedSelColor:  number | null = null;
+    private outlineLines:   LineSegments | null = null;
+    private pathLine:       Line | null = null;
 
     private placementGhost:    Mesh | null = null;
     private placementRise      = 0;
     private placementCallback: ((normal: Vector3) => void) | null = null;
+    private placementValidator: ((normal: Vector3) => boolean) | null = null;
+    private placementOriginalMaterial: Material | Material[] | null = null;
+    private placementInvalidMaterial:  Material | null = null;
+    private placementValid     = true;
+    private placementInvalidMessage = '';
+    private notifyCallback: ((msg: string) => void) | null = null;
     private placementBanner:   HTMLElement;
+
+    private tooltip:           Tooltip;
+    private tooltipRafPending  = false;
+
+    // Cursor lat/lon readout (rendered by debug HUD owner via setCursorInfo)
+    private cursorLat: number | null = null;
+    private cursorLon: number | null = null;
+    private setCursorInfo: (text: string) => void = () => {};
+    private _cursorReadoutEnabled = false;
 
     private structures: Structure[] = [];
 
@@ -57,6 +76,7 @@ export class InputHandler {
     private truckTarget:      Transport | null = null;
 
     private saveCallback: () => void = () => {};
+    private buildTruckCallback: ((destNormal: Vector3, destName: string, resource: Resource) => boolean) | null = null;
 
     constructor(
         private camera:     PerspectiveCamera,
@@ -70,9 +90,14 @@ export class InputHandler {
         private showInfo:   (lines: string[]) => void = () => {},
     ) {
         this.placementBanner = this._makePlacementBanner();
+        this.tooltip         = new Tooltip();
 
         this.assignOverlay  = this._makeAssignOverlay();
         this.truckOverlay   = this._makeTruckReassignOverlay();
+
+        window.addEventListener('keydown', e => {
+            if (e.key === 'p' || e.key === 'P') this._copyCursorLatLon();
+        });
 
         canvas.addEventListener('touchstart', e => {
             this.touchStartX = e.touches[0].clientX;
@@ -95,9 +120,12 @@ export class InputHandler {
             }
         }, { passive: true });
 
-        canvas.addEventListener('mousemove', e => {
+        // Track cursor on window so coords stay fresh even when pointer is over
+        // overlay DOM (homebase icon, debug HUD, time controls, etc.).
+        window.addEventListener('mousemove', e => {
             this.lastCursorX = e.clientX;
             this.lastCursorY = e.clientY;
+            this._scheduleTooltipUpdate(e.target as Element | null);
         });
 
         canvas.addEventListener('click', e => this.onTap(e.clientX, e.clientY));
@@ -105,15 +133,41 @@ export class InputHandler {
 
     setStructures(structures: Structure[]): void { this.structures = structures; }
     setSaveCallback(fn: () => void): void { this.saveCallback = fn; }
+    setBuildTruckCallback(fn: (destNormal: Vector3, destName: string, resource: Resource) => boolean): void {
+        this.buildTruckCallback = fn;
+    }
     setDeleteCallback(fn: (s: Structure) => void): void { this.deleteCallback = fn; }
 
     // ── Placement mode ────────────────────────────────────────────────────────
 
-    startPlacement(ghost: Mesh, rise: number, callback: (normal: Vector3) => void): void {
+    setNotifyCallback(fn: (msg: string) => void): void { this.notifyCallback = fn; }
+
+    startPlacement(
+        ghost: Mesh,
+        rise: number,
+        callback: (normal: Vector3) => void,
+        validator?: (normal: Vector3) => boolean,
+        invalidMessage = '',
+    ): void {
         if (this.placementGhost) this._endPlacement();
         this.placementGhost    = ghost;
         this.placementRise     = rise;
         this.placementCallback = callback;
+        this.placementValidator = validator ?? null;
+        this.placementInvalidMessage = invalidMessage;
+        this.placementOriginalMaterial = ghost.material as Material | Material[];
+        // Red translucent material — same geometry, just tinted red at 50% opacity.
+        // Use MeshStandardMaterial so lighting matches the original ghost.
+        // Unlit so the red color isn't attenuated by scene lighting.
+        // DoubleSide + renderOrder so the translucent box draws over the Earth.
+        this.placementInvalidMaterial = new MeshBasicMaterial({
+            color: 0xff2222,
+            transparent: true,
+            opacity: 0.25,
+            side: DoubleSide,
+            depthWrite: false,
+        });
+        this.placementValid = true;
         this.scene.add(ghost);
         this.placementBanner.style.display = 'flex';
     }
@@ -121,29 +175,218 @@ export class InputHandler {
     cancelPlacement(): void { this._endPlacement(); }
 
     private _endPlacement(): void {
+        if (this.placementGhost && this.placementOriginalMaterial) {
+            this.placementGhost.material = this.placementOriginalMaterial;
+        }
+        if (this.placementInvalidMaterial) {
+            this.placementInvalidMaterial.dispose();
+            this.placementInvalidMaterial = null;
+        }
         if (this.placementGhost) {
             this.scene.remove(this.placementGhost);
             this.placementGhost = null;
         }
-        this.placementCallback = null;
+        this.placementCallback         = null;
+        this.placementValidator        = null;
+        this.placementOriginalMaterial = null;
+        this.placementValid            = true;
         this.placementBanner.style.display = 'none';
     }
 
     // ── Per-frame update ──────────────────────────────────────────────────────
 
     update(): void {
-        if (this.placementGhost) {
-            const normal = this._getEarthNormal(this.lastCursorX, this.lastCursorY);
-            if (normal) {
-                this.placementGhost.position.copy(
-                    normal.clone().multiplyScalar(R + this.placementRise),
-                );
-                this.placementGhost.quaternion.setFromUnitVectors(_UP, normal);
+        // Cheap path: when neither placement nor cursor readout is active, skip
+        // the raycast and trig entirely. Keeps overhead at zero in normal play.
+        if (!this.placementGhost && !this._cursorReadoutEnabled) return;
+
+        const normal = this._getEarthNormal(this.lastCursorX, this.lastCursorY);
+
+        if (this.placementGhost && normal) {
+            this.placementGhost.position.copy(
+                normal.clone().multiplyScalar(R + this.placementRise),
+            );
+            this.placementGhost.quaternion.setFromUnitVectors(_UP, normal);
+
+            // Validator: tint red+translucent if placement invalid.
+            const valid = this.placementValidator ? this.placementValidator(normal) : true;
+            if (valid !== this.placementValid) {
+                this.placementValid = valid;
+                this.placementGhost.material = valid
+                    ? this.placementOriginalMaterial!
+                    : this.placementInvalidMaterial!;
+                // Draw invalid ghost after opaque scene so the translucent red shows up.
+                this.placementGhost.renderOrder = valid ? 0 : 10;
             }
+        }
+
+        if (!this._cursorReadoutEnabled) return;
+
+        if (normal) {
+            // Invert the lat/lon → unit-normal mapping from world.ts:
+            //   X = cos(lat)·cos(lon), Y = sin(lat), Z = -cos(lat)·sin(lon)
+            this.cursorLat = Math.asin(Math.max(-1, Math.min(1, normal.y))) * 180 / Math.PI;
+            this.cursorLon = Math.atan2(-normal.z, normal.x) * 180 / Math.PI;
+            this.setCursorInfo(
+                `cursor ${this.cursorLat.toFixed(4)}, ${this.cursorLon.toFixed(4)} (P)`,
+            );
+        } else {
+            this.cursorLat = null;
+            this.cursorLon = null;
+            this.setCursorInfo('');
+        }
+    }
+
+    setCursorInfoCallback(fn: (text: string) => void): void { this.setCursorInfo = fn; }
+    setCursorReadoutEnabled(enabled: boolean): void {
+        this._cursorReadoutEnabled = enabled;
+        if (!enabled) { this.setCursorInfo(''); this.cursorLat = null; this.cursorLon = null; }
+    }
+
+    private _copyCursorLatLon(): void {
+        // Recompute from latest cursor — don't rely on per-frame cache, in case
+        // update() hasn't ticked since the last mousemove.
+        const normal = this._getEarthNormal(this.lastCursorX, this.lastCursorY);
+        if (!normal) return;
+        this.cursorLat = Math.asin(Math.max(-1, Math.min(1, normal.y))) * 180 / Math.PI;
+        this.cursorLon = Math.atan2(-normal.z, normal.x) * 180 / Math.PI;
+        const text = `${this.cursorLat.toFixed(6)}, ${this.cursorLon.toFixed(6)}`;
+        const flash = (msg: string) => {
+            this.setCursorInfo(msg);
+            setTimeout(() => {
+                if (this.cursorLat !== null && this.cursorLon !== null) {
+                    this.setCursorInfo(
+                        `cursor ${this.cursorLat.toFixed(4)}, ${this.cursorLon.toFixed(4)} (P)`,
+                    );
+                }
+            }, 900);
+        };
+        if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(text)
+                .then(() => { flash(`copied ${text}`); alert(`Copied to clipboard:\n${text}`); })
+                .catch(() => { flash(`copy fail ${text}`); alert(`Copy failed:\n${text}`); });
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch { /* ignore */ }
+            document.body.removeChild(ta);
+            if (ok) { flash(`copied ${text}`); alert(`Copied to clipboard:\n${text}`); }
+            else    { flash(`copy fail ${text}`); alert(`Copy failed:\n${text}`); }
         }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    // ── Hover tooltip ─────────────────────────────────────────────────────────
+
+    private _scheduleTooltipUpdate(target: Element | null): void {
+        // Skip raycast while a UI overlay is interacting (pointer over button/dialog).
+        // The canvas underlies overlays — bail when cursor is not on canvas/body.
+        const onCanvas = !target || target === document.body || (target as HTMLElement).tagName === 'CANVAS';
+        if (!onCanvas) { this.tooltip.hide(); return; }
+        if (this.placementGhost) { this.tooltip.hide(); return; }
+        if (this.tooltipRafPending) return;
+        this.tooltipRafPending = true;
+        requestAnimationFrame(() => {
+            this.tooltipRafPending = false;
+            this._updateTooltip(this.lastCursorX, this.lastCursorY);
+        });
+    }
+
+    // Re-run tooltip content build without moving the cursor — call when underlying
+    // data (inventory / deposit) changes so visible values stay live.
+    refreshTooltip(): void {
+        if (!this.tooltip.isVisible) return;
+        this._updateTooltip(this.lastCursorX, this.lastCursorY);
+    }
+
+    private _lastAssignDigest = '';
+
+    // Re-render assign dialog buttons so iron-cost / source-state badges stay live.
+    // Only fires when underlying state actually changed — preserves hover tooltips.
+    refreshAssignDialog(): void {
+        if (this.assignOverlay.style.display !== 'flex') return;
+        const iron = this.resources.find(r => r.name === 'Iron');
+        const ironHave = iron ? iron.gathered : 0;
+        const idleCount = this.transports.filter(t => t.stopped).length;
+        const depBits = this.assignResources.map(r => {
+            const has = this.structures.some(s => {
+                const role = s.getResourceRole(r); return role === 'output' || role === 'both';
+            }) ? 1 : 0;
+            const assigned = this.assignStructure
+                ? this.transports.filter(t =>
+                    t.sourceResource === r &&
+                    t.destinationNormal.dot(this.assignStructure!.surfaceNormal) > SAME_NORMAL_DOT,
+                ).length
+                : 0;
+            return `${r.name}:${r.deposit | 0}:${has}:${assigned}`;
+        }).join('|');
+        const digest = `${ironHave | 0}|${idleCount}|${depBits}`;
+        if (digest === this._lastAssignDigest) return;
+        this._lastAssignDigest = digest;
+        this._refreshAssignResPicker();
+        this._refreshAssignList();
+    }
+
+    private _updateTooltip(cx: number, cy: number): void {
+        if (!this.structures.length) { this.tooltip.hide(); return; }
+        this.pointer.set(
+            (cx / window.innerWidth)  *  2 - 1,
+            (cy / window.innerHeight) * -2 + 1,
+        );
+        this.raycaster.setFromCamera(this.pointer, this.camera);
+        const hits = this.raycaster.intersectObjects(
+            this.structures.map(s => s.hitMesh),
+        );
+        if (!hits.length) { this.tooltip.hide(); return; }
+        const s = hits[0].object.userData['structure'] as Structure | undefined;
+        if (!s) { this.tooltip.hide(); return; }
+        const body = buildTooltipBody(s.label, this._typeOf(s), this._inventoryRows(s));
+        this.tooltip.setContent(body);
+        this.tooltip.show(cx, cy);
+    }
+
+    private _typeOf(s: Structure): string {
+        if (s instanceof Homebase)     return 'Homebase';
+        if (s instanceof ResourceNode) return 'Resource Deposit';
+        if (s instanceof Refinery)     return 'Refinery';
+        if (s instanceof OilWell)      return 'Oil Well';
+        if (s instanceof PowerPlant)   return 'Power Plant';
+        return 'Structure';
+    }
+
+    private _inventoryRows(s: Structure): TooltipRow[] {
+        const row = (r: Resource): TooltipRow => ({
+            label:  r.name,
+            value:  r.displayAmount,
+            swatch: r.hex,
+        });
+        const depositRow = (r: Resource): TooltipRow => ({
+            label:  r.name,
+            value:  `${formatScaled(r.deposit, r.unit)} remaining`,
+            swatch: r.hex,
+        });
+        if (s instanceof Homebase) {
+            return this.resources.map(row);
+        }
+        if (s instanceof ResourceNode || s instanceof OilWell) {
+            return [depositRow(s.providesResource!)];
+        }
+        if (s instanceof Refinery) {
+            const rows = s.inputResources.map(row);
+            if (s.providesResource) rows.push(row(s.providesResource));
+            return rows;
+        }
+        if (s instanceof PowerPlant) {
+            return [row(s.fuelResource), row(s.providesResource)];
+        }
+        return [];
+    }
 
     private _getEarthNormal(cx: number, cy: number): Vector3 | null {
         this.pointer.set(
@@ -156,17 +399,71 @@ export class InputHandler {
         return hit.normalize();
     }
 
-    private _select(mesh: Mesh | null): void {
-        if (this.selectedMesh && this.savedSelColor !== null) {
-            (this.selectedMesh.material as MeshStandardMaterial).color.setHex(this.savedSelColor);
+    private _select(mesh: Mesh | null, transport?: Transport): void {
+        // Clear prior outline + path
+        if (this.outlineLines) {
+            this.outlineLines.parent?.remove(this.outlineLines);
+            this.outlineLines.geometry.dispose();
+            (this.outlineLines.material as LineBasicMaterial).dispose();
+            this.outlineLines = null;
+        }
+        if (this.pathLine) {
+            this.pathLine.parent?.remove(this.pathLine);
+            this.pathLine.geometry.dispose();
+            (this.pathLine.material as LineDashedMaterial).dispose();
+            this.pathLine = null;
         }
         this.selectedMesh = mesh;
-        this.savedSelColor = null;
         if (!mesh) return;
 
-        const mat = mesh.material as MeshStandardMaterial;
-        this.savedSelColor = mat.color.getHex();
-        mat.color.setHex(0xffffff);
+        const edges = new EdgesGeometry(mesh.geometry as BufferGeometry);
+        const outline = new LineSegments(edges, new LineBasicMaterial({
+            color: 0xff2222, depthTest: false, transparent: true,
+        }));
+        outline.renderOrder = 999;
+        mesh.add(outline);
+        this.outlineLines = outline;
+
+        if (transport) {
+            this.pathLine = this._buildTruckPath(transport);
+            this.scene.add(this.pathLine);
+        }
+    }
+
+    private _buildTruckPath(t: Transport): Line {
+        const a = t.srcNormal.clone().normalize();
+        const b = t.destinationNormal.clone().normalize();
+        const theta  = Math.acos(Math.min(1, Math.max(-1, a.dot(b))));
+        const radius = R + SURFACE_RISE + 5;
+        const N = 64;
+        const pts: number[] = [];
+        for (let i = 0; i <= N; i++) {
+            const u = i / N;
+            let p: Vector3;
+            if (theta < 1e-6) {
+                p = a.clone().lerp(b, u);
+            } else {
+                const w1 = Math.sin((1 - u) * theta) / Math.sin(theta);
+                const w2 = Math.sin(u * theta)       / Math.sin(theta);
+                p = a.clone().multiplyScalar(w1).addScaledVector(b, w2);
+            }
+            p.normalize().multiplyScalar(radius);
+            pts.push(p.x, p.y, p.z);
+        }
+        const geom = new BufferGeometry();
+        geom.setAttribute('position', new Float32BufferAttribute(pts, 3));
+        const arcLen  = Math.max(theta * R, 1);
+        const dashLen = arcLen / 40;
+        const line = new Line(geom, new LineDashedMaterial({
+            color:    0xffffff,
+            dashSize: dashLen,
+            gapSize:  dashLen,
+            depthTest:   false,
+            transparent: true,
+        }));
+        line.computeLineDistances();
+        line.renderOrder = 998;
+        return line;
     }
 
     private _truckCountFor(structure: Structure): number {
@@ -175,12 +472,12 @@ export class InputHandler {
             return this.transports.filter(t => !t.stopped).length;
         }
         if (structure instanceof Refinery || structure instanceof PowerPlant) {
-            return this.transports.filter(t => t.destinationNormal.dot(n) > 0.9999).length;
+            return this.transports.filter(t => t.destinationNormal.dot(n) > SAME_NORMAL_DOT).length;
         }
         // ResourceNode / OilWell — count trucks routing to this specific node
         return this.transports.filter(
             t => t.sourceResource === structure.providesResource &&
-                 t.srcNormal.dot(n) > 0.9999,
+                 t.srcNormal.dot(n) > SAME_NORMAL_DOT,
         ).length;
     }
 
@@ -188,6 +485,17 @@ export class InputHandler {
         if (this.placementCallback) {
             const normal = this._getEarthNormal(cx, cy);
             if (normal) {
+                if (this.placementValidator && !this.placementValidator(normal)) {
+                    if (this.placementInvalidMessage && this.placementGhost) {
+                        const v = new Vector3();
+                        this.placementGhost.getWorldPosition(v);
+                        v.project(this.camera);
+                        const sx = (v.x + 1) / 2 * window.innerWidth;
+                        const sy = (1 - v.y) / 2 * window.innerHeight;
+                        this.flash.show(splitTwoLines(this.placementInvalidMessage), '#ff5555', sx, sy, 5000);
+                    }
+                    return;
+                }
                 const cb = this.placementCallback;
                 this._endPlacement();
                 cb(normal);
@@ -216,6 +524,7 @@ export class InputHandler {
                     this.hud.showHomebase();
                     this._openAssignDialog('Homebase – Assign Transport',
                         this.resources.filter(r => r.hitMesh !== null),
+                        structure,
                     );
                 } else if (structure instanceof ResourceNode) {
                     const res = structure.providesResource!;
@@ -227,7 +536,7 @@ export class InputHandler {
                             res.mesh.scale.set(1.15, 2.0, 1.15);
                             setTimeout(() => res.mesh!.scale.set(1, 1, 1), 130);
                         }
-                        this.flash.show(`+${res.gatherAmount} kg ${res.name}`, res.hex, cx, cy);
+                        this.flash.show(`+${formatScaled(res.gatherAmount, 'kg')} ${res.name}`, res.hex, cx, cy);
                     }
                 } else if (structure instanceof Refinery) {
                     const inputNames = structure.inputResources.map(r => r.name);
@@ -263,7 +572,7 @@ export class InputHandler {
         );
         if (truckHits.length) {
             const transport = truckHits[0].object.userData['transport'] as Transport;
-            this._select(transport.mesh);
+            this._select(transport.mesh, transport);
             this.hud.showHomebase();
             this.showInfo(transport.getStatsLines());
             this._openTruckReassign(transport);
@@ -295,6 +604,7 @@ export class InputHandler {
         this.assignOverlay.style.display = 'none';
         this.assignSelected.clear();
         this.assignStructure = null;
+        this._lastAssignDigest = '';
     }
 
     private _refreshAssignList(): void {
@@ -358,14 +668,20 @@ export class InputHandler {
         label.textContent = 'Collect resource';
         this.assignResPicker.appendChild(label);
 
+        const iron = this.resources.find(r => r.name === 'Iron');
+        const canAffordTruck = !!iron && iron.gathered >= TruckTransport.IRON_COST;
+
         for (const res of this.assignResources) {
+            const row = document.createElement('div');
+            Object.assign(row.style, { display: 'flex', gap: '4px', marginBottom: '4px' });
+
             const btn = document.createElement('button');
             Object.assign(btn.style, {
                 display: 'flex', alignItems: 'center', gap: '8px',
-                padding: '8px 10px', marginBottom: '4px',
+                padding: '8px 10px',
                 background: 'rgba(255,255,255,0.04)',
                 border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: '8px', cursor: 'pointer', width: '100%',
+                borderRadius: '8px', cursor: 'pointer', flex: '1',
                 color: '#ddd', fontFamily: '-apple-system, sans-serif',
                 fontSize: '13px',
             });
@@ -376,18 +692,50 @@ export class InputHandler {
             });
             const name = document.createElement('span');
             name.textContent = res.name;
+            Object.assign(name.style, { flex: '1' });
             btn.append(swatch, name);
-            // Enable only if some structure can OUTPUT this resource
+
+            // Truck count: trucks currently routed to deliver this resource to assignStructure.
+            const assignedCount = this.assignStructure
+                ? this.transports.filter(t =>
+                    t.sourceResource === res &&
+                    t.destinationNormal.dot(this.assignStructure!.surfaceNormal) > SAME_NORMAL_DOT,
+                ).length
+                : 0;
+            if (assignedCount > 0) {
+                const badge = document.createElement('span');
+                badge.textContent = `${assignedCount} 🚚`;
+                Object.assign(badge.style, {
+                    fontSize: '11px', color: '#aaa',
+                    background: 'rgba(255,255,255,0.08)',
+                    borderRadius: '6px', padding: '2px 6px',
+                });
+                btn.append(badge);
+            }
+
             const hasProvider = this.structures.some(s => {
                 const role = s.getResourceRole(res);
                 return role === 'output' || role === 'both';
             });
-            btn.disabled      = !hasProvider;
-            btn.style.opacity = hasProvider ? '1' : '0.4';
+            // Natural resources (single global deposit) — flag depleted.
+            const depleted = hasProvider && !res.isManufactured && res.deposit <= 0;
+            const noSource = !hasProvider || depleted;
+
+            btn.disabled      = noSource;
+            btn.style.opacity = noSource ? '0.45' : '1';
+            if (noSource) {
+                btn.style.border  = '1px solid rgba(255,80,80,0.65)';
+                btn.style.color   = '#ff7676';
+                btn.style.background = 'rgba(255,80,80,0.10)';
+                btn.title = !hasProvider ? 'No source available' : 'Deposit depleted';
+                const warn = document.createElement('span');
+                warn.textContent = !hasProvider ? '⚠ no source' : '⚠ depleted';
+                Object.assign(warn.style, { marginLeft: 'auto', fontSize: '11px', color: '#ff7676' });
+                btn.appendChild(warn);
+            }
             btn.addEventListener('click', () => {
                 for (const t of this.assignSelected) {
                     if (this.assignStructure instanceof PowerPlant) {
-                        // Route trucks physically to the power plant as delivery destination
                         t.reassignRoute(
                             this.assignStructure.surfaceNormal,
                             'Power Plant',
@@ -401,7 +749,51 @@ export class InputHandler {
                 this._closeAssignDialog();
                 this.saveCallback();
             });
-            this.assignResPicker.appendChild(btn);
+            row.appendChild(btn);
+
+            // "+ Truck" — build a new truck for this resource, dest = tapped structure.
+            const buildBtn = document.createElement('button');
+            const buildOk  = !noSource && canAffordTruck && !!this.assignStructure;
+            Object.assign(buildBtn.style, {
+                padding: '8px 10px',
+                background: 'rgba(143,188,143,0.10)',
+                border: '1px solid rgba(143,188,143,0.4)',
+                borderRadius: '8px', cursor: 'pointer',
+                color: '#8fbc8f', fontFamily: '-apple-system, sans-serif',
+                fontSize: '12px', whiteSpace: 'nowrap',
+                pointerEvents: 'auto',  // ensure hover/title fires even when disabled
+            });
+            const costLabel = formatScaled(TruckTransport.IRON_COST, 'kg');
+            const ironHave  = iron ? iron.gathered : 0;
+            let reason = '';
+            let shortReason = '';
+            if (!this.assignStructure)            { reason = 'No destination structure';                                             shortReason = 'No dest'; }
+            else if (!hasProvider)                { reason = `No structure produces ${res.name}`;                                    shortReason = 'No source'; }
+            else if (depleted)                    { reason = `${res.name} deposit depleted`;                                         shortReason = 'Depleted'; }
+            else if (!canAffordTruck)             { reason = `Need ${costLabel} Iron (have ${formatScaled(ironHave, 'kg')})`;        shortReason = `Need ${costLabel}`; }
+            buildBtn.textContent      = buildOk ? '+ Truck' : shortReason;
+            buildBtn.title            = buildOk
+                ? `Build new truck (cost ${costLabel} Iron) → ${this.assignStructure?.label ?? ''}`
+                : reason;
+            buildBtn.disabled         = !buildOk;
+            buildBtn.style.opacity    = buildOk ? '1' : '0.55';
+            buildBtn.style.color      = buildOk ? '#8fbc8f' : '#ff7676';
+            buildBtn.style.borderColor = buildOk ? 'rgba(143,188,143,0.4)' : 'rgba(255,80,80,0.5)';
+            buildBtn.addEventListener('click', () => {
+                if (!this.assignStructure || !this.buildTruckCallback) return;
+                const destNormal = this.assignStructure.surfaceNormal;
+                const destName   = this.assignStructure instanceof PowerPlant
+                    ? 'Power Plant'
+                    : this.assignStructure.label;
+                const built = this.buildTruckCallback(destNormal, destName, res);
+                if (built) {
+                    this._closeAssignDialog();
+                    this.saveCallback();
+                }
+            });
+            row.appendChild(buildBtn);
+
+            this.assignResPicker.appendChild(row);
         }
     }
 

@@ -95,7 +95,7 @@ export class PowerPlant extends Structure {
         this.timer -= BATCH_SECONDS;
         if (this.fuelResource.gathered < BATCH_KG_FUEL) return { produced: false };
         this.fuelResource.consume(BATCH_KG_FUEL);
-        this.providesResource.deposit(this.kwhPerBatch);
+        this.providesResource.produce(this.kwhPerBatch);
         return { produced: true };
     }
 

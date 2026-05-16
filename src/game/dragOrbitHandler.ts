@@ -63,6 +63,9 @@ export class DragOrbitHandler {
     private tapInfo:      string[] = [];
     private tileInfo = '';
     private perfInfo  = '';
+    private truckInfo = '';
+    private cursorInfo = '';
+    private _debugVisible = false;
 
     // FPS tracking
     private _fps          = 0;
@@ -109,7 +112,7 @@ export class DragOrbitHandler {
             fontSize:   '12px',
             fontFamily: 'monospace',
             pointerEvents: 'none',
-            display:    'block',
+            display:    'none',
             zIndex:     '1000',
             background: 'rgba(0,0,0,0.55)',
             padding:    '4px 6px',
@@ -179,6 +182,17 @@ export class DragOrbitHandler {
     setTapInfo(lines: string[]): void { this.tapInfo = lines; }
     setTileInfo(text: string): void { this.tileInfo = text; }
     setPerfInfo(text: string): void { this.perfInfo  = text; }
+    setTruckInfo(text: string): void { this.truckInfo = text; }
+    setCursorInfo(text: string): void { this.cursorInfo = text; }
+
+    setDebugVisible(visible: boolean): void {
+        this._debugVisible = visible;
+        this.debugLabel.style.display = visible ? 'block' : 'none';
+        if (!visible) {
+            this.tapInfo = []; this.tileInfo = ''; this.perfInfo = ''; this.truckInfo = ''; this.cursorInfo = '';
+        }
+    }
+    get debugVisible(): boolean { return this._debugVisible; }
 
     private rayDir(pos: Vector3, cx: number, cy: number): Vector3 {
         _backward.copy(pos).normalize();
@@ -304,6 +318,10 @@ export class DragOrbitHandler {
 
     // Called every frame from the render loop (after render, so camera matrices are fresh).
     public update(): void {
+        // Skip all readout work when debug HUD is hidden — keeps overhead at zero
+        // unless the user opts into perf mode.
+        if (!this._debugVisible && !this.dragging) return;
+
         // ── FPS counter ──────────────────────────────────────────────────────
         const _now = performance.now() / 1000;
         this._fpsFrames++;
@@ -327,10 +345,12 @@ export class DragOrbitHandler {
                 : `${heightM.toFixed(0)} m`;
 
         if (!this.dragging) {
-            const extra = this.tapInfo.length ? '\n\n' + this.tapInfo.join('\n') : '';
-            const tile  = this.tileInfo ? '\n' + this.tileInfo : '';
-            const perf = this.perfInfo ? '\n' + this.perfInfo : '';
-            this.debugLabel.textContent = `build  ${_buildTime}\nheight ${heightStr}\ndist   ${distStr}\nfps    ${this._fps}${tile}${perf}` + extra;
+            const extra  = this.tapInfo.length ? '\n\n' + this.tapInfo.join('\n') : '';
+            const tile   = this.tileInfo   ? '\n' + this.tileInfo   : '';
+            const perf   = this.perfInfo   ? '\n' + this.perfInfo   : '';
+            const truck  = this.truckInfo  ? '\n\n' + this.truckInfo : '';
+            const cursor = this.cursorInfo ? '\n' + this.cursorInfo : '';
+            this.debugLabel.textContent = `build  ${_buildTime}\nheight ${heightStr}\ndist   ${distStr}\nfps    ${this._fps}${tile}${perf}${truck}${cursor}` + extra;
             return;
         }
 
