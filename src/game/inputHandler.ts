@@ -4,7 +4,8 @@ import {
     Line, BufferGeometry, Float32BufferAttribute,
     Material, MeshBasicMaterial, DoubleSide,
 } from 'three';
-import { R, SURFACE_RISE, SAME_NORMAL_DOT } from './constants';
+import { R, SURFACE_RISE } from './constants';
+import { isSameStructureNormal, arcLengthKm, normalToLatLon, clampDot } from './geo';
 import { Resource, formatScaled } from './resource';
 import { Transport, TruckTransport, resolveSourceNormal } from './transport';
 import { Structure } from './structure';
@@ -223,10 +224,9 @@ export class InputHandler {
         if (!this._cursorReadoutEnabled) return;
 
         if (normal) {
-            // Invert the lat/lon → unit-normal mapping from world.ts:
-            //   X = cos(lat)·cos(lon), Y = sin(lat), Z = -cos(lat)·sin(lon)
-            this.cursorLat = Math.asin(Math.max(-1, Math.min(1, normal.y))) * 180 / Math.PI;
-            this.cursorLon = Math.atan2(-normal.z, normal.x) * 180 / Math.PI;
+            const ll = normalToLatLon(normal);
+            this.cursorLat = ll.lat;
+            this.cursorLon = ll.lon;
             this.setCursorInfo(
                 `cursor ${this.cursorLat.toFixed(4)}, ${this.cursorLon.toFixed(4)} (P)`,
             );
@@ -248,8 +248,9 @@ export class InputHandler {
         // update() hasn't ticked since the last mousemove.
         const normal = this._getEarthNormal(this.lastCursorX, this.lastCursorY);
         if (!normal) return;
-        this.cursorLat = Math.asin(Math.max(-1, Math.min(1, normal.y))) * 180 / Math.PI;
-        this.cursorLon = Math.atan2(-normal.z, normal.x) * 180 / Math.PI;
+        const ll = normalToLatLon(normal);
+        this.cursorLat = ll.lat;
+        this.cursorLon = ll.lon;
         const text = `${this.cursorLat.toFixed(6)}, ${this.cursorLon.toFixed(6)}`;
         const flash = (msg: string) => {
             this.setCursorInfo(msg);
@@ -321,7 +322,7 @@ export class InputHandler {
             const assigned = this.assignStructure
                 ? this.transports.filter(t =>
                     t.sourceResource === r &&
-                    t.destinationNormal.dot(this.assignStructure!.surfaceNormal) > SAME_NORMAL_DOT,
+                    isSameStructureNormal(t.destinationNormal, this.assignStructure!.surfaceNormal),
                 ).length
                 : 0;
             return `${r.name}:${r.deposit | 0}:${has}:${assigned}`;
@@ -433,7 +434,7 @@ export class InputHandler {
     private _buildTruckPath(t: Transport): Line {
         const a = t.srcNormal.clone().normalize();
         const b = t.destinationNormal.clone().normalize();
-        const theta  = Math.acos(Math.min(1, Math.max(-1, a.dot(b))));
+        const theta  = Math.acos(clampDot(a.dot(b)));
         const radius = R + SURFACE_RISE + 5;
         const N = 64;
         const pts: number[] = [];
@@ -472,12 +473,12 @@ export class InputHandler {
             return this.transports.filter(t => !t.stopped).length;
         }
         if (structure instanceof Refinery || structure instanceof PowerPlant) {
-            return this.transports.filter(t => t.destinationNormal.dot(n) > SAME_NORMAL_DOT).length;
+            return this.transports.filter(t => isSameStructureNormal(t.destinationNormal, n)).length;
         }
         // ResourceNode / OilWell — count trucks routing to this specific node
         return this.transports.filter(
             t => t.sourceResource === structure.providesResource &&
-                 t.srcNormal.dot(n) > SAME_NORMAL_DOT,
+                 isSameStructureNormal(t.srcNormal, n),
         ).length;
     }
 
@@ -699,7 +700,7 @@ export class InputHandler {
             const assignedCount = this.assignStructure
                 ? this.transports.filter(t =>
                     t.sourceResource === res &&
-                    t.destinationNormal.dot(this.assignStructure!.surfaceNormal) > SAME_NORMAL_DOT,
+                    isSameStructureNormal(t.destinationNormal, this.assignStructure!.surfaceNormal),
                 ).length
                 : 0;
             if (assignedCount > 0) {
@@ -972,7 +973,7 @@ export class InputHandler {
 
         for (const res of available) {
             const sourceNormal = resolveSourceNormal(res, this.structures, destNormal);
-            const distKm = (Math.acos(Math.min(1, Math.max(-1, destNormal.dot(sourceNormal)))) * 6_371_000 / 1000).toFixed(1);
+            const distKm = arcLengthKm(destNormal, sourceNormal).toFixed(1);
             const btn = this._rowButton(res.name, `${distKm} km from ${destName}`, res.hex);
             btn.addEventListener('click', () => {
                 this.truckTarget!.reassignRoute(destNormal, destName, res, this.structures);

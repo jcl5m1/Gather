@@ -2,9 +2,10 @@ import {
     Scene, Mesh, Vector3, Matrix4,
     BoxGeometry, MeshStandardMaterial, MeshBasicMaterial,
 } from 'three';
-import { R, SURFACE_RISE, HOUSE_R, SAME_NORMAL_DOT } from './constants';
+import { R, SURFACE_RISE, HOUSE_R } from './constants';
 import { Resource, formatScaled } from './resource';
 import { Structure } from './structure';
+import { arcLengthM, isSameStructureNormal } from './geo';
 
 // Returns the surface normal of the closest structure that can PROVIDE `resource`
 // (InventoryRole 'output' or 'both') nearest to `fromNormal`.
@@ -18,7 +19,7 @@ export function resolveSourceNormal(
     destNormal?: Vector3,
 ): Vector3 {
     const isDest = (s: Structure) =>
-        !!destNormal && s.surfaceNormal.dot(destNormal) > SAME_NORMAL_DOT;
+        !!destNormal && isSameStructureNormal(s.surfaceNormal, destNormal);
 
     // Prefer dedicated output providers (ResourceNode, OilWell, Refinery, PowerPlant).
     // 'both'-role structures (Homebase) are only fallback so a truck never collects from itself.
@@ -135,7 +136,7 @@ export abstract class Transport {
     get arcLengthM():     number    { return this.arcLength; }
 
     resolveDestName(structures: Structure[]): string {
-        const match = structures.find(s => s.surfaceNormal.dot(this.homeNormal) > SAME_NORMAL_DOT);
+        const match = structures.find(s => isSameStructureNormal(s.surfaceNormal, this.homeNormal));
         return match ? match.label : this.destName;
     }
 
@@ -153,8 +154,7 @@ export abstract class Transport {
         this.fuelResource   = fuelResource;
         this.destName       = destName;
 
-        const cosAngle = Math.min(1, Math.max(-1, this.homeNormal.dot(this.sourceNormal)));
-        this.arcLength = Math.max(Math.acos(cosAngle) * R, 0.01);
+        this.arcLength = Math.max(arcLengthM(this.homeNormal, this.sourceNormal), 0.01);
 
         this.mesh = this.makeMesh();
         this.mesh.userData['transport'] = this;
@@ -263,8 +263,7 @@ export abstract class Transport {
     reassign(source: Resource, structures: Structure[]): void {
         this.sourceResource = source;
         this.sourceNormal   = resolveSourceNormal(source, structures, this.homeNormal, this.homeNormal);
-        const cosAngle = Math.min(1, Math.max(-1, this.homeNormal.dot(this.sourceNormal)));
-        this.arcLength  = Math.max(Math.acos(cosAngle) * R, 0.01);
+        this.arcLength = Math.max(arcLengthM(this.homeNormal, this.sourceNormal), 0.01);
         this.stopped    = false;
         this.state      = 'to_resource';
         this.t          = 0;
@@ -278,8 +277,7 @@ export abstract class Transport {
         this.destName       = destName;
         this.sourceResource = source;
         this.sourceNormal   = resolveSourceNormal(source, structures, destNormal, destNormal);
-        const cosAngle = Math.min(1, Math.max(-1, this.homeNormal.dot(this.sourceNormal)));
-        this.arcLength  = Math.max(Math.acos(cosAngle) * R, 0.01);
+        this.arcLength = Math.max(arcLengthM(this.homeNormal, this.sourceNormal), 0.01);
         this.stopped    = false;
         this.state      = 'to_resource';
         this.t          = 0;

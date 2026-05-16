@@ -77,4 +77,17 @@ export class TechTree {
     }
 }
 
+// Pick the most energy-dense unlocked fuel that has stock; fall back to the
+// most energy-dense unlocked fuel regardless of stock if all are empty.
+// Returns null when no fuels are unlocked at all.
+import type { Resource } from './resource';
+export function autoFuel(resources: Resource[], techTree: TechTree): Resource | null {
+    const unlockedNames = techTree.unlockedFuelNames();
+    const unlocked = resources.filter(r => r.isFuel && unlockedNames.includes(r.name));
+    if (!unlocked.length) return null;
+    const withStock = unlocked.filter(f => f.gathered > 0);
+    const pool = withStock.length ? withStock : unlocked;
+    return pool.reduce((best, f) => f.energyDensityMJkg > best.energyDensityMJkg ? f : best);
+}
+
 export const TECH_TREE = new TechTree();

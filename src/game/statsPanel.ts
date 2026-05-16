@@ -1,5 +1,6 @@
 import { Vector3 } from 'three';
 import { Resource, formatScaled } from './resource';
+import { arcLengthKm } from './geo';
 import { Transport, resolveSourceNormal } from './transport';
 import { Structure } from './structure';
 import { Homebase } from './homebase';
@@ -513,7 +514,7 @@ export class StatsPanel {
         );
         for (const res of availableResources) {
             const srcNormal = resolveSourceNormal(res, this.structures, destNormal);
-            const distKm    = (Math.acos(Math.min(1, Math.max(-1, destNormal.dot(srcNormal)))) * 6_371_000 / 1000).toFixed(1);
+            const distKm    = arcLengthKm(destNormal, srcNormal).toFixed(1);
 
             const btn = this._rowBtn(res.name, `${distKm} km`, res.hex);
             btn.addEventListener('click', () => {

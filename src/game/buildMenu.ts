@@ -1,8 +1,9 @@
 import { Scene, Vector3, Mesh, BoxGeometry, MeshStandardMaterial } from 'three';
-import { R, SURFACE_RISE, PAD_W } from './constants';
+import { SURFACE_RISE, PAD_W } from './constants';
+import { arcLengthKm, arcLengthM } from './geo';
 import { Resource, formatScaled } from './resource';
 import { Transport, TruckTransport, resolveSourceNormal } from './transport';
-import { TECH_TREE } from './tech';
+import { TECH_TREE, autoFuel } from './tech';
 import { Structure, InventoryRole } from './structure';
 import { Homebase } from './homebase';
 import { ResourceNode } from './resourceNode';
@@ -195,7 +196,7 @@ export class BuildMenu {
         this._showModal(`Haul to ${destName}…`,
             needed.map(res => {
                 const srcNormal = resolveSourceNormal(res, this.structures, destNormal, destNormal);
-                const distKm    = (Math.acos(Math.min(1, Math.max(-1, destNormal.dot(srcNormal)))) * R / 1000).toFixed(1);
+                const distKm    = arcLengthKm(destNormal, srcNormal).toFixed(1);
                 return {
                     label:    res.name,
                     sub:      `Source ${distKm} km from destination`,
@@ -211,16 +212,8 @@ export class BuildMenu {
         );
     }
 
-    // Auto-selects the most energy-dense unlocked fuel that has stock.
-    // Falls back to the highest-grade unlocked fuel if none have stock.
     private _autoFuel(): Resource {
-        const names    = TECH_TREE.unlockedFuelNames();
-        const unlocked = this.resources.filter(r => r.isFuel && names.includes(r.name));
-        const withStock = unlocked.filter(f => f.gathered > 0);
-        const pool = withStock.length > 0 ? withStock : unlocked;
-        return pool.reduce((best, f) =>
-            f.energyDensityMJkg > best.energyDensityMJkg ? f : best,
-        );
+        return autoFuel(this.resources, TECH_TREE)!;
     }
 
     private _buildTruck(fuel: Resource): void {
@@ -335,8 +328,7 @@ export class BuildMenu {
         ) as ResourceNode | undefined;
         const validator = (n: Vector3) => {
             if (!oilNode) return false;
-            const dot = Math.min(1, Math.max(-1, oilNode.surfaceNormal.dot(n)));
-            return Math.acos(dot) * R < PAD_W;
+            return arcLengthM(oilNode.surfaceNormal, n) < PAD_W;
         };
 
         this.onRequestPlacement(ghost, rise, (normal: Vector3) => {

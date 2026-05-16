@@ -36,8 +36,9 @@ import { Structure } from './structure';
 import { BuildMenu } from './buildMenu';
 import { StatsPanel } from './statsPanel';
 import { TechPanel } from './techPanel';
-import { TECH_TREE } from './tech';
-import { R, SAME_NORMAL_DOT } from './constants';
+import { TECH_TREE, autoFuel } from './tech';
+import { R } from './constants';
+import { isSameStructureNormal, formatLatLon } from './geo';
 
 installGlobalErrorHandlers();
 log.info('Game init start');
@@ -121,12 +122,8 @@ inputHandler.setBuildTruckCallback((destNormal, destName, resource) => {
     const iron = RESOURCES.find(r => r.name === 'Iron')!;
     if (iron.gathered < TruckTransport.IRON_COST) return false;
 
-    const unlockedNames = TECH_TREE.unlockedFuelNames();
-    const unlocked = RESOURCES.filter(r => r.isFuel && unlockedNames.includes(r.name));
-    if (!unlocked.length) return false;
-    const withStock = unlocked.filter(f => f.gathered > 0);
-    const fuelPool  = withStock.length ? withStock : unlocked;
-    const fuel = fuelPool.reduce((best, f) => f.energyDensityMJkg > best.energyDensityMJkg ? f : best);
+    const fuel = autoFuel(RESOURCES, TECH_TREE);
+    if (!fuel) return false;
 
     const sourceNormal = resolveSourceNormal(resource, structures, destNormal, destNormal);
     iron.consume(TruckTransport.IRON_COST);
@@ -152,7 +149,7 @@ inputHandler.setDeleteCallback((structure) => {
         // Stop trucks delivering to this refinery
         const n = structure.surfaceNormal;
         for (const t of transports) {
-            if (t.destinationNormal.dot(n) > SAME_NORMAL_DOT) t.stopped = true;
+            if (isSameStructureNormal(t.destinationNormal, n)) t.stopped = true;
         }
     } else if (structure instanceof OilWell) {
         oilWells.splice(oilWells.indexOf(structure), 1);
@@ -160,7 +157,7 @@ inputHandler.setDeleteCallback((structure) => {
         const n = structure.surfaceNormal;
         for (const t of transports) {
             if (t.sourceResource === structure.providesResource &&
-                t.srcNormal.dot(n) > SAME_NORMAL_DOT) {
+                isSameStructureNormal(t.srcNormal, n)) {
                 t.stopped = true;
             }
         }
@@ -169,7 +166,7 @@ inputHandler.setDeleteCallback((structure) => {
         // Stop trucks delivering to this power plant
         const n = structure.surfaceNormal;
         for (const t of transports) {
-            if (t.destinationNormal.dot(n) > SAME_NORMAL_DOT) t.stopped = true;
+            if (isSameStructureNormal(t.destinationNormal, n)) t.stopped = true;
         }
     }
 
@@ -897,13 +894,8 @@ let lastTime   = performance.now();
 let frameCount = 0;
 
 // ── Truck debug HUD ─────────────────────────────────────────────────────────
-function normalToLatLon(n: Vector3): string {
-    const lat = Math.asin(Math.max(-1, Math.min(1, n.y))) * 180 / Math.PI;
-    const lon = Math.atan2(n.x, n.z) * 180 / Math.PI;
-    return `${lat.toFixed(2)},${lon.toFixed(2)}`;
-}
 function findStructureByNormal(structs: Structure[], n: Vector3): Structure | undefined {
-    return structs.find(s => s.surfaceNormal.dot(n) > SAME_NORMAL_DOT);
+    return structs.find(s => isSameStructureNormal(s.surfaceNormal, n));
 }
 function buildTruckDebugInfo(ts: Transport[], structs: Structure[]): string {
     if (!ts.length) return 'trucks: none';
@@ -928,8 +920,8 @@ function buildTruckDebugInfo(ts: Transport[], structs: Structure[]): string {
         const fuelLabel  = `${formatScaled(fuelKgTrip, 'kg')}/trip  stock ${formatScaled(fuelStock, 'kg')}  (${isFinite(tripsLeft) ? tripsLeft : '∞'} trips)`;
         lines.push(
             `#${t.id} ${t.spec.name} ${t.tripState}${stopFlag}`,
-            `  src ${srcName} (${t.sourceResource.name}) ll ${normalToLatLon(sn)}`,
-            `  dst ${dstName} ll ${normalToLatLon(dn)}`,
+            `  src ${srcName} (${t.sourceResource.name}) ll ${formatLatLon(sn)}`,
+            `  dst ${dstName} ll ${formatLatLon(dn)}`,
             `  pos (${pos.x.toFixed(0)},${pos.y.toFixed(0)},${pos.z.toFixed(0)}) alt ${alt.toFixed(0)}m`,
             `  t ${t.tripT.toFixed(3)} v ${t.currentSpeed.toFixed(2)} m/s arc ${(t.arcLengthM/1000).toFixed(2)} km`,
             `  cargo ${cargo} pause ${t.pauseRemaining.toFixed(1)}s`,
