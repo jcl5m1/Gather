@@ -1187,8 +1187,13 @@ function animate(): void {
             : `\ngpu    off  (G to probe)`;
         const _busy = _tCamera + _tRender + _tTiles + _tLogic + (_gpuSyncEnabled ? _tGpuSync : 0);
         const _idle = Math.max(0, _tFrame - _busy);
+        // Shader render resolution = drawing-buffer size (matches uResolution in earth.ts)
+        const _dpr = renderer.getPixelRatio();
+        const _rw  = Math.round(window.innerWidth  * _dpr);
+        const _rh  = Math.round(window.innerHeight * _dpr);
         dragOrbit.setPerfInfo(
-            `cam    ${_tCamera.toFixed(1)} ms\n`
+            `res    ${_rw}×${_rh} @${_dpr}x\n`
+          + `cam    ${_tCamera.toFixed(1)} ms\n`
           + `render ${_tRender.toFixed(1)} ms\n`
           + `tiles  ${_tTiles.toFixed(1)} ms\n`
           + `logic  ${_tLogic.toFixed(1)} ms`
