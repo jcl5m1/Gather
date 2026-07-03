@@ -8,8 +8,11 @@ export function createRenderer(): WebGLRenderer {
     // precision is ~0.2m at planet-zoom distances, fine for our 38km cloud/Earth gap.
     const renderer = new WebGLRenderer({ antialias: true });
 
-    // Cap at 2x to avoid oversized framebuffers on iPhone 15 Pro (3x DPR = 1290x2796px)
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Render at 1x (drawing buffer = CSS pixels) and let the display hardware
+    // upscale the canvas to physical device pixels. This minimizes fill-rate:
+    // the fullscreen atmosphere/ocean shaders cover the fewest possible pixels
+    // (1/4 of a 2x buffer, 1/9 of a 3x buffer), at the cost of some sharpness.
+    renderer.setPixelRatio(1);
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
