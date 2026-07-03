@@ -4,16 +4,16 @@
     "module": "es6",
     "strict": true,
     "esModuleInterop": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
+    "outDir": "../../dist",
+    "rootDir": ".",
     "moduleResolution": "node",
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "lib": ["dom", "es6", "dom.iterable", "scripthost"],
-    "baseUrl": "./",
-    "paths": { "*": ["node_modules/*"] }
+    "baseUrl": ".",
+    "paths": { "*": ["../../node_modules/*"] }
   },
-  "include": ["src/game/**/*"],
+  "include": ["**/*"],
   "exclude": ["node_modules"]
 }

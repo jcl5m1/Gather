@@ -4,14 +4,16 @@
   "description": "Unity-based resource gathering automation game that spans multple planets with realistic orbital mechanics and energy requirements",
   "main": "index.js",
   "scripts": {
-    "build": "webpack",
-    "start": "webpack serve",
-    "build:mine": "webpack --config webpack.mineGather.config.js",
-    "start:mine": "webpack serve --config webpack.mineGather.config.js",
+    "build": "webpack --config webpack.game.config.js",
+    "start": "webpack serve --config webpack.game.config.js",
     "build:game": "webpack --config webpack.game.config.js",
     "start:game": "webpack serve --config webpack.game.config.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:moon": "webpack --config experimental/moonOrbitSim/webpack.config.js",
+    "start:moon": "webpack serve --config experimental/moonOrbitSim/webpack.config.js",
+    "build:mine": "webpack --config experimental/mineGather/webpack.config.js",
+    "start:mine": "webpack serve --config experimental/mineGather/webpack.config.js"
   },
   "keywords": [],
   "author": "",

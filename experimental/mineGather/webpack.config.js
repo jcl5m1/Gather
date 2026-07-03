@@ -1,8 +1,11 @@
 const path = require('path');
 const CopyWebpackPlugin = require('copy-webpack-plugin');
 
+// Archived project. Build from repo root:
+//   npm run build:mine   /   npm run start:mine
 module.exports = {
-  entry: './src/mineGather/index.ts',
+  context: __dirname,
+  entry: './index.ts',
   mode: 'development',
   module: {
     rules: [
@@ -10,9 +13,7 @@ module.exports = {
         test: /\.ts$/,
         use: {
           loader: 'ts-loader',
-          options: {
-            configFile: 'tsconfig.mineGather.json'
-          }
+          options: { configFile: path.resolve(__dirname, 'tsconfig.json') },
         },
         exclude: /node_modules/,
       },
@@ -20,31 +21,22 @@ module.exports = {
   },
   plugins: [
     new CopyWebpackPlugin({
-      patterns: [
-        { 
-          from: 'src/mineGather/index.html',
-          to: 'index.html'
-        }
-      ]
-    })
+      patterns: [{ from: 'index.html', to: 'index.html' }],
+    }),
   ],
-  resolve: {
-    extensions: ['.ts', '.js'],
-  },
+  resolve: { extensions: ['.ts', '.js'] },
   output: {
     filename: 'bundle.js',
-    path: path.resolve(__dirname, 'dist'),
+    path: path.resolve(__dirname, '../../dist'),
   },
   devServer: {
-    static: {
-      directory: path.join(__dirname, 'dist'),
-    },
+    static: { directory: path.resolve(__dirname, '../../dist') },
     compress: true,
     port: 8000,
     hot: true,
     liveReload: true,
     open: false,
-    host: '0.0.0.0', // Accept connections from any IP
+    host: '0.0.0.0',
     allowedHosts: 'all',
   },
 };
