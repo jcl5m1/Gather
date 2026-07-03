@@ -86,3 +86,9 @@ dist/*.bundle.js.map
 dist/game.html
 dist/testTruck.html
 dist/index.html
+
+# macOS
+.DS_Store
+
+# Intermediate source-tile cache for generate_earth_tiles.py (regenerable)
+dist/tiles/.cache/
