@@ -967,7 +967,7 @@ const _EMA_A   = 0.1; // smoothing factor (higher = more responsive)
 // Heavy when on — only turn on for diagnosis.
 // Master perf-instrumentation flag. When OFF, every per-frame measurement,
 // HUD-update, and lat/lon raycast is skipped — full game performance.
-// Press F to toggle.  G (GPU sync) and the lat/lon readout are gated under it.
+// Press Tab (or F) to toggle.  G (GPU sync) and the lat/lon readout are gated under it.
 let _perfEnabled    = false;
 let _gpuSyncEnabled = false;
 let _vsyncEnabled   = true;
@@ -977,7 +977,8 @@ function scheduleNext(): void {
 }
 
 window.addEventListener('keydown', e => {
-    if (e.key === 'f' || e.key === 'F') {
+    if (e.key === 'f' || e.key === 'F' || e.key === 'Tab') {
+        if (e.key === 'Tab') e.preventDefault();   // Tab: toggle perf HUD, don't shift DOM focus
         _perfEnabled = !_perfEnabled;
         dragOrbit.setDebugVisible(_perfEnabled);
         inputHandler.setCursorReadoutEnabled(_perfEnabled);
