@@ -69,6 +69,62 @@ describe('Resource — manufactured semantics', () => {
     });
 });
 
+describe('Resource — manufactured pickup buffer (haul accounting)', () => {
+    let steel: Resource;
+    beforeEach(() => { steel = new Resource('Steel', 0x90a4ae, 0, 0, false, 0, true); });
+
+    it('produce fills BOTH spendable inventory and the pickup buffer', () => {
+        steel.produce(3000);
+        expect(steel.gathered).toBe(3000);   // spendable now
+        expect(steel.deposit).toBe(3000);    // available for trucks to pick up
+    });
+
+    it('extract draws from the pickup buffer, not from spendable inventory', () => {
+        steel.produce(3000);
+        const got = steel.extract(2000);
+        expect(got).toBe(2000);
+        expect(steel.deposit).toBe(1000);    // buffer drained
+        expect(steel.gathered).toBe(3000);   // inventory untouched — you still own it
+    });
+
+    it('extract is clamped to the buffer and returns 0 when empty', () => {
+        steel.produce(500);
+        expect(steel.extract(2000)).toBe(500);
+        expect(steel.deposit).toBe(0);
+        expect(steel.extract(1000)).toBe(0);
+    });
+
+    it('deliver is inventory-neutral for manufactured goods (already counted at produce)', () => {
+        steel.produce(1000);
+        steel.extract(1000);       // hauled away
+        steel.deliver(1000);       // arrives at destination
+        // Inventory stays at what was produced; delivered steel does NOT re-enter
+        // the pickup buffer, so it can never be hauled (and credited) twice.
+        expect(steel.gathered).toBe(1000);
+        expect(steel.deposit).toBe(0);
+    });
+
+    it('a full produce→extract→deliver cycle cannot inflate stock past production', () => {
+        // Reproduces the fixed bug: without the buffer, delivered steel looped back.
+        steel.produce(1000);
+        let hauled = 0;
+        for (let i = 0; i < 5; i++) {           // five trucks try to grab 1000 each
+            const got = steel.extract(1000);
+            steel.deliver(got);
+            hauled += got;
+        }
+        expect(hauled).toBe(1000);              // only the produced 1000 ever moves
+        expect(steel.gathered).toBe(1000);
+    });
+
+    it('consume removes from both inventory and the pickup buffer', () => {
+        steel.produce(2000);
+        expect(steel.consume(1500)).toBe(true);
+        expect(steel.gathered).toBe(500);
+        expect(steel.deposit).toBe(500);       // spent steel is no longer pick-up-able
+    });
+});
+
 describe('Resource — requiresExtraction flag', () => {
     it('defaults to false', () => {
         const wood = new Resource('Wood', 0x8b5e3c);

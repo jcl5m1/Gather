@@ -74,15 +74,51 @@ export class Resource {
         return true;
     }
 
-    // Manufactured / refined output — never touches a natural deposit.
+    // Manufactured / refined output. The finished goods enter the player's global
+    // inventory immediately (they're spendable at once), AND stock the producer's
+    // pickup buffer (`deposit`) so trucks have something finite to haul. Keeping a
+    // separate pickup buffer is what stops delivered goods from looping back into
+    // the source pool (see `deliver`).
     produce(amount: number): void {
         this.gathered += amount;
+        this.deposit  += amount;
+    }
+
+    // Truck pickup: remove `amount` from the SOURCE pickup buffer (`deposit`).
+    // For natural resources the deposit is the ground; for manufactured resources
+    // it is the producer's output buffer filled by produce(). Inventory is NOT
+    // touched here. Returns the amount actually loaded (may be less if short).
+    extract(amount: number): number {
+        if (this.deposit <= 0) return 0;
+        const take = Math.min(amount, this.deposit);
+        this.deposit -= take;
+        return take;
+    }
+
+    // Truck delivery: cargo arrives at the destination.
+    //   Natural resources → this haul IS the mining, so inventory rises now.
+    //   Manufactured resources → the goods were already credited to inventory at
+    //     production time, so a delivery only fulfils the request. Re-crediting
+    //     here (the old behaviour) put delivered goods back into the global pool,
+    //     where they were extracted and delivered AGAIN — inflating deliveries
+    //     past what was ever produced ("delivered" popup, but stock never arrived).
+    deliver(amount: number): void {
+        if (!this.isManufactured) this.gathered += amount;
     }
 
     consume(kg: number): boolean {
         if (this.gathered < kg) return false;
         this.gathered -= kg;
+        // Spending manufactured goods also removes them from the pickup buffer so
+        // trucks can't haul stock the player has already used.
+        if (this.isManufactured) this.deposit = Math.max(0, this.deposit - kg);
         return true;
+    }
+
+    // Is there stock available to load right now? Both natural deposits and
+    // manufactured producer output live in `deposit`, so one check covers both.
+    get inStock(): boolean {
+        return this.deposit > 0;
     }
 
     get hex(): string {

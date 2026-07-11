@@ -16,6 +16,7 @@ import { R } from './constants';
 import { KSC_NORMAL } from './world';
 import { RESOURCES } from './resource';
 import { TruckTransport } from './transport';
+import { TransportRequest } from './transportRequest';
 import { ZoomController } from './zoomController';
 import { DragOrbitHandler } from './dragOrbitHandler';
 
@@ -77,7 +78,9 @@ scene.add(new Line(routeGeo, new LineBasicMaterial({ color: 0x888888 })));
 
 // ── Truck ─────────────────────────────────────────────────────────────────
 
-const truck = new TruckTransport(scene, destNormal, wood, coal, sourceNormal, 'Dest');
+const truck = new TruckTransport(scene, coal, destNormal);
+// A never-ending haul request so the truck loops the fixed route forever.
+const req = new TransportRequest(destNormal, 'Dest', wood, 1e12);
 
 // ── Camera + shared controllers ───────────────────────────────────────────
 
@@ -156,12 +159,17 @@ function animate(): void {
     if (wood.gathered < 1e10) wood.gathered = 1e10;
     if (coal.gathered < 1e10) coal.gathered = 1e10;
 
-    truck.update(dt);
-    if (truck.stopped) truck.stopped = false;
+    // Keep the request perpetually open so the truck re-runs the route.
+    req.qtyDelivered = 0;
+    req.qtyInFlight  = 0;
+    if (truck.isIdle) truck.assignJob(req, sourceNormal);
+
+    const { load } = truck.update(dt);
+    if (load) truck.setLoaded(load.payload);
 
     const t     = (truck as any).t     as number;
     const spd   = (truck as any).speed as number;
-    const state = (truck as any).state as string;
+    const state = truck.jobPhase;
     statusEl.textContent =
         `${state}  ·  t=${t.toFixed(3)}  ·  ${spd.toFixed(1)} m/s` +
         (paused ? '  · PAUSED' : '');

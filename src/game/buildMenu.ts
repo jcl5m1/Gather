@@ -1,17 +1,16 @@
 import { Scene, Vector3, Mesh, BoxGeometry, MeshStandardMaterial } from 'three';
 import { SURFACE_RISE, PAD_W } from './constants';
-import { arcLengthKm, arcLengthM } from './geo';
+import { arcLengthM } from './geo';
 import { Resource, formatScaled } from './resource';
-import { Transport, TruckTransport, resolveSourceNormal } from './transport';
+import { Transport, TruckTransport } from './transport';
 import { TECH_TREE, autoFuel } from './tech';
-import { Structure, InventoryRole } from './structure';
-import { Homebase } from './homebase';
+import { Structure } from './structure';
 import { ResourceNode } from './resourceNode';
 import { Refinery, RefineryRecipe, REFINERY_RECIPES, REFINERY_W, REFINERY_H, REFINERY_D, REFINERY_IRON_COST, REFINERY_STONE_COST } from './refinery';
 import { OilWell, OIL_WELL_W, OIL_WELL_H, OIL_WELL_D, OIL_WELL_STEEL_COST } from './oilWell';
 import { PowerPlant, POWER_PLANT_W, POWER_PLANT_H, POWER_PLANT_D, POWER_PLANT_IRON_COST, POWER_PLANT_STONE_COST } from './powerPlant';
 
-type BuildStep = 'closed' | 'panel' | 'truck_dest' | 'truck_resource' | 'select_refinery_fuel' | 'select_powerplant_fuel';
+type BuildStep = 'closed' | 'panel' | 'select_refinery_fuel' | 'select_powerplant_fuel';
 
 interface ModalOption {
     label:    string;
@@ -23,12 +22,6 @@ interface ModalOption {
 
 export class BuildMenu {
     private step: BuildStep = 'closed';
-
-    // Truck build flow state
-    private truckDest:         Structure | null = null;
-    private truckDestName      = '';
-    private truckResource:     Resource | null  = null;
-    private truckSourceNormal: Vector3 | null   = null;
 
     private panel!:        HTMLElement;
     private modal!:        HTMLElement;
@@ -45,6 +38,9 @@ export class BuildMenu {
     private powerPlantCostEl!:    HTMLElement;
     private powerPlantStCostEl!:  HTMLElement;
     private powerPlantBtn!:       HTMLButtonElement;
+
+    // Fading vertical text for "not enough resources" feedback (wired from index).
+    private flashShortfall: (msg: string, x: number, y: number) => void = () => {};
 
     // Set after construction once InputHandler is available
     private onRequestPlacement: (
@@ -64,7 +60,6 @@ export class BuildMenu {
         private onBuildRefinery:     (r: Refinery)     => void,
         private onBuildOilWell:      (w: OilWell)      => void,
         private onBuildPowerPlant:   (p: PowerPlant)   => void,
-        private onHudDirty:          (res: Resource)   => void,
     ) {
         this._buildDOM();
         this._refreshPanel();
@@ -74,6 +69,25 @@ export class BuildMenu {
         fn: (ghost: Mesh, rise: number, cb: (n: Vector3) => void, validator?: (n: Vector3) => boolean, invalidMessage?: string) => void,
     ): void {
         this.onRequestPlacement = fn;
+    }
+
+    // Shows a rising, fading label (message, screen x, y).
+    setShortfallHandler(fn: (msg: string, x: number, y: number) => void): void {
+        this.flashShortfall = fn;
+    }
+
+    // If any cost is unmet, returns a multi-line "Need N more X" message; else null.
+    private _costShortfall(costs: Array<{ res: Resource; need: number }>): string | null {
+        const short = costs
+            .filter(c => c.res.gathered < c.need)
+            .map(c => `${formatScaled(c.need - c.res.gathered, 'kg')} more ${c.res.name}`);
+        return short.length ? 'Need ' + short.join('\n+ ') : null;
+    }
+
+    // Flash the shortfall message centred just above the given button.
+    private _flashShort(btn: HTMLElement, msg: string): void {
+        const r = btn.getBoundingClientRect();
+        this.flashShortfall(msg, r.left + r.width / 2, r.top);
     }
 
     tick(): void {
@@ -123,112 +137,26 @@ export class BuildMenu {
     }
 
     private _close(): void {
-        this.step             = 'closed';
-        this.truckDest        = null;
-        this.truckResource    = null;
-        this.truckSourceNormal = null;
+        this.step = 'closed';
         this.panel.classList.add('bm-hidden');
         this.modal.classList.add('bm-hidden');
     }
 
-    // ── Truck build flow ──────────────────────────────────────────────────────
-    // Step 1: pick destination structure
-    // Step 2: pick resource (filtered to what that destination needs)
-    // Step 3: pick truck fuel
+    // ── Truck build ───────────────────────────────────────────────────────────
+    // Trucks are generic pool vehicles: building one just adds an idle transport
+    // parked at the home base. It picks up jobs from the transport request queue.
 
     private _startBuildTruck(): void {
-        if (this._iron().gathered < TruckTransport.IRON_COST) return;
-        this.step = 'truck_dest';
-        this.panel.classList.add('bm-hidden');
-
-        // Any structure that accepts at least one resource as input is a valid destination
-        const dests: ModalOption[] = [];
-        for (const s of this.structures) {
-            const inputRes = this.resources.filter(r => {
-                const role = s.getResourceRole(r);
-                return role === 'input' || role === 'both';
-            });
-            if (!inputRes.length) continue;
-
-            const name  = this._destLabel(s);
-            const color = this._destColor(s);
-            dests.push({
-                label:    name,
-                sub:      `Accepts: ${inputRes.map(r => r.name).join(', ')}`,
-                color,
-                disabled: false,
-                onClick:  () => this._pickTruckResource(s, name),
-            });
-        }
-
-        this._showModal('Deliver to…', dests);
-    }
-
-    private _destLabel(s: Structure): string {
-        if (s instanceof Homebase)    return s.label;
-        if (s instanceof Refinery)    return `Refinery – ${s.recipe.outputName}`;
-        if (s instanceof PowerPlant)  return `Power Plant (${s.fuelResource.name})`;
-        return s.label;
-    }
-
-    private _destColor(s: Structure): string {
-        if (s instanceof Homebase)    return '#aaaaaa';
-        if (s instanceof Refinery)    return '#546e7a';
-        if (s instanceof PowerPlant)  return '#c62828';
-        return '#888888';
-    }
-
-    // Step 2: pick resource to haul to destStructure
-    private _pickTruckResource(dest: Structure, destName: string): void {
-        this.truckDest     = dest;
-        this.truckDestName = destName;
-        this.step          = 'truck_resource';
-
-        const destNormal = dest.surfaceNormal;
-        // Resources the destination accepts as input, filtered to those with an output source
-        const needed = this.resources.filter(r => {
-            const destRole = dest.getResourceRole(r);
-            if (destRole !== 'input' && destRole !== 'both') return false;
-            // Must have at least one structure that can OUTPUT this resource (not 'both'/Homebase)
-            return this.structures.some(s => s.getResourceRole(r) === 'output');
-        });
-
-        this._showModal(`Haul to ${destName}…`,
-            needed.map(res => {
-                const srcNormal = resolveSourceNormal(res, this.structures, destNormal, destNormal);
-                const distKm    = arcLengthKm(destNormal, srcNormal).toFixed(1);
-                return {
-                    label:    res.name,
-                    sub:      `Source ${distKm} km from destination`,
-                    color:    res.hex,
-                    disabled: false,
-                    onClick:  () => {
-                        this.truckResource     = res;
-                        this.truckSourceNormal = resolveSourceNormal(res, this.structures, destNormal, destNormal);
-                        this._buildTruck(this._autoFuel());
-                    },
-                };
-            }),
-        );
+        const iron = this._iron();
+        const short = this._costShortfall([{ res: iron, need: TruckTransport.IRON_COST }]);
+        if (short) { this._flashShort(this.truckBtn, short); return; }
+        // Cost is charged by engine.build() via the callback (single source of truth).
+        this.onBuild(new TruckTransport(this.scene, this._autoFuel(), this.homeNormal));
+        this._close();
     }
 
     private _autoFuel(): Resource {
         return autoFuel(this.resources, TECH_TREE)!;
-    }
-
-    private _buildTruck(fuel: Resource): void {
-        const iron = this._iron();
-        iron.consume(TruckTransport.IRON_COST);
-        this.onHudDirty(iron);
-        this.onBuild(new TruckTransport(
-            this.scene,
-            this.truckDest!.surfaceNormal,
-            this.truckResource!,
-            fuel,
-            this.truckSourceNormal!,
-            this.truckDestName,
-        ));
-        this._close();
     }
 
     // ── Refinery build flow ───────────────────────────────────────────────────
@@ -236,7 +164,11 @@ export class BuildMenu {
     private _startBuildRefinery(): void {
         const iron  = this._iron();
         const stone = this._stone();
-        if (iron.gathered < REFINERY_IRON_COST || stone.gathered < REFINERY_STONE_COST) return;
+        const short = this._costShortfall([
+            { res: iron,  need: REFINERY_IRON_COST },
+            { res: stone, need: REFINERY_STONE_COST },
+        ]);
+        if (short) { this._flashShort(this.refineryBtn, short); return; }
 
         this.step = 'select_refinery_fuel';
         this.panel.classList.add('bm-hidden');
@@ -290,12 +222,6 @@ export class BuildMenu {
         );
 
         this.onRequestPlacement(ghost, SURFACE_RISE + REFINERY_H / 2, (normal: Vector3) => {
-            const iron  = this._iron();
-            const stone = this._stone();
-            iron.consume(REFINERY_IRON_COST);
-            stone.consume(REFINERY_STONE_COST);
-            this.onHudDirty(iron);
-            this.onHudDirty(stone);
             this.onBuildRefinery(new Refinery(this.scene, normal, recipe, this.resources, fuel));
             this.step = 'closed';
         });
@@ -305,7 +231,8 @@ export class BuildMenu {
 
     private _startBuildOilWell(): void {
         const steel = this._steel();
-        if (steel.gathered < OIL_WELL_STEEL_COST) return;
+        const short = this._costShortfall([{ res: steel, need: OIL_WELL_STEEL_COST }]);
+        if (short) { this._flashShort(this.oilWellBtn, short); return; }
 
         this.panel.classList.add('bm-hidden');
         this._enterOilWellPlacement();
@@ -332,10 +259,7 @@ export class BuildMenu {
         };
 
         this.onRequestPlacement(ghost, rise, (normal: Vector3) => {
-            const steel = this._steel();
-            const oil   = this.resources.find(r => r.name === 'Oil')!;
-            steel.consume(OIL_WELL_STEEL_COST);
-            this.onHudDirty(steel);
+            const oil = this.resources.find(r => r.name === 'Oil')!;
             this.onBuildOilWell(new OilWell(this.scene, normal, oil));
             this.step = 'closed';
         }, validator, 'Oil well must be placed over an oil deposit');
@@ -346,7 +270,11 @@ export class BuildMenu {
     private _startBuildPowerPlant(): void {
         const iron  = this._iron();
         const stone = this._stone();
-        if (iron.gathered < POWER_PLANT_IRON_COST || stone.gathered < POWER_PLANT_STONE_COST) return;
+        const short = this._costShortfall([
+            { res: iron,  need: POWER_PLANT_IRON_COST },
+            { res: stone, need: POWER_PLANT_STONE_COST },
+        ]);
+        if (short) { this._flashShort(this.powerPlantBtn, short); return; }
 
         this.step = 'select_powerplant_fuel';
         this.panel.classList.add('bm-hidden');
@@ -381,12 +309,6 @@ export class BuildMenu {
 
         const rise = SURFACE_RISE + POWER_PLANT_H / 2;
         this.onRequestPlacement(ghost, rise, (normal: Vector3) => {
-            const iron  = this._iron();
-            const stone = this._stone();
-            iron.consume(POWER_PLANT_IRON_COST);
-            stone.consume(POWER_PLANT_STONE_COST);
-            this.onHudDirty(iron);
-            this.onHudDirty(stone);
             const electricity = this.resources.find(r => r.name === 'Electricity')!;
             this.onBuildPowerPlant(new PowerPlant(this.scene, normal, fuel, electricity));
             this.step = 'closed';
@@ -405,7 +327,7 @@ export class BuildMenu {
         this.truckCostEl.style.color  = truckOk ? '#8fbc8f' : '#bc8f8f';
         this.truckFuelEl.textContent  = `Fuel: ${autoFuel.name} (${autoFuel.energyDensityMJkg} MJ/kg)`;
         this.truckFuelEl.style.color  = '#666';
-        this.truckBtn.disabled        = !truckOk;
+        // Left clickable when unaffordable so the tap can explain the shortfall.
         this.truckBtn.style.opacity   = truckOk ? '1' : '0.45';
 
         const haveStone   = this._stone().gathered;
@@ -414,14 +336,12 @@ export class BuildMenu {
         this.refineryCostEl.style.color   = have >= REFINERY_IRON_COST ? '#8fbc8f' : '#bc8f8f';
         this.refineryStCostEl.textContent = `${fmt(haveStone)} / ${fmt(REFINERY_STONE_COST)} Stone`;
         this.refineryStCostEl.style.color = haveStone >= REFINERY_STONE_COST ? '#8fbc8f' : '#bc8f8f';
-        this.refineryBtn.disabled         = !refineryOk;
         this.refineryBtn.style.opacity    = refineryOk ? '1' : '0.45';
 
         const haveSteel  = this._steel().gathered;
         const oilWellOk  = haveSteel >= OIL_WELL_STEEL_COST;
         this.oilWellCostEl.textContent = `${fmt(haveSteel)} / ${fmt(OIL_WELL_STEEL_COST)} Steel`;
         this.oilWellCostEl.style.color = oilWellOk ? '#8fbc8f' : '#bc8f8f';
-        this.oilWellBtn.disabled       = !oilWellOk;
         this.oilWellBtn.style.opacity  = oilWellOk ? '1' : '0.45';
 
         const ppOk = have >= POWER_PLANT_IRON_COST && haveStone >= POWER_PLANT_STONE_COST;
@@ -429,7 +349,6 @@ export class BuildMenu {
         this.powerPlantCostEl.style.color   = have >= POWER_PLANT_IRON_COST ? '#8fbc8f' : '#bc8f8f';
         this.powerPlantStCostEl.textContent = `${fmt(haveStone)} / ${fmt(POWER_PLANT_STONE_COST)} Stone`;
         this.powerPlantStCostEl.style.color = haveStone >= POWER_PLANT_STONE_COST ? '#8fbc8f' : '#bc8f8f';
-        this.powerPlantBtn.disabled         = !ppOk;
         this.powerPlantBtn.style.opacity    = ppOk ? '1' : '0.45';
     }
 

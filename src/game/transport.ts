@@ -6,20 +6,18 @@ import { R, SURFACE_RISE, HOUSE_R } from './constants';
 import { Resource, formatScaled } from './resource';
 import { Structure } from './structure';
 import { arcLengthM, isSameStructureNormal } from './geo';
+import { TransportRequest } from './transportRequest';
 
-// Returns the surface normal of the closest structure that can PROVIDE `resource`
-// (InventoryRole 'output' or 'both') nearest to `fromNormal`.
-// `destNormal` is the destination's surface normal — excluded so a destination
-// that is also a provider (e.g. Homebase with role 'both') cannot select itself
-// as the source, which would collapse arcLength to ~0 and freeze the truck.
-export function resolveSourceNormal(
+// Returns the surface normal of the structure that can PROVIDE `resource`
+// (InventoryRole 'output' or 'both') closest to `destNormal`, or null if none.
+// The destination itself is excluded so a structure that is also a provider
+// (e.g. Homebase with role 'both') can't select itself and collapse the haul to ~0.
+export function resolveSource(
     resource:   Resource,
     structures: Structure[],
-    fromNormal: Vector3,
-    destNormal?: Vector3,
-): Vector3 {
-    const isDest = (s: Structure) =>
-        !!destNormal && isSameStructureNormal(s.surfaceNormal, destNormal);
+    destNormal: Vector3,
+): Vector3 | null {
+    const isDest = (s: Structure) => isSameStructureNormal(s.surfaceNormal, destNormal);
 
     // Prefer dedicated output providers (ResourceNode, OilWell, Refinery, PowerPlant).
     // 'both'-role structures (Homebase) are only fallback so a truck never collects from itself.
@@ -31,34 +29,28 @@ export function resolveSourceNormal(
     );
     const providers = outputs.length ? outputs : fallback;
 
-    if (!providers.length) return fromNormal.clone();
+    if (!providers.length) return null;
     let best = providers[0];
-    let bestDot = fromNormal.dot(best.surfaceNormal);
+    let bestDot = destNormal.dot(best.surfaceNormal);
     for (let i = 1; i < providers.length; i++) {
-        const d = fromNormal.dot(providers[i].surfaceNormal);
+        const d = destNormal.dot(providers[i].surfaceNormal);
         if (d > bestDot) { best = providers[i]; bestDot = d; }
     }
     return best.surfaceNormal.clone();
 }
 
 // ─── Serialization ────────────────────────────────────────────────────────────
+// Transports are stateless pool members: they persist only their vehicle type,
+// fuel choice, and parked location. Active jobs are transient (re-dispatched on
+// load), so they are never serialized.
 
 export interface TransportSave {
-    type:           string;
-    sourceResource: string;
-    fuelResource:   string;
-    state:          string;
-    t:              number;
-    speed:          number;
-    pauseTimer:     number;
-    stopped:        boolean;
-    // destination surface normal (optional for backward compat; falls back to homeNormal passed at load time)
+    type:         string;
+    fuelResource: string;
+    // current (parked) surface normal
+    cnx?: number; cny?: number; cnz?: number;
+    // legacy v7 fields — destination normal, used as parked location on migration
     hnx?: number; hny?: number; hnz?: number;
-    destName?: string;
-    // source surface normal (optional for backward compat; falls back to resource hitMesh position)
-    snx?: number; sny?: number; snz?: number;
-    // ms epoch when the truck was built. Used to derive cycle position on load.
-    buildTime?: number;
 }
 
 // ─── Spec ─────────────────────────────────────────────────────────────────────
@@ -83,19 +75,51 @@ export class TransportSpec {
     ) {}
 
     /**
-     * Mass of a given fuel resource consumed for a two-way trip of `distanceKm` km.
+     * Mass of a given fuel resource consumed to travel `distanceKm` km.
      * Converts via diesel-equivalent energy: diesel_mass → MJ → kg of alt fuel.
      */
-    fuelKgForRoundTripKm(distanceKm: number, fuel: Resource): number {
+    fuelKgForKm(distanceKm: number, fuel: Resource): number {
         const dieselKg = (this.fuelLPer100km / 100) * distanceKm * this.fuelRefDensityKgL;
         const energyMJ = dieselKg * this.fuelRefEnergyMJkg;
         return energyMJ / fuel.energyDensityMJkg;
     }
+
+    /** Time in seconds to drive `distM` metres from rest to rest (trapezoid/triangle). */
+    travelSec(distM: number): number {
+        const a = this.acceleration, v = this.maxSpeed;
+        const L = Math.max(distM, 0);
+        if (L <= 0) return 0;
+        const dAccel = (v * v) / (2 * a);
+        if (L > 2 * dAccel) {
+            const tAccel  = v / a;
+            const tCruise = (L - 2 * dAccel) / v;
+            return 2 * tAccel + tCruise;
+        }
+        return 2 * Math.sqrt(L / a);   // triangular profile, peak below cruise speed
+    }
 }
 
-// ─── Base ─────────────────────────────────────────────────────────────────────
+// ─── Job ────────────────────────────────────────────────────────────────────
 
-type TripState = 'to_resource' | 'pause_at_resource' | 'to_home' | 'pause_at_home';
+type JobPhase = 'to_source' | 'load' | 'to_dest' | 'unload';
+
+interface Job {
+    request:  TransportRequest;
+    source:   Vector3;    // source surface normal
+    payload:  number;     // planned kg this trip (reserved in request.qtyInFlight)
+    loaded:   number;     // actual kg mined at source (may be < payload if deposit ran low)
+    fuelKg:   number;     // fuel burned this trip (start→source→dest distance)
+    phase:    JobPhase;
+}
+
+// Result of a single update() step — index applies the inventory side-effects.
+export interface TransportTick {
+    // The truck finished loading at the source this step: index should mine the
+    // deposit and report back the actual amount via setLoaded().
+    load?:    { resource: Resource; payload: number };
+    // The truck reached its destination this step (job already cleared).
+    deliver?: { request: TransportRequest; resource: Resource; loaded: number; payload: number; fuelKg: number };
+}
 
 let _nextId = 1;
 
@@ -107,54 +131,43 @@ export abstract class Transport {
     readonly id: number = _nextId++;
     readonly mesh: Mesh;
     readonly hitMesh: Mesh;
-    sourceResource: Resource;
-    readonly fuelResource:  Resource;
+    readonly fuelResource: Resource;
 
-    stopped = false;
+    // Where the truck sits when idle / the origin of its current leg.
+    protected currentNormal: Vector3;
+    protected job: Job | null = null;
 
-    buildTime = Date.now();   // ms epoch — used to derive cycle position on load
+    // Current leg kinematics (from → to over arcLength metres).
+    protected legFrom:   Vector3;
+    protected legTo:     Vector3;
+    protected arcLength = 0.01;
+    protected t         = 0;   // 0→1 along current leg
+    protected speed     = 0;   // m/s
+    protected pauseTimer = 0;
 
-    protected state:      TripState = 'to_resource';
-    protected t           = 0;     // 0→1 along current arc segment
-    protected speed       = 0;     // m/s
-    protected pauseTimer  = 0;
-
-    protected homeNormal:   Vector3;
-    protected sourceNormal: Vector3;
-    protected arcLength:    number;   // metres, source pad → destination
-    protected destName:     string;
-
-    get destinationNormal(): Vector3 { return this.homeNormal; }
-    get destinationName():   string  { return this.destName; }
-    get srcNormal():         Vector3 { return this.sourceNormal; }
-
-    // Debug accessors
-    get tripState():      TripState { return this.state; }
-    get tripT():          number    { return this.t; }
-    get currentSpeed():   number    { return this.speed; }
-    get pauseRemaining(): number    { return this.pauseTimer; }
-    get arcLengthM():     number    { return this.arcLength; }
-
-    resolveDestName(structures: Structure[]): string {
-        const match = structures.find(s => isSameStructureNormal(s.surfaceNormal, this.homeNormal));
-        return match ? match.label : this.destName;
-    }
+    // ── Accessors ───────────────────────────────────────────────────────────
+    get isIdle():          boolean          { return this.job === null; }
+    get servingRequest():  TransportRequest | null { return this.job?.request ?? null; }
+    get sourceResource():  Resource | null  { return this.job?.request.resource ?? null; }
+    get parkedNormal():    Vector3          { return this.currentNormal; }
+    get srcNormal():       Vector3          { return this.job ? this.job.source : this.currentNormal; }
+    get destinationNormal(): Vector3        { return this.job ? this.job.request.destNormal : this.currentNormal; }
+    get destinationName():   string         { return this.job ? this.job.request.destName : 'idle'; }
+    get jobPhase():        string           { return this.job ? this.job.phase : 'idle'; }
+    // Planned kg reserved on the current job (the load this trip will deliver).
+    get plannedPayloadKg(): number          { return this.job?.payload ?? 0; }
+    get currentSpeed():    number           { return this.speed; }
+    get legArcM():         number           { return this.arcLength; }
 
     constructor(
         protected scene: Scene,
-        homeNormal:      Vector3,
-        sourceResource:  Resource,
         fuelResource:    Resource,
-        sourceNormal:    Vector3,
-        destName         = 'Homebase',
+        currentNormal:   Vector3,
     ) {
-        this.homeNormal     = homeNormal.clone();
-        this.sourceNormal   = sourceNormal.clone();
-        this.sourceResource = sourceResource;
-        this.fuelResource   = fuelResource;
-        this.destName       = destName;
-
-        this.arcLength = Math.max(arcLengthM(this.homeNormal, this.sourceNormal), 0.01);
+        this.fuelResource  = fuelResource;
+        this.currentNormal = currentNormal.clone().normalize();
+        this.legFrom       = this.currentNormal.clone();
+        this.legTo         = this.currentNormal.clone();
 
         this.mesh = this.makeMesh();
         this.mesh.userData['transport'] = this;
@@ -164,256 +177,176 @@ export abstract class Transport {
         this.hitMesh.userData['transport'] = this;
         this.hitMesh.visible = false;
         scene.add(this.hitMesh);
-        // _placeMesh deferred to first update() so derived-class field
-        // initializers (spec) finish before this.spec.height/width are read.
+        // _placeMesh deferred to first update()/park() so derived-class spec is ready.
     }
 
-    // Fuel mass consumed per completed round trip for this route.
-    get fuelKgPerRoundTrip(): number {
-        return this.spec.fuelKgForRoundTripKm(
-            (this.arcLength * 2) / 1000,
-            this.fuelResource,
-        );
+    // Park visually at the current (idle) location. Called once spec is available.
+    park(): void {
+        this._placeMesh(this.currentNormal, this.currentNormal);
     }
 
     getStatsLines(): string[] {
-        const cargoLabel = (this.state === 'to_home' || this.state === 'pause_at_home')
-            ? `${formatScaled(this.spec.payloadKg, 'kg')} ${this.sourceResource.name}`
-            : 'Empty';
-
-        const stateLabel: Record<string, string> = {
-            to_resource:       `→ ${this.sourceResource.name}`,
-            pause_at_resource: `Loading ${this.sourceResource.name}`,
-            to_home:           `← ${this.destName}`,
-            pause_at_home:     'Unloading',
+        if (!this.job) {
+            return [`${this.spec.name} #${this.id}`, 'Idle — awaiting request'];
+        }
+        const j = this.job;
+        const res = j.request.resource;
+        const phaseLabel: Record<JobPhase, string> = {
+            to_source: `→ pick up ${res.name}`,
+            load:      `Loading ${res.name}`,
+            to_dest:   `→ ${j.request.destName}`,
+            unload:    `Unloading at ${j.request.destName}`,
         };
-
         return [
             `${this.spec.name} #${this.id}`,
-            `Cargo: ${cargoLabel}`,
-            `Fuel: ${this.fuelResource.name}  ${this.fuelKgPerRoundTrip.toFixed(3)} kg/trip`,
-            stateLabel[this.state] ?? '',
+            `Cargo: ${formatScaled(j.payload, 'kg')} ${res.name}`,
+            `Fuel: ${this.fuelResource.name}  ${j.fuelKg.toFixed(3)} kg/trip`,
+            phaseLabel[j.phase],
         ];
     }
 
-    update(dt: number): { pickup: boolean; fuelConsumed: boolean } {
-        if (this.stopped) return { pickup: false, fuelConsumed: false };
+    // ── Dispatch ──────────────────────────────────────────────────────────────
 
-        let pickup = false, fuelConsumed = false;
+    // Fuel (kg of this truck's fuel) burned on a round trip: park → source → dest.
+    // Single source of truth for the trip-cost model, shared by the dispatcher's
+    // affordability checks and assignJob.
+    tripFuelKg(source: Vector3, destNormal: Vector3): number {
+        const km = (arcLengthM(this.currentNormal, source) + arcLengthM(source, destNormal)) / 1000;
+        return this.spec.fuelKgForKm(km, this.fuelResource);
+    }
 
-        switch (this.state) {
-            case 'to_resource':
+    // Can this truck afford the fuel for that trip right now?
+    canAfford(source: Vector3, destNormal: Vector3): boolean {
+        return this.fuelResource.gathered >= this.tripFuelKg(source, destNormal);
+    }
+
+    // Estimated seconds to reach the destination: drive park→source, pause, drive
+    // source→dest. Used by the dispatcher to rank candidate jobs.
+    tripEtaSec(source: Vector3, destNormal: Vector3): number {
+        return this.spec.travelSec(arcLengthM(this.currentNormal, source))
+             + this.spec.pauseTime
+             + this.spec.travelSec(arcLengthM(source, destNormal));
+    }
+
+    // Assign a haul job: drive to `sourceNormal`, load, deliver to the request's
+    // destination, then go idle. Reserves the planned payload on the request.
+    assignJob(request: TransportRequest, sourceNormal: Vector3): void {
+        const payload = Math.max(0, Math.min(this.spec.payloadKg, request.remaining));
+        request.qtyInFlight += payload;
+
+        this.job = {
+            request,
+            source:   sourceNormal.clone(),
+            payload,
+            loaded:   0,
+            fuelKg:   this.tripFuelKg(sourceNormal, request.destNormal),
+            phase:    'to_source',
+        };
+        this._startLeg(this.currentNormal, sourceNormal);
+    }
+
+    // Record how much was actually mined at the source (set after the 'load' tick)
+    // and reconcile the reservation to it. When the source was short (kg < the
+    // planned payload), the unfulfilled part of the reservation is released NOW —
+    // not at delivery — so `request.remaining` and the job board reflect the real
+    // cargo in transit instead of the optimistic full-truckload reservation.
+    setLoaded(kg: number): void {
+        if (!this.job) return;
+        const shortfall = this.job.payload - kg;
+        if (shortfall > 0) {
+            this.job.request.qtyInFlight = Math.max(0, this.job.request.qtyInFlight - shortfall);
+            this.job.payload = kg;   // reservation + reported cargo now match what was loaded
+        }
+        this.job.loaded = kg;
+    }
+
+    // Abort the current job (e.g. source deposit exhausted) and go idle where it stands.
+    abortJob(): void {
+        if (!this.job) return;
+        this.job.request.qtyInFlight = Math.max(0, this.job.request.qtyInFlight - this.job.payload);
+        this.currentNormal = this.job.source.clone();
+        this.job = null;
+        this.park();
+    }
+
+    // Called when a request is cancelled while this truck is serving it.
+    cancelIfServing(request: TransportRequest): boolean {
+        if (this.job && this.job.request === request) { this.abortJob(); return true; }
+        return false;
+    }
+
+    update(dt: number): TransportTick {
+        if (!this.job) return {};
+        const job = this.job;
+
+        switch (job.phase) {
+            case 'to_source':
                 if (this._advance(dt)) {
-                    this.state      = 'pause_at_resource';
+                    job.phase       = 'load';
                     this.pauseTimer = this.spec.pauseTime;
                 }
-                this._placeMesh(this.homeNormal, this.sourceNormal);
+                this._placeMesh(this.legFrom, this.legTo);
                 break;
 
-            case 'pause_at_resource':
+            case 'load':
                 this.pauseTimer -= dt;
                 if (this.pauseTimer <= 0) {
-                    pickup     = true;
-                    this.t     = 0;
-                    this.speed = 0;
-                    this.state = 'to_home';
+                    this._startLeg(job.source, job.request.destNormal);
+                    job.phase = 'to_dest';
+                    return { load: { resource: job.request.resource, payload: job.payload } };
                 }
                 break;
 
-            case 'to_home':
+            case 'to_dest':
                 if (this._advance(dt)) {
-                    this.state      = 'pause_at_home';
+                    job.phase       = 'unload';
                     this.pauseTimer = this.spec.pauseTime;
                 }
-                this._placeMesh(this.sourceNormal, this.homeNormal);
+                this._placeMesh(this.legFrom, this.legTo);
                 break;
 
-            case 'pause_at_home':
+            case 'unload':
                 this.pauseTimer -= dt;
                 if (this.pauseTimer <= 0) {
-                    fuelConsumed = true;
-                    this.t     = 0;
-                    this.speed = 0;
-                    this.state = 'to_resource';
+                    const deliver = {
+                        request:  job.request,
+                        resource: job.request.resource,
+                        loaded:   job.loaded,
+                        payload:  job.payload,
+                        fuelKg:   job.fuelKg,
+                    };
+                    this.currentNormal = job.request.destNormal.clone();
+                    this.job = null;
+                    this.park();
+                    return { deliver };
                 }
                 break;
         }
-
-        return { pickup, fuelConsumed };
+        return {};
     }
 
-    // Spread trucks evenly across the round-trip cycle so they don't overlap.
-    // fraction ∈ [0, 1): 0→0.5 = outbound, 0.5→1 = return leg.
-    stagger(fraction: number): void {
-        if (fraction < 0.5) {
-            this.state = 'to_resource';
-            this.t     = fraction * 2;
-            this._placeMesh(this.homeNormal, this.sourceNormal);
-        } else {
-            this.state = 'to_home';
-            this.t     = (fraction - 0.5) * 2;
-            this._placeMesh(this.sourceNormal, this.homeNormal);
-        }
-        this.speed      = 0;
-        this.pauseTimer = 0;
-    }
-
-    // Change the resource this transport collects and resume operation.
-    // If structures is provided, routes to the closest structure providing the resource.
-    reassign(source: Resource, structures: Structure[]): void {
-        this.sourceResource = source;
-        this.sourceNormal   = resolveSourceNormal(source, structures, this.homeNormal, this.homeNormal);
-        this.arcLength = Math.max(arcLengthM(this.homeNormal, this.sourceNormal), 0.01);
-        this.stopped    = false;
-        this.state      = 'to_resource';
-        this.t          = 0;
-        this.speed      = 0;
-        this.pauseTimer = 0;
-    }
-
-    // Reassign both destination and source; routes to the closest structure providing the resource.
-    reassignRoute(destNormal: Vector3, destName: string, source: Resource, structures: Structure[]): void {
-        this.homeNormal     = destNormal.clone();
-        this.destName       = destName;
-        this.sourceResource = source;
-        this.sourceNormal   = resolveSourceNormal(source, structures, destNormal, destNormal);
-        this.arcLength = Math.max(arcLengthM(this.homeNormal, this.sourceNormal), 0.01);
-        this.stopped    = false;
-        this.state      = 'to_resource';
-        this.t          = 0;
-        this.speed      = 0;
-        this.pauseTimer = 0;
-    }
-
-    dispose(): void { this.scene.remove(this.mesh); }
+    dispose(): void { this.scene.remove(this.mesh); this.scene.remove(this.hitMesh); }
 
     toJSON(): TransportSave {
         return {
-            type:           this.constructor.name,
-            sourceResource: this.sourceResource.name,
-            fuelResource:   this.fuelResource.name,
-            state:          this.state,
-            t:              this.t,
-            speed:          this.speed,
-            pauseTimer:     this.pauseTimer,
-            stopped:        this.stopped,
-            hnx: this.homeNormal.x,
-            hny: this.homeNormal.y,
-            hnz: this.homeNormal.z,
-            destName: this.destName,
-            snx: this.sourceNormal.x,
-            sny: this.sourceNormal.y,
-            snz: this.sourceNormal.z,
-            buildTime: this.buildTime,
+            type:         this.constructor.name,
+            fuelResource: this.fuelResource.name,
+            cnx: this.currentNormal.x,
+            cny: this.currentNormal.y,
+            cnz: this.currentNormal.z,
         };
     }
 
-    restoreFrom(save: TransportSave): void {
-        this.stopped = save.stopped ?? false;
-        if (save.destName) this.destName = save.destName;
-
-        if (this.stopped) {
-            this.parkAtHome();
-            return;
-        }
-
-        if (typeof save.buildTime === 'number') {
-            // Recompute cycle position from elapsed wall-clock since the truck was built.
-            this.buildTime = save.buildTime;
-            const elapsedSec = (Date.now() - this.buildTime) / 1000;
-            this.setFromCyclePosition(elapsedSec);
-            return;
-        }
-
-        // Legacy save: restore raw state fields.
-        this.state      = save.state as TripState;
-        this.t          = save.t;
-        this.speed      = save.speed;
-        this.pauseTimer = save.pauseTimer;
-        if (this.state === 'to_resource' || this.state === 'pause_at_resource') {
-            this._placeMesh(this.homeNormal, this.sourceNormal);
-        } else {
-            this._placeMesh(this.sourceNormal, this.homeNormal);
-        }
-    }
-
-    // Trapezoid/triangle kinematics: distance + speed at trip-elapsed τ.
-    private _trip(): { tripTime: number; trapezoid: boolean; tAccel: number; tCruise: number; dAccel: number } {
-        const a = this.spec.acceleration;
-        const v = this.spec.maxSpeed;
-        const L = this.arcLength;
-        const dAccel = (v * v) / (2 * a);
-        if (L > 2 * dAccel) {
-            const tAccel  = v / a;
-            const tCruise = (L - 2 * dAccel) / v;
-            return { tripTime: 2 * tAccel + tCruise, trapezoid: true, tAccel, tCruise, dAccel };
-        }
-        const vPeak = Math.sqrt(a * L);
-        const tHalf = vPeak / a;
-        return { tripTime: 2 * tHalf, trapezoid: false, tAccel: tHalf, tCruise: 0, dAccel: L / 2 };
-    }
-
-    private _positionInTrip(tau: number): { t: number; speed: number } {
-        const a = this.spec.acceleration;
-        const v = this.spec.maxSpeed;
-        const L = this.arcLength;
-        const trip = this._trip();
-        tau = Math.max(0, Math.min(trip.tripTime, tau));
-        let d: number, sp: number;
-        if (trip.trapezoid) {
-            if (tau < trip.tAccel)                       { d = 0.5 * a * tau * tau;                                 sp = a * tau; }
-            else if (tau < trip.tAccel + trip.tCruise)   { d = trip.dAccel + v * (tau - trip.tAccel);               sp = v; }
-            else { const taup = trip.tripTime - tau;       d = L - 0.5 * a * taup * taup;                            sp = a * taup; }
-        } else {
-            const tHalf = trip.tripTime / 2;
-            if (tau < tHalf)                              { d = 0.5 * a * tau * tau;                                 sp = a * tau; }
-            else { const taup = trip.tripTime - tau;       d = L - 0.5 * a * taup * taup;                            sp = a * taup; }
-        }
-        return { t: Math.max(0, Math.min(1, d / L)), speed: sp };
-    }
-
-    // Park at home — used when stopped (no fuel / source exhausted). Idle visual.
-    parkAtHome(): void {
-        this.state      = 'pause_at_home';
-        this.t          = 1;
-        this.speed      = 0;
-        this.pauseTimer = 0;
-        this._placeMesh(this.sourceNormal, this.homeNormal);
-    }
-
-    setFromCyclePosition(elapsedSec: number): void {
-        const trip  = this._trip().tripTime;
-        const pause = this.spec.pauseTime;
-        const cycle = 2 * trip + 2 * pause;
-        if (cycle <= 0) return;
-        let p = elapsedSec % cycle;
-        if (p < 0) p += cycle;
-
-        if (p < trip) {
-            this.state = 'to_resource';
-            const { t, speed } = this._positionInTrip(p);
-            this.t = t; this.speed = speed; this.pauseTimer = 0;
-            this._placeMesh(this.homeNormal, this.sourceNormal);
-        } else if (p < trip + pause) {
-            this.state = 'pause_at_resource';
-            this.t = 1; this.speed = 0;
-            this.pauseTimer = Math.max(0, pause - (p - trip));
-            this._placeMesh(this.homeNormal, this.sourceNormal);
-        } else if (p < 2 * trip + pause) {
-            this.state = 'to_home';
-            const tau = p - trip - pause;
-            const { t, speed } = this._positionInTrip(tau);
-            this.t = t; this.speed = speed; this.pauseTimer = 0;
-            this._placeMesh(this.sourceNormal, this.homeNormal);
-        } else {
-            this.state = 'pause_at_home';
-            this.t = 1; this.speed = 0;
-            this.pauseTimer = Math.max(0, pause - (p - 2 * trip - pause));
-            this._placeMesh(this.sourceNormal, this.homeNormal);
-        }
-    }
-
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private _startLeg(from: Vector3, to: Vector3): void {
+        this.legFrom   = from.clone();
+        this.legTo     = to.clone();
+        this.arcLength = Math.max(arcLengthM(from, to), 0.01);
+        this.t         = 0;
+        this.speed     = 0;
+        this._placeMesh(this.legFrom, this.legTo);
+    }
 
     private _advance(dt: number): boolean {
         const { maxSpeed, acceleration } = this.spec;
@@ -433,30 +366,27 @@ export abstract class Transport {
     }
 
     // Keep-right lane separation: outbound and inbound trucks stay on opposite sides
-    // because from/to are swapped on the return leg, flipping the right vector.
+    // because from/to swap on the return leg, flipping the right vector.
     protected _placeMesh(from: Vector3, to: Vector3): void {
         const n = from.clone().lerp(to, this.t).normalize();
 
         // Great-circle tangent via rotation axis. axis = from × to is perpendicular
         // to the orbital plane; fwd = axis × n is the planar tangent at n pointing
-        // toward `to`. Robust for any non-zero arc — the prior project-and-clamp
-        // approach degenerated for sub-metre arcs (|fwd|² ~ θ²) and produced a
-        // garbage quaternion, leaving the truck pointed straight up.
+        // toward `to`. Robust for any non-zero arc.
         const axis = new Vector3().crossVectors(from, to);
-        if (axis.lengthSq() < 1e-20) axis.set(0, 0, 1);   // from ≈ ±to: zero-arc, won't render motion
+        if (axis.lengthSq() < 1e-20) axis.set(0, 0, 1);   // from ≈ ±to: zero-arc, parked
         axis.normalize();
         const fwd = new Vector3().crossVectors(axis, n).normalize();
         const right = new Vector3().crossVectors(n, fwd).normalize();
 
         // Lane offset clears the homebase cylinder (radius HOUSE_R=6m).
-        // Reduced 50% — inner truck edge sits closer to centreline now.
         const laneOffset = (HOUSE_R + this.spec.width) * 0.25;
         this.mesh.position
             .copy(n).multiplyScalar(R + this.spec.height / 2 + SURFACE_RISE)
             .addScaledVector(right, laneOffset);
 
         // Orient without reading parent world matrix (scene shifts each frame for precision).
-        // Local X = right (truck width), local Y = n (up from surface), local Z = fwd (11 m travel axis).
+        // Local X = right (truck width), local Y = n (up from surface), local Z = fwd (travel axis).
         this.mesh.quaternion.setFromRotationMatrix(new Matrix4().makeBasis(right, n, fwd));
 
         this.hitMesh.position.copy(this.mesh.position);
@@ -490,18 +420,10 @@ export class TruckTransport extends Transport {
 
     readonly spec: TransportSpec = TruckTransport.SPEC;
 
-    constructor(
-        scene:          Scene,
-        homeNormal:     Vector3,
-        sourceResource: Resource,
-        fuelResource:   Resource,
-        sourceNormal:   Vector3,
-        destName?:      string,
-    ) {
-        super(scene, homeNormal, sourceResource, fuelResource, sourceNormal, destName);
-        // Place at cycle position 0 = at destination, about to leave.
-        // Subclass `spec` field is initialized by the time this runs, so _placeMesh is safe.
-        this.setFromCyclePosition(0);
+    constructor(scene: Scene, fuelResource: Resource, currentNormal: Vector3) {
+        super(scene, fuelResource, currentNormal);
+        // Subclass `spec` field is initialized by now, so _placeMesh is safe.
+        this.park();
     }
 
     protected makeMesh(): Mesh {
@@ -524,19 +446,14 @@ export class TruckTransport extends Transport {
         resources:  Resource[],
         homeNormal: Vector3,
     ): TruckTransport {
-        const src   = resources.find(r => r.name === save.sourceResource)!;
-        const fuel  = resources.find(r => r.name === save.fuelResource)!;
-        const destN = (save.hnx !== undefined)
-            ? new Vector3(save.hnx, save.hny!, save.hnz!)
-            : homeNormal;
-        // sourceNormal: prefer saved value, fall back to hitMesh position for old saves
-        const srcN  = (save.snx !== undefined)
-            ? new Vector3(save.snx, save.sny!, save.snz!)
-            : (src.hitMesh ? src.hitMesh.position.clone().normalize() : destN);
-        const rawName = save.destName ?? 'Homebase';
-        const destName = rawName === 'Home' || rawName === 'Home Base' ? 'Homebase' : rawName;
-        const t = new TruckTransport(scene, destN, src, fuel, srcN, destName);
-        t.restoreFrom(save);
-        return t;
+        const fuel = resources.find(r => r.name === save.fuelResource) ?? resources[0];
+        // Parked location: prefer saved current normal, fall back to legacy dest
+        // normal, then the home base.
+        const parked = (save.cnx !== undefined)
+            ? new Vector3(save.cnx, save.cny!, save.cnz!)
+            : (save.hnx !== undefined)
+                ? new Vector3(save.hnx, save.hny!, save.hnz!)
+                : homeNormal;
+        return new TruckTransport(scene, fuel, parked);
     }
 }

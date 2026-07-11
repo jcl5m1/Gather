@@ -43,7 +43,20 @@ npm run build:game     # Alias of `npm run build`
 ```bash
 npm test               # vitest run (suite in test/game/)
 npm run test:watch     # vitest watch mode
+npm run sim            # headless simulation at 10x via GameEngine (no UI); writes
+                       # per-event logs to logs/headless-sim.jsonl + a summary.txt.
+                       # Runner: test/game/headlessSim.ts (reusable runHeadlessSim()).
+npm run sim:100x       # same headless sim at 100x (SIM_TIMESCALE=100)
 ```
+
+The test suite is comprehensive and headless-only (pure logic + Three.js math, no
+DOM/WebGL): resource model & haul accounting, transport/dispatch, request queue &
+supply-chain tree, refinery/power-plant/oil-well production, save/load round-trip,
+tech tree, world build, engine lifecycle/events, and full end-to-end integration
+scenarios (steel & gasoline pipelines, source depletion). CI runs the suite + a
+100x sim as a **non-blocking** `test` job in `.github/workflows/deploy.yml`
+(`continue-on-error`, not a dependency of deploy), so failures surface without
+ever holding up a Pages deploy; sim logs upload as a build artifact.
 
 ### Archived projects (in experimental/, still buildable)
 ```bash
@@ -73,7 +86,8 @@ A mobile-first iOS tap-to-gather game rendered on a real-scale Earth. No externa
 
 ```
 src/game/
-├── index.ts             — entry: wires all modules, owns the render loop
+├── index.ts             — entry: wires all modules, owns the render loop; drives sim ONLY via engine.ts
+├── engine.ts            — GameEngine: owns & advances ALL simulation state (step/createRequest/cancelRequest/add*/removeStructure). The UI and the headless runner both drive this same API, so they execute identical simulation code. Reports back via an EngineListener (UI → HUD/notify/save; headless → log files).
 ├── index.html           — HTML shell + CSS (no inline JS); loads game.bundle.js
 ├── constants.ts         — R (Earth radius), HOUSE_*, PAD_*, RES_DIST, SURFACE_RISE
 ├── resource.ts          — Resource class + RESOURCES array (Wood/Stone/Iron/Coal/Crystal)

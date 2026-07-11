@@ -7,6 +7,10 @@ export class TechPanel {
     private isOpen        = false;
     private lastRefreshMs = 0;
 
+    // Performs the research through the engine (spend + unlock). Returns false if
+    // it couldn't be researched. Default no-op until wired from index.
+    private researchHandler: (techId: string) => boolean = () => false;
+
     constructor(
         private resources:    Resource[],
         private techTree:     TechTree,
@@ -16,6 +20,8 @@ export class TechPanel {
         this.content = document.getElementById('tech-panel-content')!;
         document.getElementById('tp-close')!.addEventListener('click', () => this.close());
     }
+
+    setResearchHandler(fn: (techId: string) => boolean): void { this.researchHandler = fn; }
 
     toggle(): void { this.isOpen ? this.close() : this.open(); }
 
@@ -99,12 +105,11 @@ export class TechPanel {
                 btn.style.opacity = canAfford ? '1' : '0.45';
                 if (canAfford) {
                     btn.addEventListener('click', () => {
-                        for (const c of def.cost) {
-                            this.resources.find(r => r.name === c.resourceName)!.consume(c.amount);
+                        // Spend + unlock happens in the engine (authoritative + logged).
+                        if (this.researchHandler(def.id)) {
+                            this.onResearched();
+                            this._refresh();
                         }
-                        this.techTree.research(def.id);
-                        this.onResearched();
-                        this._refresh();
                     });
                 }
                 card.appendChild(btn);
