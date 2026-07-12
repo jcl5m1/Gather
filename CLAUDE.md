@@ -86,33 +86,64 @@ A mobile-first iOS tap-to-gather game rendered on a real-scale Earth. No externa
 
 ```
 src/game/
-├── index.ts             — entry: wires all modules, owns the render loop; drives sim ONLY via engine.ts
-├── engine.ts            — GameEngine: owns & advances ALL simulation state (step/createRequest/cancelRequest/add*/removeStructure). The UI and the headless runner both drive this same API, so they execute identical simulation code. Reports back via an EngineListener (UI → HUD/notify/save; headless → log files).
+├── index.ts             — entry: wires all modules, owns the render loop; drives the sim ONLY via engine.ts
+│
+│   ── Simulation core (headless-safe: pure logic + Three.js math, no DOM/WebGL) ──
+├── engine.ts            — GameEngine: owns & advances ALL simulation state (transports, structures,
+│                          request queue, tech tree). ONE API for every state change — step(gameDt),
+│                          createRequest/cancelRequest, build/gather/research, add*/removeStructure,
+│                          dispatch. UI and headless runner drive the SAME engine, so they run identical
+│                          code. Reports back via EngineListener (UI → HUD/notify/save; headless → logs).
+├── dispatcher.ts        — dispatch(): greedily assigns idle trucks to open requests (scored by
+│                          remaining ÷ ETA, gated by source stock + fuel). requestBlockReason():
+│                          why a request is stuck (no-source / no-transport / no-fuel / waiting).
+├── transportRequest.ts  — TransportRequest (qtyRequested/Delivered/InFlight; remaining/outstanding)
+│                          + TransportQueue (open/prune/subtree/childrenOf); parent/child request tree.
+├── supplyChain.ts       — findProducer() + requiredInputs(): the primitives engine.provisionSupply
+│                          uses to continuously top up a manufactured request's inputs.
+├── transport.ts         — Transport (abstract) + TruckTransport: job state machine
+│                          (to_source→load→to_dest→unload), tripFuelKg/canAfford/tripEtaSec, resolveSource.
+├── resource.ts          — Resource + RESOURCES. Raw (Wood/Stone/Iron/Coal/Crystal), extraction-gated
+│                          (Oil), manufactured (Steel/Gasoline/Electricity). TWO pools: `deposit` =
+│                          stock available at the source for pickup; `gathered` = spendable inventory.
+├── refinery.ts / powerPlant.ts / oilWell.ts — producer structures (recipes, batch tick, utilization).
+├── structure.ts / resourceNode.ts / homebase.ts — Structure base + getResourceRole (input/output/both).
+├── tech.ts              — TechTree (fuel-tier research) + autoFuel().
+│
+│   ── Rendering / world ──
 ├── index.html           — HTML shell + CSS (no inline JS); loads game.bundle.js
-├── constants.ts         — R (Earth radius), HOUSE_*, PAD_*, RES_DIST, SURFACE_RISE
-├── resource.ts          — Resource class + RESOURCES array (Wood/Stone/Iron/Coal/Crystal)
+├── constants.ts         — R (Earth radius), HOUSE_*, PAD_*, RES_DIST, SURFACE_RISE, KSC_LAT/LON
 ├── scene.ts             — createRenderer(), createCamera()
 ├── earth.ts             — addLighting(), addStars(), addEarth() → returns cloudMesh; Earth shaders
 ├── earthLOD.ts          — level-of-detail tile swapping (dist/tiles/L1, L2) as you zoom
 ├── terrainGen.ts        — procedural terrain generation (shader-based)
-├── geo.ts               — lat/lon ↔ 3D surface-vector helpers
-├── world.ts             — buildWorld(): places ground patch, homebase cylinder, resource pads on sphere surface
-├── zoomController.ts    — ZoomController: 5 zoom levels (street→planet), camera lerp state; ZoomSave for persistence
-├── hud.ts               — HUD: builds resource count DOM, update(res)
-├── flash.ts             — Flash: "+1 Wood" tap feedback label
-├── inputHandler.ts      — InputHandler: raycasting, touchstart + click, scale-bounce on gather
-├── dragOrbitHandler.ts  — DragOrbitHandler: two-finger drag rotates globe; quaternion-based orbit camera
-├── homebaseIcon.ts      — HomebaseIcon: screen-space DOM icon overlay pinned to homebase position
-├── buildMenu.ts         — BuildMenu: DOM panel + confirmation modal for placing Refinery/Transport structures
-├── transport.ts         — Transport (abstract), TruckTransport: surface-crawling resource haulers; TransportSave
-├── refinery.ts          — Refinery: converts raw resources; constants REFINERY_W/H/D, REFINERY_IRON_COST/STONE_COST; RefinerySave
-├── oilWell.ts / powerPlant.ts / orbitalDebris.ts — additional structures/effects
-├── tech.ts / techPanel.ts — tech tree + panel; autoFuel logic
-├── saveState.ts         — saveGame()/loadGame(): localStorage persistence for inventory, transports, refineries, zoom
-├── statsPanel.ts        — StatsPanel: resource throughput/rate chart
-└── logger.ts            — client-side logger forwarding to dev server GET/POST /log endpoint (sendBeacon-compatible)
+├── geo.ts               — arcLengthM, lat/lon ↔ surface-vector, isSameStructureNormal
+├── world.ts             — buildWorld(): homebase cylinder + resource pads on the sphere at KSC
+├── zoomController.ts    — ZoomController: 5 zoom levels (street→planet), camera lerp; ZoomSave
+│
+│   ── UI (thin: routes all state changes through the engine) ──
+├── hud.ts               — HUD: resource count DOM
+├── inputHandler.ts      — raycasting/taps; tap-to-gather → engine.gather, request dialog → engine.createRequest
+├── buildMenu.ts         — build panel; constructs the object, engine.build() charges cost + registers it
+├── techPanel.ts         — tech panel; Research → engine.research()
+├── statsPanel.ts        — StatsPanel: Resource Stats chart + Transport Job Market board (refreshes
+│                          1/sec real-time — independent of the game time multiplier)
+├── warnings.ts          — WarningPanel: generic status board fed by WarningSource fns (blocked requests, etc.)
+├── tooltip.ts           — structure hover card (Inputs / Output = current on-hand, not lifetime totals)
+├── dragOrbitHandler.ts  — two-finger drag rotates globe; quaternion orbit camera
+├── homebaseIcon.ts / flash.ts / notify.ts / uiDefaults.ts — screen-space icon, tap feedback, toasts, UI config
+├── saveState.ts         — saveGame()/loadGame(): localStorage v8 (inventory, deposits incl. manufactured
+│                          pickup buffer, transports, request queue, structures, techs, zoom)
+└── logger.ts            — client-side logger → dev-server GET/POST /log (sendBeacon-compatible)
 ```
-(Additional modules: `homebase.ts`, `resourceNode.ts`, `structure.ts`, `tooltip.ts`, `notify.ts`, `uiDefaults.ts`.)
+
+**Game logistics (the simulation core):**
+- **Single engine authority.** All simulation state lives in `GameEngine` and changes only through its API. `index.ts` never mutates trucks/structures/queue/inventory directly. This is why the browser UI and the headless runner (`test/game/headlessSim.ts`, `npm run sim`) produce identical behavior — they call the same engine, differing only in the `EngineListener` they pass.
+- **Two-pool resource model.** `gathered` = the player's spendable inventory; `deposit` = stock currently available *at the source* for pickup. Raw: mining moves `deposit`→`gathered`. Manufactured: `produce()` credits BOTH (goods are spendable immediately AND stocked in the producer's pickup buffer); a truck `extract()`s from `deposit`; `deliver()` is inventory-neutral for manufactured goods (already counted at production). This split stops delivered goods from looping back into the source and being re-hauled.
+- **Request queue + parent/child tree.** A request for a manufactured resource auto-provisions child input requests to its producer (linked by `parentId`). `provisionSupply()` runs every `dispatch()` and continuously tops up a producer's inputs (accounting for on-hand + already-inbound), so a starved producer *self-heals* instead of stalling with idle trucks. Cancelling a request cascades to its subtree (aborting trucks); completing one drops its leftover supply subtree (trucks mid-haul finish).
+- **Reservations.** Dispatch reserves a full planned payload (`qtyInFlight`); at load time the reservation is reconciled to the amount actually mined, so a short pickup doesn't show a full truckload reserved/in-transit or understate `remaining`.
+- **Job market board** shows per open request: Working (trucks) / Available (source `deposit`) / Reserved / In transit / Remaining, with input requests nested under their parent.
+- **Tick timing.** `engine.step(dt * timeScale)` sub-steps internally (≤ `SIM_MAX_STEP` s) so large timeScale stays smooth. Dispatch runs once per frame.
 
 **Key design points:**
 - Real-world scale (R = 6,371,000 m); logarithmic depth buffer handles street-to-planet zoom without z-fighting
@@ -123,7 +154,9 @@ src/game/
 - Dev server (port 9010) runs with HMR disabled (`hot: false`) and `Cache-Control: no-store` to prevent iOS caching stale bundles; exposes GET+POST `/log` and a `/build-time` endpoint for client-side logging / stale-bundle detection
 - **Config files:** `webpack.game.config.js`, `tsconfig.game.json`
 
-**Testing:** vitest, pure-logic only (no JSDOM — tests must avoid window/document/HTMLElement). The suite lives in `test/game/*.test.ts` and imports production code from `../../src/game/`. Run with `npm test`. `vitest.config.ts` include glob is `test/**/*.test.ts`.
+**Testing:** vitest, pure-logic only (no JSDOM — tests must avoid window/document/HTMLElement; `saveState.test.ts` uses a tiny in-memory `localStorage` shim). Three.js scene objects (Scene/Mesh/geometry) are pure math in Node, so structures and the whole `GameEngine` run headless — the simulation is exercised end-to-end without a renderer (see `headlessSim.ts` and `integration.test.ts`). The suite (~136 tests) lives in `test/game/*.test.ts`, imports production code from `../../src/game/`, and covers the two-pool resource model & haul accounting, dispatch/block-reason, request queue & self-healing supply chain, refinery/power-plant/oil-well production, engine lifecycle & events (build/gather/research), save/load round-trip, tech tree, world build, and full pipelines (steel/gasoline, source depletion, shared-fuel starvation recovery). Run with `npm test`; include glob is `test/**/*.test.ts`.
+
+**Golden rule:** every game-state mutation goes through a `GameEngine` method. Never call `resource.consume/gather/produce`, `techTree.research`, `queue.*`, or push to the structure/transport arrays from UI code — route it through the engine so it's logged, headlessly testable, and identical between UI and sim.
 
 ## Architecture: moonOrbitSim (archived — experimental/moonOrbitSim/)
 
