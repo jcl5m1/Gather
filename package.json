@@ -9,6 +9,8 @@
     "build:game": "webpack --config webpack.game.config.js",
     "start:game": "webpack serve --config webpack.game.config.js",
     "test": "vitest run",
+    "sim": "vitest run test/game/headlessSim.test.ts",
+    "sim:100x": "SIM_TIMESCALE=100 vitest run test/game/headlessSim.test.ts",
     "test:watch": "vitest",
     "build:moon": "webpack --config experimental/moonOrbitSim/webpack.config.js",
     "start:moon": "webpack serve --config experimental/moonOrbitSim/webpack.config.js",

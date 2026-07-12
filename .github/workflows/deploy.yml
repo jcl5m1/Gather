@@ -16,6 +16,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Full headless test suite + a 100x simulation run. Deliberately NON-BLOCKING:
+  # the deploy job does not `needs:` this, and continue-on-error keeps the
+  # workflow green, so test failures surface without ever holding up a deploy.
+  test:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Headless simulation (100x)
+        run: npm run sim:100x
+
+      - name: Upload simulation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: headless-sim-logs
+          path: logs/
+          if-no-files-found: ignore
+
   build:
     runs-on: ubuntu-latest
     steps:

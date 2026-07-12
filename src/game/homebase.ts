@@ -37,7 +37,7 @@ export class Homebase extends Structure {
 
     // truckCount for homebase = all active trucks (they all deliver here).
     getStatsLines(truckCount: number): string[] {
-        const lines: string[] = ['Homebase', 'Tap a resource to assign transports.'];
+        const lines: string[] = ['Homebase', 'Tap to request deliveries here.'];
         if (truckCount > 0) lines.push(`trucks active  ${truckCount}`);
         return lines;
     }

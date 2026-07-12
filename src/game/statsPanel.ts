@@ -1,21 +1,11 @@
-import { Vector3 } from 'three';
 import { Resource, formatScaled } from './resource';
-import { arcLengthKm } from './geo';
-import { Transport, resolveSourceNormal } from './transport';
+import { Transport, resolveSource } from './transport';
+import { TransportQueue, TransportRequest } from './transportRequest';
 import { Structure } from './structure';
-import { Homebase } from './homebase';
-import { Refinery } from './refinery';
 
 interface Sample {
     time:     number;
     gathered: Record<string, number>;
-}
-
-interface TruckGroup {
-    transports: Transport[];
-    sourceName: string;
-    sourceHex:  string;
-    destName:   string;
 }
 
 const SAMPLE_MS   = 30_000;
@@ -27,40 +17,25 @@ export class StatsPanel {
     private ctx:       CanvasRenderingContext2D;
     private history:   Sample[] = [];
     private visible    = false;
-    private idleBadge: HTMLButtonElement;
     private totalEl:   HTMLElement;
 
-    private idleOverlay: HTMLElement;
-    private idleList:    HTMLElement;
+    private structures: Structure[] = [];
+    private queue:      TransportQueue | null = null;
 
-    private pickOverlay: HTMLElement;
-    private pickList:    HTMLElement;
-
-    private selectedTransports = new Set<Transport>();
-    private idleAssignBtn!: HTMLButtonElement;
-    private idleBtnMap     = new Map<Transport, HTMLElement>();
-    private structures:    Structure[] = [];
-
-    // Transportation section (persistent shell + dynamic route rows)
+    // Transport section (persistent shell + dynamic request rows)
     private transportsSection!: HTMLElement;
-    private routeRowsEl!:       HTMLElement;
+    private requestRowsEl!:     HTMLElement;
 
     // Structure utilization section
     private structuresSection!: HTMLElement;
 
-    // 3-step route reassign overlay (launched from allocation rows)
-    private routeOverlay!:    HTMLElement;
-    private routeBody!:       HTMLElement;
-    private routeGroupTs:     Transport[] = [];
-    private routeCount        = 1;
-    private routeDestNormal:  Vector3 | null = null;
-    private routeDestName     = '';
-    private routeSourceName   = '';
-
-    private saveCallback: () => void = () => {};
+    private saveCallback:   () => void = () => {};
+    private cancelCallback: (req: TransportRequest) => void = () => {};
 
     setStructures(structures: Structure[]): void { this.structures = structures; }
     setSaveCallback(fn: () => void): void { this.saveCallback = fn; }
+    setQueue(queue: TransportQueue): void { this.queue = queue; }
+    setCancelRequestCallback(fn: (req: TransportRequest) => void): void { this.cancelCallback = fn; }
 
     constructor(
         private resources:  Resource[],
@@ -108,20 +83,19 @@ export class StatsPanel {
         Object.assign(this.canvas.style, { width: '100%', height: '340px', borderRadius: '8px' });
         this.ctx = this.canvas.getContext('2d')!;
 
-        // ── Transport section (label + idle row + route rows) ─────────────────
+        // ── Transport request section ─────────────────────────────────────────
         this.transportsSection = document.createElement('div');
         Object.assign(this.transportsSection.style, {
             display: 'flex', flexDirection: 'column', gap: '4px',
         });
 
-        // Section label row (label + total count)
-        const transportLabelRow = document.createElement('div');
-        Object.assign(transportLabelRow.style, {
+        const labelRow = document.createElement('div');
+        Object.assign(labelRow.style, {
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         });
-        const transportLabel = document.createElement('div');
-        transportLabel.textContent = 'Transport';
-        Object.assign(transportLabel.style, {
+        const label = document.createElement('div');
+        label.textContent = 'Transport Job Market';
+        Object.assign(label.style, {
             fontSize: '9px', letterSpacing: '1.5px', textTransform: 'uppercase',
             color: '#444', fontFamily: '-apple-system, sans-serif',
         });
@@ -130,38 +104,14 @@ export class StatsPanel {
             fontSize: '9px', color: '#555', fontFamily: '-apple-system, sans-serif',
             letterSpacing: '0.5px',
         });
-        transportLabelRow.append(transportLabel, this.totalEl);
+        labelRow.append(label, this.totalEl);
 
-        // Idle row (persistent — badge updated by _updateIdleBadge)
-        const idleRow = document.createElement('div');
-        Object.assign(idleRow.style, {
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '8px 12px',
-            background: 'rgba(255,255,255,0.03)',
-            border: '1px solid rgba(255,255,255,0.07)',
-            borderRadius: '8px', fontFamily: '-apple-system, sans-serif',
-        });
-        const idleLabel = document.createElement('span');
-        idleLabel.textContent = 'Idle';
-        Object.assign(idleLabel.style, { fontSize: '12px', color: '#666' });
-
-        this.idleBadge = document.createElement('button');
-        Object.assign(this.idleBadge.style, {
-            background: 'rgba(255,180,0,0.15)', border: '1px solid rgba(255,180,0,0.3)',
-            borderRadius: '6px', padding: '2px 12px',
-            color: '#ffb400', fontSize: '13px', fontWeight: '600',
-            cursor: 'pointer', fontFamily: '-apple-system, sans-serif',
-        });
-        this.idleBadge.addEventListener('click', () => this._openIdleList());
-        idleRow.append(idleLabel, this.idleBadge);
-
-        // Route rows rebuilt on each render
-        this.routeRowsEl = document.createElement('div');
-        Object.assign(this.routeRowsEl.style, {
+        this.requestRowsEl = document.createElement('div');
+        Object.assign(this.requestRowsEl.style, {
             display: 'flex', flexDirection: 'column', gap: '4px',
         });
 
-        this.transportsSection.append(transportLabelRow, idleRow, this.routeRowsEl);
+        this.transportsSection.append(labelRow, this.requestRowsEl);
 
         // structures utilization section
         this.structuresSection = document.createElement('div');
@@ -174,134 +124,182 @@ export class StatsPanel {
         document.body.appendChild(this.panel);
         this.panel.addEventListener('click', e => { if (e.target === this.panel) this.toggle(); });
 
-        // ── Idle list overlay ─────────────────────────────────────────────────
-        this.idleOverlay = this._makeOverlay(29);
-        const idleCard   = this._makeCard();
-        this.idleList    = document.createElement('div');
-        Object.assign(this.idleList.style, { display: 'flex', flexDirection: 'column', gap: '8px' });
-
-        this.idleAssignBtn = document.createElement('button');
-        Object.assign(this.idleAssignBtn.style, {
-            marginTop: '4px', padding: '10px',
-            background: 'rgba(255,180,0,0.15)', border: '1px solid rgba(255,180,0,0.35)',
-            borderRadius: '8px', color: '#ffb400', fontSize: '13px', fontWeight: '600',
-            cursor: 'pointer', fontFamily: '-apple-system, sans-serif',
-        });
-        this.idleAssignBtn.textContent = 'Assign';
-        this.idleAssignBtn.disabled = true;
-        this.idleAssignBtn.style.opacity = '0.4';
-        this.idleAssignBtn.addEventListener('click', () => this._openPickModal());
-
-        idleCard.append(
-            this._makeCardTitle('Idle Transports'),
-            this.idleList,
-            this.idleAssignBtn,
-            this._makeCancelBtn(() => {
-                this.idleOverlay.style.display = 'none';
-                this.selectedTransports.clear();
-                this.idleBtnMap.clear();
-            }),
-        );
-        this.idleOverlay.appendChild(idleCard);
-        document.body.appendChild(this.idleOverlay);
-
-        // ── Resource pick overlay ─────────────────────────────────────────────
-        this.pickOverlay = this._makeOverlay(30);
-        const pickCard   = this._makeCard();
-        this.pickList    = document.createElement('div');
-        Object.assign(this.pickList.style, { display: 'flex', flexDirection: 'column', gap: '8px' });
-        pickCard.append(
-            this._makeCardTitle('Collect Resource'),
-            this.pickList,
-            this._makeCancelBtn(() => { this.pickOverlay.style.display = 'none'; }),
-        );
-        this.pickOverlay.appendChild(pickCard);
-        document.body.appendChild(this.pickOverlay);
-
-        // ── Route reassign overlay (3-step) ───────────────────────────────────
-        this._buildRouteOverlay();
-
-        // start sampling
+        // Record a chart data point every SAMPLE_MS (the chart's time resolution).
         this._sample();
         setInterval(() => this._sample(), SAMPLE_MS);
+        // Refresh the on-screen panel once per REAL second while it's open. This is
+        // wall-clock (setInterval), so the update rate is fixed at 1/sec regardless
+        // of the game time multiplier.
+        setInterval(() => { if (this.visible) this._refreshView(); }, 1000);
     }
 
     toggle(): void {
         this.visible = !this.visible;
         this.panel.style.display = this.visible ? 'flex' : 'none';
-        if (this.visible) {
-            this._updateIdleBadge();
-            this._renderTransportAllocation();
-            this._renderStructures();
-            this._render();
-        }
+        if (this.visible) this._refreshView();
     }
 
-    // ── Transportation allocation ─────────────────────────────────────────────
+    // Re-render every live section of the panel (job board, structure utilization,
+    // and the throughput chart).
+    private _refreshView(): void {
+        this._renderRequests();
+        this._renderStructures();
+        this._render();
+    }
 
-    private _truckGroups(): TruckGroup[] {
-        const map = new Map<string, TruckGroup>();
+    // ── Transport job market ──────────────────────────────────────────────────────
+
+    // Per-request supply picture: how much a source can hand over right now, how
+    // much inbound truck capacity is committed (reserved before pickup vs already
+    // carried), and what's still unassigned.
+    private _reqStats(req: TransportRequest): {
+        available: number; reserved: number; inTransit: number; remaining: number;
+    } {
+        let reserved = 0, inTransit = 0;
         for (const t of this.transports) {
-            if (t.stopped) continue;
-            const resolvedDest = t.resolveDestName(this.structures);
-            const key = `${t.sourceResource.name}|${resolvedDest}`;
-            if (!map.has(key)) {
-                map.set(key, {
-                    transports: [],
-                    sourceName: t.sourceResource.name,
-                    sourceHex:  t.sourceResource.hex,
-                    destName:   resolvedDest,
-                });
-            }
-            map.get(key)!.transports.push(t);
+            if (t.servingRequest !== req) continue;
+            const ph = t.jobPhase;
+            if (ph === 'to_source' || ph === 'load')      reserved  += t.plannedPayloadKg;
+            else if (ph === 'to_dest' || ph === 'unload') inTransit += t.plannedPayloadKg;
         }
-        return [...map.values()].sort((a, b) => a.sourceName.localeCompare(b.sourceName));
+        // Available for pickup: the source pickup buffer (natural deposit or
+        // producer output), but only if a source structure actually exists.
+        const src = resolveSource(req.resource, this.structures, req.destNormal);
+        const available = src ? req.resource.deposit : 0;
+        return { available, reserved, inTransit, remaining: req.remaining };
     }
 
-    private _renderTransportAllocation(): void {
-        this.routeRowsEl.innerHTML = '';
-        const groups = this._truckGroups();
+    private _renderRequests(): void {
+        const total = this.transports.length;
+        const idle  = this.transports.filter(t => t.isIdle).length;
+        this.totalEl.textContent = `${idle} idle / ${total} trucks`;
 
-        for (const g of groups) {
-            const row = document.createElement('button');
-            Object.assign(row.style, {
-                display: 'flex', alignItems: 'center', gap: '8px',
-                padding: '9px 12px', width: '100%',
-                background: 'rgba(255,255,255,0.03)',
-                border: '1px solid rgba(255,255,255,0.07)',
-                borderRadius: '8px', cursor: 'pointer',
-                fontFamily: '-apple-system, sans-serif', textAlign: 'left',
+        this.requestRowsEl.innerHTML = '';
+        const reqs = this.queue ? this.queue.requests.filter(r => !r.complete) : [];
+
+        if (!reqs.length) {
+            const empty = document.createElement('div');
+            Object.assign(empty.style, {
+                fontSize: '12px', color: '#555', padding: '8px 2px',
+                fontFamily: '-apple-system, sans-serif',
             });
-
-            const swatch = document.createElement('span');
-            Object.assign(swatch.style, {
-                width: '10px', height: '10px', borderRadius: '2px',
-                background: g.sourceHex, flexShrink: '0',
-            });
-
-            // Resource name
-            const resEl = document.createElement('span');
-            resEl.textContent = g.sourceName;
-            Object.assign(resEl.style, { fontSize: '13px', color: '#ccc', minWidth: '52px' });
-
-            // Destination
-            const destEl = document.createElement('span');
-            destEl.textContent = `→ ${g.destName}`;
-            Object.assign(destEl.style, { flex: '1', fontSize: '12px', color: '#888' });
-
-            // Truck count
-            const countEl = document.createElement('span');
-            countEl.textContent = `×${g.transports.length}`;
-            Object.assign(countEl.style, { fontSize: '13px', fontWeight: '600', color: '#aaa' });
-
-            const arrow = document.createElement('span');
-            arrow.textContent = '›';
-            Object.assign(arrow.style, { fontSize: '16px', color: '#444', paddingLeft: '4px' });
-
-            row.append(swatch, resEl, destEl, countEl, arrow);
-            row.addEventListener('click', () => this._openRouteReassign(g));
-            this.routeRowsEl.appendChild(row);
+            empty.textContent = 'No open jobs — tap a structure to post a request.';
+            this.requestRowsEl.appendChild(empty);
+            return;
         }
+
+        // Render as a dependency tree: roots first, each followed by the input
+        // requests spawned to supply it. A child whose parent already completed
+        // (dropped from `reqs`) is promoted to a root so it never disappears.
+        const byId  = new Map(reqs.map(r => [r.id, r]));
+        const roots = reqs.filter(r => r.parentId === undefined || !byId.has(r.parentId));
+        const renderTree = (req: TransportRequest, depth: number): void => {
+            this.requestRowsEl.appendChild(this._requestCard(req, depth));
+            for (const child of reqs.filter(r => r.parentId === req.id)) renderTree(child, depth + 1);
+        };
+        for (const root of roots) renderTree(root, 0);
+    }
+
+    // One job-market row (card). `depth` > 0 = an auto-created input request,
+    // indented under its parent to show the dependency.
+    private _requestCard(req: TransportRequest, depth: number): HTMLElement {
+        const carriers = this.transports.filter(t => t.servingRequest === req).length;
+        const { available, reserved, inTransit, remaining } = this._reqStats(req);
+        const pct = req.qtyRequested > 0
+            ? Math.min(100, Math.round((req.qtyDelivered / req.qtyRequested) * 100))
+            : 100;
+
+        const row = document.createElement('div');
+        Object.assign(row.style, {
+            display: 'flex', flexDirection: 'column', gap: '6px',
+            padding: '9px 12px', boxSizing: 'border-box', width: '100%',
+            marginLeft: depth ? `${depth * 14}px` : '0',
+            background: 'rgba(255,255,255,0.03)',
+            border: '1px solid rgba(255,255,255,0.07)',
+            borderLeft: depth ? `2px solid ${req.resource.hex}` : '1px solid rgba(255,255,255,0.07)',
+            borderRadius: '8px', fontFamily: '-apple-system, sans-serif',
+        });
+
+        // ── header: resource → dest, cancel (working-truck count is in the grid) ──
+        const topRow = document.createElement('div');
+        Object.assign(topRow.style, { display: 'flex', alignItems: 'center', gap: '8px' });
+
+        const swatch = document.createElement('span');
+        Object.assign(swatch.style, {
+            width: '10px', height: '10px', borderRadius: '2px',
+            background: req.resource.hex, flexShrink: '0',
+        });
+
+        const nameEl = document.createElement('span');
+        nameEl.textContent = `${depth ? '↳ ' : ''}${req.resource.name} → ${req.destName}`;
+        Object.assign(nameEl.style, { flex: '1', fontSize: '13px', color: '#ccc' });
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = '✕';
+        Object.assign(cancelBtn.style, {
+            background: 'none', border: 'none', color: '#666',
+            fontSize: '15px', cursor: 'pointer', padding: '0 2px', lineHeight: '1',
+        });
+        cancelBtn.title = 'Cancel request';
+        cancelBtn.addEventListener('click', () => {
+            this.cancelCallback(req);
+            this.saveCallback();
+            this._renderRequests();
+        });
+
+        topRow.append(swatch, nameEl, cancelBtn);
+
+        // ── metrics grid: working / available / reserved / in transit / remaining ──
+        // auto-fit lets the five cells wrap to a second line on narrow (phone) widths.
+        const grid = document.createElement('div');
+        Object.assign(grid.style, {
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(54px, 1fr))', gap: '4px',
+        });
+        const cell = (label: string, value: string, color: string) => {
+            const c = document.createElement('div');
+            Object.assign(c.style, { display: 'flex', flexDirection: 'column', gap: '1px' });
+            const l = document.createElement('span');
+            l.textContent = label;
+            Object.assign(l.style, {
+                fontSize: '8px', letterSpacing: '0.5px', textTransform: 'uppercase', color: '#555',
+            });
+            const v = document.createElement('span');
+            v.textContent = value;
+            Object.assign(v.style, { fontSize: '11px', color, fontWeight: '600' });
+            c.append(l, v);
+            return c;
+        };
+        // Available is amber when it can't cover what's still unfilled.
+        const availColor = available >= remaining ? '#9ccc65' : '#ffb300';
+        grid.append(
+            cell('Working',   carriers > 0 ? `${carriers} 🚚` : '0', carriers > 0 ? '#ccc' : '#666'),
+            cell('Avail',     formatScaled(available, 'kg'), availColor),
+            cell('Reserved',  formatScaled(reserved, 'kg'),  '#9ecbff'),
+            cell('In transit', formatScaled(inTransit, 'kg'), '#4dd0e1'),
+            cell('Remaining', formatScaled(remaining, 'kg'), remaining > 0 ? '#ffc14d' : '#9ccc65'),
+        );
+
+        // ── progress bar (delivered / requested) ──
+        const barTrack = document.createElement('div');
+        Object.assign(barTrack.style, {
+            height: '4px', borderRadius: '2px',
+            background: 'rgba(255,255,255,0.08)', overflow: 'hidden',
+        });
+        const barFill = document.createElement('div');
+        Object.assign(barFill.style, {
+            height: '100%', width: `${pct}%`,
+            background: req.resource.hex, borderRadius: '2px',
+            transition: 'width 0.3s',
+        });
+        barTrack.appendChild(barFill);
+
+        const progEl = document.createElement('div');
+        progEl.textContent =
+            `${formatScaled(req.qtyDelivered, 'kg')} / ${formatScaled(req.qtyRequested, 'kg')} delivered`;
+        Object.assign(progEl.style, { fontSize: '10px', color: '#888' });
+
+        row.append(topRow, grid, barTrack, progEl);
+        return row;
     }
 
     // ── Structure utilization ─────────────────────────────────────────────────
@@ -311,7 +309,7 @@ export class StatsPanel {
 
         // Only show built structures (Refinery, OilWell) — skip world nodes/homebase
         const built = this.structures.filter(
-            s => s.label === 'Refinery' || s.label === 'Oil Well',
+            s => s.label.startsWith('Refinery') || s.label === 'Oil Well',
         );
         if (!built.length) return;
 
@@ -340,7 +338,6 @@ export class StatsPanel {
                 fontFamily: '-apple-system, sans-serif',
             });
 
-            // Name + percentage
             const topRow = document.createElement('div');
             Object.assign(topRow.style, { display: 'flex', alignItems: 'center', gap: '8px' });
 
@@ -354,7 +351,6 @@ export class StatsPanel {
 
             topRow.append(nameEl, pctEl);
 
-            // Bar
             const barTrack = document.createElement('div');
             Object.assign(barTrack.style, {
                 height: '4px', borderRadius: '2px',
@@ -370,7 +366,6 @@ export class StatsPanel {
 
             row.append(topRow, barTrack);
 
-            // Bottleneck label
             if (limitedBy) {
                 const limEl = document.createElement('div');
                 limEl.textContent = `Limited by: ${limitedBy}`;
@@ -382,407 +377,6 @@ export class StatsPanel {
         }
     }
 
-    // ── Route reassign 3-step overlay ─────────────────────────────────────────
-
-    private _buildRouteOverlay(): void {
-        this.routeOverlay = this._makeOverlay(31);
-
-        const backdrop = document.createElement('div');
-        Object.assign(backdrop.style, { position: 'absolute', inset: '0' });
-        backdrop.addEventListener('click', () => { this.routeOverlay.style.display = 'none'; });
-
-        const card = this._makeCard();
-        Object.assign(card.style, {
-            position: 'relative', zIndex: '1', minWidth: 'min(300px, 90vw)',
-        });
-
-        const headerRow = document.createElement('div');
-        Object.assign(headerRow.style, { display: 'flex', justifyContent: 'space-between', alignItems: 'center' });
-        const hTitle = this._makeCardTitle('Reassign Trucks');
-        const closeX = document.createElement('button');
-        closeX.textContent = '✕';
-        Object.assign(closeX.style, {
-            background: 'none', border: 'none', color: '#555',
-            fontSize: '18px', cursor: 'pointer', padding: '4px',
-        });
-        closeX.addEventListener('click', () => { this.routeOverlay.style.display = 'none'; });
-        headerRow.append(hTitle, closeX);
-
-        this.routeBody = document.createElement('div');
-        Object.assign(this.routeBody.style, { display: 'flex', flexDirection: 'column', gap: '6px' });
-
-        card.append(headerRow, this.routeBody);
-        this.routeOverlay.append(backdrop, card);
-        document.body.appendChild(this.routeOverlay);
-    }
-
-    private _openRouteReassign(g: TruckGroup): void {
-        this.routeGroupTs   = [...g.transports];
-        this.routeCount     = g.transports.length;
-        this.routeSourceName = g.sourceName;
-        this.routeDestNormal = null;
-        this.routeDestName  = '';
-        this._showRouteStep1(g);
-        this.routeOverlay.style.display = 'flex';
-    }
-
-    private _showRouteStep1(g: TruckGroup): void {
-        this.routeBody.innerHTML = '';
-
-        // Current route info
-        const info = document.createElement('div');
-        info.textContent = `${g.sourceName} → ${g.destName}  ×${g.transports.length}`;
-        Object.assign(info.style, { fontSize: '12px', color: '#555', fontFamily: '-apple-system, sans-serif', marginBottom: '4px' });
-        this.routeBody.appendChild(info);
-
-        // Section label
-        this.routeBody.appendChild(this._routeLabel('How many to reassign?'));
-
-        // Stepper row
-        const stepper = document.createElement('div');
-        Object.assign(stepper.style, {
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px',
-            padding: '8px 0',
-        });
-
-        const countDisplay = document.createElement('span');
-        countDisplay.textContent = String(this.routeCount);
-        Object.assign(countDisplay.style, {
-            fontSize: '28px', fontWeight: '600', color: '#fff', minWidth: '40px', textAlign: 'center',
-            fontFamily: '-apple-system, sans-serif',
-        });
-
-        const mkStep = (delta: number, label: string) => {
-            const btn = document.createElement('button');
-            btn.textContent = label;
-            Object.assign(btn.style, {
-                width: '36px', height: '36px', borderRadius: '50%',
-                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
-                color: '#ccc', fontSize: '20px', cursor: 'pointer', lineHeight: '1',
-                fontFamily: '-apple-system, sans-serif',
-            });
-            btn.addEventListener('click', () => {
-                this.routeCount = Math.min(g.transports.length, Math.max(1, this.routeCount + delta));
-                countDisplay.textContent = String(this.routeCount);
-            });
-            return btn;
-        };
-
-        stepper.append(mkStep(-1, '−'), countDisplay, mkStep(1, '+'));
-        this.routeBody.appendChild(stepper);
-
-        const nextBtn = this._accentBtn('Choose Destination →');
-        nextBtn.addEventListener('click', () => this._showRouteStep2());
-        this.routeBody.appendChild(nextBtn);
-    }
-
-    private _showRouteStep2(): void {
-        this.routeBody.innerHTML = '';
-
-        this.routeBody.appendChild(this._backBtn(() => {
-            const g = this._truckGroups().find(x =>
-                x.sourceName === this.routeSourceName && x.transports.length > 0
-            ) ?? { transports: this.routeGroupTs, sourceName: this.routeSourceName, sourceHex: '', destName: '' };
-            this._showRouteStep1(g as TruckGroup);
-        }));
-        this.routeBody.appendChild(this._routeLabel('Deliver to'));
-
-        const destinations = this._destinations();
-        for (const dest of destinations) {
-            const btn = this._rowBtn(dest.name);
-            btn.addEventListener('click', () => {
-                this.routeDestNormal = dest.normal;
-                this.routeDestName   = dest.name;
-                this._showRouteStep3();
-            });
-            this.routeBody.appendChild(btn);
-        }
-    }
-
-    private _showRouteStep3(): void {
-        if (!this.routeDestNormal) return;
-        const destNormal = this.routeDestNormal;
-        const destName   = this.routeDestName;
-
-        this.routeBody.innerHTML = '';
-
-        this.routeBody.appendChild(this._backBtn(() => this._showRouteStep2()));
-        this.routeBody.appendChild(this._routeLabel(`Collect resource → ${destName}`));
-
-        const availableResources = this.resources.filter(r =>
-            this.structures.some(s => s.getResourceRole(r) === 'output'),
-        );
-        for (const res of availableResources) {
-            const srcNormal = resolveSourceNormal(res, this.structures, destNormal);
-            const distKm    = arcLengthKm(destNormal, srcNormal).toFixed(1);
-
-            const btn = this._rowBtn(res.name, `${distKm} km`, res.hex);
-            btn.addEventListener('click', () => {
-                const trucks = this.routeGroupTs.slice(0, this.routeCount);
-                for (const t of trucks) t.reassignRoute(destNormal, destName, res, this.structures);
-                this.saveCallback();
-                this.routeOverlay.style.display = 'none';
-                this._renderTransportAllocation();
-            });
-            this.routeBody.appendChild(btn);
-        }
-
-        const n = this.routeCount;
-        const confirmInfo = document.createElement('div');
-        confirmInfo.textContent = `Tap a resource to reassign ${n} truck${n > 1 ? 's' : ''}`;
-        Object.assign(confirmInfo.style, {
-            fontSize: '10px', color: '#444', textAlign: 'center',
-            fontFamily: '-apple-system, sans-serif', paddingTop: '4px',
-        });
-        this.routeBody.appendChild(confirmInfo);
-    }
-
-    // ── Destinations helper ───────────────────────────────────────────────────
-
-    private _destinations(): Array<{ name: string; normal: Vector3 }> {
-        const dests: Array<{ name: string; normal: Vector3 }> = [];
-        let refIdx = 1;
-        for (const s of this.structures) {
-            if (s instanceof Homebase) {
-                dests.unshift({ name: s.label, normal: s.surfaceNormal.clone() });
-            } else if (s instanceof Refinery) {
-                dests.push({ name: `Refinery #${refIdx++}`, normal: s.surfaceNormal.clone() });
-            }
-        }
-        return dests;
-    }
-
-    // ── Small DOM helpers ─────────────────────────────────────────────────────
-
-    private _routeLabel(text: string): HTMLElement {
-        const el = document.createElement('div');
-        el.textContent = text;
-        Object.assign(el.style, {
-            fontSize: '9px', letterSpacing: '1.5px', textTransform: 'uppercase',
-            color: '#444', fontFamily: '-apple-system, sans-serif', margin: '4px 0 2px',
-        });
-        return el;
-    }
-
-    private _backBtn(onClick: () => void): HTMLElement {
-        const btn = document.createElement('button');
-        btn.textContent = '← Back';
-        Object.assign(btn.style, {
-            background: 'none', border: 'none', color: '#555',
-            fontSize: '12px', cursor: 'pointer', padding: '0 0 6px 0',
-            fontFamily: '-apple-system, sans-serif', textAlign: 'left',
-        });
-        btn.addEventListener('click', onClick);
-        return btn;
-    }
-
-    private _rowBtn(label: string, sub?: string, swatchColor?: string): HTMLElement {
-        const btn = document.createElement('button');
-        Object.assign(btn.style, {
-            display: 'flex', alignItems: 'center', gap: '8px',
-            padding: '9px 11px', width: '100%',
-            background: 'rgba(255,255,255,0.04)',
-            border: '1px solid rgba(255,255,255,0.08)',
-            borderRadius: '8px', cursor: 'pointer',
-            color: '#ddd', fontFamily: '-apple-system, sans-serif', fontSize: '13px',
-        });
-        if (swatchColor) {
-            const sw = document.createElement('span');
-            Object.assign(sw.style, {
-                width: '10px', height: '10px', borderRadius: '2px',
-                background: swatchColor, flexShrink: '0',
-            });
-            btn.appendChild(sw);
-        }
-        const nameEl = document.createElement('span');
-        nameEl.textContent = label;
-        nameEl.style.flex = '1';
-        btn.appendChild(nameEl);
-        if (sub) {
-            const subEl = document.createElement('span');
-            subEl.textContent = sub;
-            Object.assign(subEl.style, { fontSize: '10px', color: '#555' });
-            btn.appendChild(subEl);
-        }
-        return btn;
-    }
-
-    private _accentBtn(text: string): HTMLElement {
-        const btn = document.createElement('button');
-        btn.textContent = text;
-        Object.assign(btn.style, {
-            padding: '10px', marginTop: '4px',
-            background: 'rgba(255,180,0,0.12)', border: '1px solid rgba(255,180,0,0.3)',
-            borderRadius: '8px', color: '#ffb400', fontSize: '13px', fontWeight: '600',
-            cursor: 'pointer', fontFamily: '-apple-system, sans-serif', width: '100%',
-        });
-        return btn;
-    }
-
-    // ── Overlay helpers ───────────────────────────────────────────────────────
-
-    private _makeOverlay(z: number): HTMLElement {
-        const el = document.createElement('div');
-        Object.assign(el.style, {
-            position: 'fixed', inset: '0', zIndex: String(z),
-            display: 'none', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(0,0,0,0.6)',
-        });
-        return el;
-    }
-
-    private _makeCard(): HTMLElement {
-        const el = document.createElement('div');
-        Object.assign(el.style, {
-            background: 'rgba(14,14,20,0.98)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: '16px', padding: '20px',
-            width: 'min(300px, 90vw)', maxHeight: '70vh',
-            display: 'flex', flexDirection: 'column', gap: '10px',
-            overflowY: 'auto',
-        });
-        return el;
-    }
-
-    private _makeCardTitle(text: string): HTMLElement {
-        const el = document.createElement('div');
-        el.textContent = text;
-        Object.assign(el.style, {
-            fontSize: '11px', fontWeight: '600', letterSpacing: '2px',
-            textTransform: 'uppercase', color: '#666',
-            fontFamily: '-apple-system, sans-serif',
-        });
-        return el;
-    }
-
-    private _makeCancelBtn(onClick: () => void): HTMLElement {
-        const btn = document.createElement('button');
-        btn.textContent = 'Cancel';
-        Object.assign(btn.style, {
-            marginTop: '4px', padding: '9px',
-            background: 'none', border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: '8px', color: '#555', fontSize: '13px',
-            cursor: 'pointer', fontFamily: '-apple-system, sans-serif',
-        });
-        btn.addEventListener('click', onClick);
-        return btn;
-    }
-
-    private _makeListBtn(): HTMLElement {
-        const btn = document.createElement('button');
-        Object.assign(btn.style, {
-            display: 'flex', alignItems: 'center', gap: '10px',
-            padding: '10px 12px', width: '100%',
-            background: 'rgba(255,255,255,0.04)',
-            border: '1px solid rgba(255,255,255,0.08)',
-            borderRadius: '10px', color: '#ddd',
-            cursor: 'pointer', textAlign: 'left',
-            fontFamily: '-apple-system, sans-serif',
-        });
-        return btn;
-    }
-
-    // ── Idle flow ─────────────────────────────────────────────────────────────
-
-    private _updateIdleBadge(): void {
-        const total = this.transports.length;
-        const idle  = this.transports.filter(t => t.stopped).length;
-        this.totalEl.textContent     = `${total} total`;
-        this.idleBadge.textContent   = String(idle);
-        this.idleBadge.disabled      = idle === 0;
-        this.idleBadge.style.opacity = idle > 0 ? '1' : '0.4';
-    }
-
-    private _openIdleList(): void {
-        const idle = this.transports.filter(t => t.stopped);
-        if (idle.length === 0) return;
-
-        this.selectedTransports.clear();
-        this.idleBtnMap.clear();
-        this.idleList.innerHTML = '';
-        this._refreshAssignBtn();
-
-        for (const t of idle) {
-            const btn  = this._makeListBtn();
-            const icon = document.createElement('span');
-            icon.textContent = '🚛';
-            icon.style.fontSize = '18px';
-
-            const info = document.createElement('span');
-            Object.assign(info.style, { display: 'flex', flexDirection: 'column', gap: '2px' });
-            const name = document.createElement('span');
-            name.textContent = `${t.spec.name} #${t.id}`;
-            Object.assign(name.style, { fontSize: '13px', fontWeight: '500' });
-            const sub = document.createElement('span');
-            sub.textContent = `was hauling ${t.sourceResource.name}`;
-            Object.assign(sub.style, { fontSize: '10px', color: '#555' });
-            info.append(name, sub);
-
-            const check = document.createElement('span');
-            check.textContent = '✓';
-            Object.assign(check.style, {
-                marginLeft: 'auto', fontSize: '16px', color: '#ffb400',
-                visibility: 'hidden', flexShrink: '0',
-            });
-
-            btn.append(icon, info, check);
-            btn.addEventListener('click', () => {
-                if (this.selectedTransports.has(t)) {
-                    this.selectedTransports.delete(t);
-                    check.style.visibility = 'hidden';
-                    btn.style.border       = '1px solid rgba(255,255,255,0.08)';
-                    btn.style.background   = 'rgba(255,255,255,0.04)';
-                } else {
-                    this.selectedTransports.add(t);
-                    check.style.visibility = 'visible';
-                    btn.style.border       = '1px solid rgba(255,180,0,0.4)';
-                    btn.style.background   = 'rgba(255,180,0,0.08)';
-                }
-                this._refreshAssignBtn();
-            });
-
-            this.idleBtnMap.set(t, btn);
-            this.idleList.appendChild(btn);
-        }
-
-        this.idleOverlay.style.display = 'flex';
-    }
-
-    private _refreshAssignBtn(): void {
-        const n = this.selectedTransports.size;
-        this.idleAssignBtn.disabled    = n === 0;
-        this.idleAssignBtn.style.opacity = n > 0 ? '1' : '0.4';
-        this.idleAssignBtn.textContent = n > 1 ? `Assign ${n} Trucks` : 'Assign';
-    }
-
-    private _openPickModal(): void {
-        this.pickList.innerHTML = '';
-        for (const r of this.resources) {
-            const btn    = this._makeListBtn();
-            const swatch = document.createElement('span');
-            Object.assign(swatch.style, {
-                width: '14px', height: '14px', borderRadius: '4px',
-                background: r.hex, flexShrink: '0', display: 'inline-block',
-            });
-            const label = document.createElement('span');
-            label.textContent = r.name;
-            Object.assign(label.style, { fontSize: '13px', fontWeight: '500' });
-            btn.append(swatch, label);
-            btn.addEventListener('click', () => this._assign(r));
-            this.pickList.appendChild(btn);
-        }
-        this.pickOverlay.style.display = 'flex';
-    }
-
-    private _assign(resource: Resource): void {
-        for (const t of this.selectedTransports) t.reassign(resource, this.structures);
-        this.selectedTransports.clear();
-        this.idleBtnMap.clear();
-        this.pickOverlay.style.display = 'none';
-        this.idleOverlay.style.display = 'none';
-        this._updateIdleBadge();
-    }
-
     // ── Sampling ──────────────────────────────────────────────────────────────
 
     private _sample(): void {
@@ -790,7 +384,7 @@ export class StatsPanel {
         for (const r of this.resources) snap[r.name] = r.gathered;
         this.history.push({ time: Date.now(), gathered: snap });
         if (this.history.length > MAX_SAMPLES) this.history.shift();
-        if (this.visible) { this._updateIdleBadge(); this._render(); }
+        // Rendering is handled by the 1/sec refresh timer; sampling only records data.
     }
 
     // ── Rendering ─────────────────────────────────────────────────────────────
@@ -818,7 +412,6 @@ export class StatsPanel {
             return;
         }
 
-        const n   = this.history.length;
         const pad = { l: 56, r: 16, t: 14, b: 22, mid: 28 };
         const h1  = (H - pad.t - pad.b - pad.mid) / 2;
         const y1  = pad.t;

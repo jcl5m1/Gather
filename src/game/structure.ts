@@ -39,4 +39,12 @@ export abstract class Structure {
     getResourceRole(_resource: Resource): InventoryRole | null {
         return null;
     }
+
+    // Time (seconds) to craft one batch of this structure's output. Placeholder
+    // default of 1s; override per structure/output. Drives the hover progress bar.
+    get craftSeconds(): number { return 1; }
+
+    // Progress [0,1] through the current craft cycle, or null if this structure
+    // does not craft an output from inputs (e.g. storage, raw deposit).
+    craftProgress01(): number | null { return null; }
 }

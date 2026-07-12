@@ -28,15 +28,18 @@ import { Notify } from './notify';
 import { InputHandler } from './inputHandler';
 import { HomebaseIcon } from './homebaseIcon';
 import { DragOrbitHandler } from './dragOrbitHandler';
-import { Transport, TruckTransport, resolveSourceNormal } from './transport';
+import { Transport } from './transport';
+import { TransportQueue } from './transportRequest';
 import { Refinery } from './refinery';
 import { OilWell } from './oilWell';
 import { PowerPlant } from './powerPlant';
 import { Structure } from './structure';
 import { BuildMenu } from './buildMenu';
+import { WarningPanel, Warning } from './warnings';
+import { GameEngine } from './engine';
 import { StatsPanel } from './statsPanel';
 import { TechPanel } from './techPanel';
-import { TECH_TREE, autoFuel } from './tech';
+import { TECH_TREE } from './tech';
 import { R } from './constants';
 import { isSameStructureNormal, formatLatLon } from './geo';
 
@@ -90,6 +93,10 @@ const refineries:  Refinery[]   = saved.refineries;
 const oilWells:    OilWell[]    = saved.oilWells;
 const powerPlants: PowerPlant[] = saved.powerPlants;
 
+// Transport request queue — idle transports self-assign to open requests.
+const queue = new TransportQueue();
+for (const r of saved.requests) queue.add(r);
+
 // Add loaded placed structures to the live array
 for (const ref  of refineries)  structures.push(ref);
 for (const well of oilWells)    structures.push(well);
@@ -99,13 +106,65 @@ hud.refreshAll(RESOURCES);
 log.info(`Loaded ${transports.length} transport(s), ${refineries.length} refiner(ies), ${oilWells.length} oil well(s), ${powerPlants.length} power plant(s) from save`);
 
 // Single save function captures all mutable state
-function save(): void { saveGame(zoom, RESOURCES, transports, refineries, oilWells, powerPlants, TECH_TREE); }
+function save(): void { saveGame(zoom, RESOURCES, transports, queue, refineries, oilWells, powerPlants, TECH_TREE); }
 setInterval(save, 60_000);
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 
 const flash     = new Flash();
 const notify    = new Notify();
+
+// ── Game engine ─────────────────────────────────────────────────────────────
+// The engine owns and advances ALL simulation state. The UI never mutates trucks,
+// structures, or the request queue directly — it calls engine methods, and the
+// engine reports back through this listener. The headless runner uses the same
+// engine with a listener that writes to log files, so both run identical code.
+const engine = new GameEngine(
+    { resources: RESOURCES, structures, transports, refineries, oilWells, powerPlants, queue, techTree: TECH_TREE },
+    {
+        onLoad: (t, res, loaded, requested) => {
+            log.info(`Truck #${t.id} loaded ${formatScaled(loaded, 'kg')}/${formatScaled(requested, 'kg')} ${res.name}`);
+        },
+        onDeliver: (t, req, loaded) => {
+            hud.update(req.resource);
+            hud.update(t.fuelResource);
+            log.info(`Truck #${t.id} delivered ${formatScaled(loaded, 'kg')} ${req.resource.name} → ${req.destName}`
+                + ` (${formatScaled(req.qtyDelivered, 'kg')}/${formatScaled(req.qtyRequested, 'kg')})`);
+        },
+        onSourceExhausted: (t, res) => {
+            // Logged only — no on-screen popup (surfaced instead via the warning board).
+            log.info(`${t.spec.name} #${t.id}: ${res.name} source exhausted`);
+        },
+        onLowFuel: (t, fuel) => {
+            const msg = `${t.spec.name} #${t.id}: low on ${fuel.name}`;
+            log.info(msg); notify.show(msg, fuel.hex);
+        },
+        onRequestFulfilled: (done) => {
+            // Logged only — the transient "Delivered …" popup is disabled.
+            log.info(`Request fulfilled: ${done.resource.name} → ${done.destName}`);
+        },
+        onProduced: (_s, resources) => { for (const r of resources) hud.update(r); },
+        onInventoryChanged: () => { save(); },
+        onGather: (res, amount) => {
+            log.info(`Gathered ${formatScaled(amount, 'kg')} ${res.name} (tap)`);
+        },
+        onBuilt: (item) => {
+            log.info(`Built ${describeBuilt(item)}`);
+        },
+        onResearched: (tech) => {
+            log.info(`Researched ${tech.name}`);
+        },
+    },
+);
+
+// Human-readable label for a just-built item (for the log).
+function describeBuilt(item: Transport | Structure): string {
+    if (item instanceof Refinery)   return `Refinery → ${item.recipe.outputName} (fuel: ${item.fuelResource?.name ?? 'self'})`;
+    if (item instanceof OilWell)    return 'Oil Well';
+    if (item instanceof PowerPlant) return `Power Plant (fuel: ${item.fuelResource.name}, η=${Math.round(item.efficiency * 100)}%)`;
+    if (item instanceof Transport)  return `${item.spec.name} #${item.id} (fuel: ${item.fuelResource.name})`;
+    return 'structure';
+}
 const dragOrbit = new DragOrbitHandler(camera, zoom, scene, renderer.domElement, save);
 const inputHandler = new InputHandler(
     camera, scene, RESOURCES, transports, hud, flash, renderer.domElement,
@@ -116,60 +175,21 @@ inputHandler.setStructures(structures);
 inputHandler.setSaveCallback(save);
 inputHandler.setNotifyCallback(msg => notify.show(msg));
 inputHandler.setCursorInfoCallback(text => dragOrbit.setCursorInfo(text));
+// Manual tap-to-gather mutates inventory through the engine (so it's logged and
+// behaves identically to every other state change).
+inputHandler.setGatherCallback(res => engine.gather(res));
 
-// Build-truck shortcut from the assign dialog: dest = tapped structure.
-inputHandler.setBuildTruckCallback((destNormal, destName, resource) => {
-    const iron = RESOURCES.find(r => r.name === 'Iron')!;
-    if (iron.gathered < TruckTransport.IRON_COST) return false;
-
-    const fuel = autoFuel(RESOURCES, TECH_TREE);
-    if (!fuel) return false;
-
-    const sourceNormal = resolveSourceNormal(resource, structures, destNormal, destNormal);
-    iron.consume(TruckTransport.IRON_COST);
-    hud.update(iron);
-
-    const truck = new TruckTransport(scene, destNormal, resource, fuel, sourceNormal, destName);
-    transports.push(truck);
-    hud.refreshAll(RESOURCES);
-    log.info(`Built ${truck.spec.name} #${truck.id} via assign dialog: ${resource.name} → ${destName}`);
-    return true;
+// Create a transport request from the tap dialog. The engine auto-enqueues any
+// upstream input deliveries (manufactured resources) and self-assigns idle trucks.
+inputHandler.setCreateRequestCallback((destNormal, destName, resource, qty) => {
+    engine.createRequest(destNormal, destName, resource, qty);
+    log.info(`Requested ${formatScaled(qty, 'kg')} ${resource.name} → ${destName}`);
+    save();
 });
 
 inputHandler.setDeleteCallback((structure) => {
-    // Remove from scene
-    structure.dispose();
-
-    // Remove from live structures array
-    const si = structures.indexOf(structure);
-    if (si !== -1) structures.splice(si, 1);
-
-    if (structure instanceof Refinery) {
-        refineries.splice(refineries.indexOf(structure), 1);
-        // Stop trucks delivering to this refinery
-        const n = structure.surfaceNormal;
-        for (const t of transports) {
-            if (isSameStructureNormal(t.destinationNormal, n)) t.stopped = true;
-        }
-    } else if (structure instanceof OilWell) {
-        oilWells.splice(oilWells.indexOf(structure), 1);
-        // Stop trucks collecting from this well
-        const n = structure.surfaceNormal;
-        for (const t of transports) {
-            if (t.sourceResource === structure.providesResource &&
-                isSameStructureNormal(t.srcNormal, n)) {
-                t.stopped = true;
-            }
-        }
-    } else if (structure instanceof PowerPlant) {
-        powerPlants.splice(powerPlants.indexOf(structure), 1);
-        // Stop trucks delivering to this power plant
-        const n = structure.surfaceNormal;
-        for (const t of transports) {
-            if (isSameStructureNormal(t.destinationNormal, n)) t.stopped = true;
-        }
-    }
-
+    structure.dispose();                  // scene teardown (a rendering concern)
+    engine.removeStructure(structure);    // simulation teardown (arrays, requests, trucks)
     hud.refreshAll(RESOURCES);
     save();
     log.info(`Deleted ${structure.label}`);
@@ -184,12 +204,70 @@ document.getElementById('btn-home')!.addEventListener('click', () => zoom.center
 const stats = new StatsPanel(RESOURCES, transports);
 stats.setStructures(structures);
 stats.setSaveCallback(save);
+stats.setQueue(queue);
+stats.setCancelRequestCallback((req) => {
+    // The engine also drops the upstream input requests auto-created to supply
+    // this one — otherwise those hauls would keep running with nothing to feed.
+    const doomed = engine.cancelRequest(req);
+    log.info(`Cancelled request: ${req.resource.name} → ${req.destName}` +
+        (doomed.length > 1 ? ` (+${doomed.length - 1} upstream)` : ''));
+});
 document.getElementById('btn-stats')!.addEventListener('click', () => stats.toggle());
+
+// ── Status / warning board ──────────────────────────────────────────────────
+// Generic: any subsystem registers a source that returns current blocking issues.
+const warnings = new WarningPanel();
+
+// Transport requests that cannot currently be served, grouped by cause.
+// Each warning carries the specific requests behind it (shown when tapped).
+warnings.addSource(() => {
+    const items: Record<string, string[]> = {};
+    for (const req of queue.open()) {
+        const reason = engine.blockReason(req);
+        if (!reason) continue;
+        (items[reason] ??= []).push(
+            `${req.resource.name} → ${req.destName}  ·  ${formatScaled(req.outstanding, 'kg')} left`,
+        );
+    }
+    const plural = (n: number) => (n === 1 ? 'request' : 'requests');
+    const out: Warning[] = [];
+    const push = (reason: string, severity: Warning['severity'], suffix: string) => {
+        const list = items[reason];
+        if (list?.length) out.push({ id: `req-${reason}`, severity, text: `${list.length} ${plural(list.length)} ${suffix}`, items: list });
+    };
+    push('no-transport', 'warn',  'waiting — no trucks built');
+    push('no-source',    'warn',  'blocked — no source with stock');
+    push('no-fuel',      'error', 'stalled — trucks out of fuel');
+    push('waiting',      'info',  'queued — all trucks busy');
+    return out;
+});
+
+// Placed structures fully starved of an input (can't produce at all).
+warnings.addSource(() => {
+    const out: Warning[] = [];
+    for (const ref of refineries) {
+        const u = ref.getUtilization();
+        if (u.pct === 0 && u.limitedBy) {
+            out.push({ id: `ref-${ref.id}`, severity: 'warn', text: `${ref.label} stalled — out of ${u.limitedBy}` });
+        }
+    }
+    powerPlants.forEach((pp, i) => {
+        const u = pp.getUtilization();
+        if (u.pct === 0 && u.limitedBy) {
+            out.push({ id: `pp-${i}`, severity: 'warn', text: `Power Plant stalled — out of ${u.limitedBy}` });
+        }
+    });
+    return out;
+});
+
+warnings.refresh();
 
 const techPanel = new TechPanel(RESOURCES, TECH_TREE, () => {
     hud.refreshAll(RESOURCES);
     save();
 });
+// Research spends resources + unlocks through the engine (authoritative + logged).
+techPanel.setResearchHandler(id => engine.research(id));
 document.getElementById('btn-tech')!.addEventListener('click', () => techPanel.toggle());
 
 // ── Time scale buttons ────────────────────────────────────────────────────────
@@ -798,45 +876,35 @@ document.getElementById('settings-confirm-yes')!.addEventListener('click', () =>
 
 // ── Build system ──────────────────────────────────────────────────────────────
 
+// The engine pays the build cost and registers the item atomically. The build
+// menu just constructs the object (it owns the scene/mesh); if the engine can't
+// afford it (inventory dropped since the panel opened) we dispose the orphan.
+function registerBuild(item: Parameters<typeof engine.build>[0]): void {
+    if (engine.build(item)) {
+        hud.refreshAll(RESOURCES);
+        save();
+    } else {
+        item.dispose();
+    }
+}
+
 const buildMenu = new BuildMenu(
     RESOURCES,
     KSC_NORMAL,
     scene,
     structures,    // live array — stays current as structures are added/removed
-    (transport) => {
-        // New trucks always start at the destination (set in TruckTransport constructor).
-        transports.push(transport);
-        hud.refreshAll(RESOURCES);
-        save();
-        log.info(`Built ${transport.spec.name}: ${transport.sourceResource.name} ← ${transport.fuelResource.name}`);
-    },
-    (refinery) => {
-        refineries.push(refinery);
-        structures.push(refinery);
-        hud.refreshAll(RESOURCES);
-        save();
-        log.info(`Built Refinery → ${refinery.recipe.outputName} (fuel: ${refinery.fuelResource?.name ?? 'self'})`);
-    },
-    (oilWell) => {
-        oilWells.push(oilWell);
-        structures.push(oilWell);
-        hud.refreshAll(RESOURCES);
-        save();
-        log.info('Built Oil Well');
-    },
-    (powerPlant) => {
-        powerPlants.push(powerPlant);
-        structures.push(powerPlant);
-        hud.refreshAll(RESOURCES);
-        save();
-        log.info(`Built Power Plant (fuel: ${powerPlant.fuelResource.name}, η=${Math.round(powerPlant.efficiency * 100)}%)`);
-    },
-    (res) => hud.update(res),
+    registerBuild,   // truck
+    registerBuild,   // refinery
+    registerBuild,   // oil well
+    registerBuild,   // power plant
 );
 
 buildMenu.setPlacementHandler(
     (ghost, rise, cb, validator, invalidMessage) => inputHandler.startPlacement(ghost, rise, cb, validator, invalidMessage),
 );
+
+// "Not enough resources" feedback: rising, fading text above the tapped button.
+buildMenu.setShortfallHandler((msg, x, y) => flash.show(msg, '#ff6b6b', x, y, 2200));
 
 // ── Camera init ───────────────────────────────────────────────────────────────
 
@@ -892,6 +960,7 @@ function updateScaleBar(): void {
 
 let lastTime   = performance.now();
 let frameCount = 0;
+let _warnAccum = 0;   // seconds since last warning-board refresh
 
 // ── Truck debug HUD ─────────────────────────────────────────────────────────
 function findStructureByNormal(structs: Structure[], n: Vector3): Structure | undefined {
@@ -899,33 +968,29 @@ function findStructureByNormal(structs: Structure[], n: Vector3): Structure | un
 }
 function buildTruckDebugInfo(ts: Transport[], structs: Structure[]): string {
     if (!ts.length) return 'trucks: none';
-    const lines: string[] = [`trucks ${ts.length}`];
+    const idle = ts.filter(t => t.isIdle).length;
+    const lines: string[] = [`trucks ${ts.length}  (${idle} idle)`];
     const N = Math.min(ts.length, 3);
     for (let i = 0; i < N; i++) {
-        const t = ts[i];
-        const dn = t.destinationNormal;
-        const sn = t.srcNormal;
-        const srcStruct = findStructureByNormal(structs, sn);
-        const srcName   = srcStruct ? srcStruct.label : t.sourceResource.name;
-        const dstName   = t.destinationName;
-        const pos       = t.mesh.position;
-        const alt       = pos.length() - R;
-        const cargo     = (t.tripState === 'to_home' || t.tripState === 'pause_at_home')
-            ? `${formatScaled(t.spec.payloadKg, 'kg')} ${t.sourceResource.name}`
-            : 'empty';
-        const stopFlag  = t.stopped ? ' STOPPED' : '';
-        const fuelKgTrip = t.fuelKgPerRoundTrip;
-        const fuelStock  = t.fuelResource.gathered;
-        const tripsLeft  = fuelKgTrip > 0 ? Math.floor(fuelStock / fuelKgTrip) : Infinity;
-        const fuelLabel  = `${formatScaled(fuelKgTrip, 'kg')}/trip  stock ${formatScaled(fuelStock, 'kg')}  (${isFinite(tripsLeft) ? tripsLeft : '∞'} trips)`;
+        const t   = ts[i];
+        const pos = t.mesh.position;
+        const alt = pos.length() - R;
+        if (t.isIdle) {
+            lines.push(
+                `#${t.id} ${t.spec.name} idle`,
+                `  park ll ${formatLatLon(t.parkedNormal)} alt ${alt.toFixed(0)}m`,
+                `  fuel ${t.fuelResource.name} ${formatScaled(t.fuelResource.gathered, 'kg')}`,
+            );
+            continue;
+        }
+        const res       = t.sourceResource!;
+        const srcStruct = findStructureByNormal(structs, t.srcNormal);
+        const srcName   = srcStruct ? srcStruct.label : res.name;
         lines.push(
-            `#${t.id} ${t.spec.name} ${t.tripState}${stopFlag}`,
-            `  src ${srcName} (${t.sourceResource.name}) ll ${formatLatLon(sn)}`,
-            `  dst ${dstName} ll ${formatLatLon(dn)}`,
-            `  pos (${pos.x.toFixed(0)},${pos.y.toFixed(0)},${pos.z.toFixed(0)}) alt ${alt.toFixed(0)}m`,
-            `  t ${t.tripT.toFixed(3)} v ${t.currentSpeed.toFixed(2)} m/s arc ${(t.arcLengthM/1000).toFixed(2)} km`,
-            `  cargo ${cargo} pause ${t.pauseRemaining.toFixed(1)}s`,
-            `  fuel ${t.fuelResource.name}: ${fuelLabel}`,
+            `#${t.id} ${t.spec.name} ${t.jobPhase}`,
+            `  src ${srcName} (${res.name}) ll ${formatLatLon(t.srcNormal)}`,
+            `  dst ${t.destinationName} ll ${formatLatLon(t.destinationNormal)}`,
+            `  alt ${alt.toFixed(0)}m v ${t.currentSpeed.toFixed(2)} m/s arc ${(t.legArcM / 1000).toFixed(2)} km`,
         );
     }
     if (ts.length > N) lines.push(`... +${ts.length - N} more`);
@@ -1073,7 +1138,6 @@ function animate(): void {
     dragOrbit.update();
     inputHandler.update();
     inputHandler.refreshTooltip();
-    inputHandler.refreshAssignDialog();
     icon.update(camera);
     const _t2 = _perfEnabled ? performance.now() : 0;
     earthTiles.update(camPos, camera);
@@ -1098,87 +1162,14 @@ function animate(): void {
     buildMenu.tick();
     techPanel.tick();
 
-    // Apply time multiplier to all game-state ticks. Sub-step so each truck
-    // advances at most ~1 sim-second per iteration; otherwise large timeScale
-    // produces coarse arcs and refineries miss queued batches.
-    const SIM_MAX_STEP = 1.0;
-    const gameDt = dt * timeScale;
-    const subSteps = Math.max(1, Math.ceil(gameDt / SIM_MAX_STEP));
-    const stepDt   = gameDt / subSteps;
+    // Poll the warning board a couple of times per second (uses real dt, not gameDt).
+    _warnAccum += dt;
+    if (_warnAccum >= 0.5) { _warnAccum = 0; warnings.refresh(); }
 
-    // Auto-resume stopped trucks when both fuel and source are available again.
-    for (const t of transports) {
-        if (!t.stopped) continue;
-        const fuelOk   = t.fuelResource.gathered >= t.fuelKgPerRoundTrip;
-        const sourceOk = t.sourceResource.isManufactured || t.sourceResource.deposit > 0;
-        if (fuelOk && sourceOk) {
-            t.stopped   = false;
-            t.buildTime = Date.now();
-            t.setFromCyclePosition(0);
-            log.info(`${t.spec.name} #${t.id}: resuming`);
-        }
-    }
-
-    let inventoryDirty = false;
-    for (let s = 0; s < subSteps; s++) {
-        for (const t of transports) {
-            const { pickup, fuelConsumed } = t.update(stepDt);
-            if (pickup) {
-                const gathered = t.sourceResource.gather(t.spec.payloadKg);
-                hud.update(t.sourceResource);
-                inventoryDirty = true;
-                if (!gathered) {
-                    t.stopped = true;
-                    t.parkAtHome();
-                    const msg = `${t.spec.name} #${t.id}: ${t.sourceResource.name} deposit exhausted`;
-                    log.info(msg);
-                    notify.show(msg, t.sourceResource.hex);
-                }
-            }
-            if (fuelConsumed) {
-                const ok = t.fuelResource.consume(t.fuelKgPerRoundTrip);
-                hud.update(t.fuelResource);
-                inventoryDirty = true;
-                if (!ok) {
-                    t.stopped = true;
-                    t.parkAtHome();
-                    const msg = `${t.spec.name} #${t.id}: out of ${t.fuelResource.name}`;
-                    log.info(msg);
-                    notify.show(msg, t.fuelResource.hex);
-                }
-            }
-        }
-
-        // ── Refinery tick ─────────────────────────────────────────────────────
-        for (const ref of refineries) {
-            const { produced } = ref.tick(stepDt);
-            if (produced) {
-                hud.update(ref.providesResource!);
-                inventoryDirty = true;
-            }
-        }
-
-        // ── Power plant tick ──────────────────────────────────────────────────
-        for (const pp of powerPlants) {
-            const { produced } = pp.tick(stepDt);
-            if (produced) {
-                hud.update(pp.providesResource);
-                hud.update(pp.fuelResource);
-                inventoryDirty = true;
-            }
-        }
-
-        // ── Oil well auto-extraction ──────────────────────────────────────────
-        for (const well of oilWells) {
-            const { produced } = well.tick(stepDt);
-            if (produced) {
-                hud.update(well.providesResource);
-                inventoryDirty = true;
-            }
-        }
-    }
-
-    if (inventoryDirty) save();
+    // Advance the whole simulation through the engine (the SAME code the headless
+    // runner executes). timeScale is applied here; the engine sub-steps internally.
+    // HUD updates, notifications, and autosave happen via the engine listener.
+    engine.step(dt * timeScale);
 
     if (_perfEnabled) {
         _tLogic = _tLogic * (1-_EMA_A) + (performance.now() - _t3) * _EMA_A;

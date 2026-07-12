@@ -13,7 +13,7 @@ export const POWER_PLANT_D = 30;
 export const POWER_PLANT_IRON_COST  = 10_000;
 export const POWER_PLANT_STONE_COST = 100_000;
 
-const BATCH_KG_FUEL = 1_000;
+export const BATCH_KG_FUEL = 1_000;
 const BATCH_SECONDS = 60;
 
 // Real-world thermal efficiency (electrical output / fuel heat input)
@@ -88,6 +88,9 @@ export class PowerPlant extends Structure {
         if (resource === this.fuelResource)     return 'input';
         return null;
     }
+
+    get craftSeconds(): number { return BATCH_SECONDS; }
+    craftProgress01(): number { return Math.min(1, this.timer / BATCH_SECONDS); }
 
     tick(dt: number): { produced: boolean } {
         this.timer += dt;

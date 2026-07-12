@@ -100,10 +100,11 @@ export class Refinery extends Structure {
         return this.recipe.energyMJPerBatch / this.fuelResource.energyDensityMJkg;
     }
 
-    // All resources consumed each batch (used by the assign-dialog resource list)
+    // All distinct resources consumed each batch. The fuel may also be a fixed
+    // input (e.g. Coal in the steel recipe), so de-dupe to list it once.
     get inputResources(): Resource[] {
         const inputs = this.fixedInputs.map(i => i.resource);
-        if (this.fuelResource) inputs.push(this.fuelResource);
+        if (this.fuelResource && !inputs.includes(this.fuelResource)) inputs.push(this.fuelResource);
         return inputs;
     }
 
@@ -112,6 +113,10 @@ export class Refinery extends Structure {
         if (this.inputResources.some(r => r === resource)) return 'input';
         return null;
     }
+
+    // Craft time = this recipe's batch duration (per output + structure).
+    get craftSeconds(): number { return this.recipe.batchSeconds; }
+    craftProgress01(): number { return Math.min(1, this.timer / this.recipe.batchSeconds); }
 
     constructor(
         scene:         Scene,
